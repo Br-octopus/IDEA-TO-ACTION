@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectKnowledgeEntries } = require('../prototype/knowledge-search.js');
+const {
+  collectKnowledgeEntries,
+  searchKnowledge,
+  buildKnowledgeContext
+} = require('../prototype/knowledge-search.js');
 const { toKnowledgeEntry } = require('../prototype/research-catalog.js');
 const { methodCardsToKnowledgeEntries } = require('../prototype/method-cards.js');
 
@@ -200,4 +204,42 @@ test('缺少来源 id 时不会生成只有前缀的条目', () => {
   });
 
   assert.deepEqual(entries, []);
+});
+
+const searchableEntries = [
+  {
+    id: 'writing', type: 'method-card', title: '写作方法', domains: ['写作'], stages: ['review'],
+    keywords: ['句式', '节奏'], summary: '检查文章句式和节奏', reusablePatterns: '引用具体片段说明问题'
+  },
+  {
+    id: 'software', type: 'success-case', title: '软件开发案例', domains: ['软件开发'], stages: ['plan'],
+    keywords: ['验收'], summary: '先定义测试和验收标准', reusablePatterns: '拆成可验证的小步骤'
+  }
+];
+
+test('中文查询优先返回标题和关键词命中的资料', () => {
+  const result = searchKnowledge(searchableEntries, '句式 节奏', { limit: 5 });
+  assert.equal(result[0].id, 'writing');
+  assert.ok(result[0].score > 0);
+  assert.ok(result[0].matchedFields.includes('keywords'));
+});
+
+test('搜索可以按领域、阶段和类型过滤', () => {
+  const result = searchKnowledge(searchableEntries, '标准', {
+    domain: '软件开发', stage: 'plan', types: ['success-case'], limit: 5
+  });
+  assert.deepEqual(result.map(item => item.id), ['software']);
+});
+
+test('模型上下文只包含摘要、方法和来源，不包含完整原文', () => {
+  const context = buildKnowledgeContext([{
+    id: 'x', title: '案例', sourceUrl: 'https://example.com', summary: '短摘要',
+    reusablePatterns: '可借鉴方法', contentExcerpt: '不应默认发送的长原文',
+    before: '原稿', after: '改稿'
+  }], { maxChars: 1000 });
+  assert.match(context, /短摘要/);
+  assert.match(context, /可借鉴方法/);
+  assert.match(context, /https:\/\/example.com/);
+  assert.equal(context.includes('不应默认发送的长原文'), false);
+  assert.equal(context.includes('原稿'), false);
 });
