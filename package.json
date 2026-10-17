@@ -17,8 +17,12 @@
     "electron-builder": "^26.0.0"
   },
   "build": {
-    "appId": "com.forwardstep.desktop",
+    "appId": "com.forwardstep.app",
     "productName": "向前一步",
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
     "files": [
       "electron/**/*",
       "prototype/**/*",
@@ -27,14 +31,26 @@
       "package.json"
     ],
     "win": {
-      "target": ["nsis", "portable"]
+      "target": ["nsis", "portable"],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "向前一步",
+      "uninstallDisplayName": "向前一步",
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "include": "build/installer.nsh",
+      "artifactName": "ForwardStep-${version}-setup.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-portable.exe"
+      "requestExecutionLevel": "user",
+      "artifactName": "ForwardStep-${version}-portable.${ext}"
     }
   }
 }
