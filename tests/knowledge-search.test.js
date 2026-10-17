@@ -10,7 +10,7 @@ const {
 const { toKnowledgeEntry } = require('../prototype/research-catalog.js');
 const { methodCardsToKnowledgeEntries } = require('../prototype/method-cards.js');
 
-function loadBrowserKnowledgeSearch(segmenter) {
+function loadBrowserKnowledgeSearch(segmenter, { unstableSort = false } = {}) {
   const intl = Object.create(Intl);
   if (arguments.length > 0) intl.Segmenter = segmenter;
   const context = { Intl: intl };
@@ -22,6 +22,31 @@ function loadBrowserKnowledgeSearch(segmenter) {
   ]) {
     const filename = require.resolve(`../prototype/${file}`);
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+  }
+  if (unstableSort) {
+    vm.runInNewContext(`
+      (() => {
+        const nativeSort = Array.prototype.sort;
+        Array.prototype.sort = function unstableSort(compare) {
+          if (typeof compare !== 'function') return nativeSort.call(this);
+          const values = Array.from(this);
+          for (let index = 0; index < values.length - 1; index += 1) {
+            let selected = index;
+            for (let next = index + 1; next < values.length; next += 1) {
+              const comparison = compare(values[next], values[selected]);
+              if (comparison < 0 || (comparison === 0 && next > selected)) selected = next;
+            }
+            if (selected !== index) {
+              const value = values[index];
+              values[index] = values[selected];
+              values[selected] = value;
+            }
+          }
+          for (let index = 0; index < values.length; index += 1) this[index] = values[index];
+          return this;
+        };
+      })();
+    `, context);
   }
   return context;
 }
@@ -325,6 +350,7 @@ test('相同分数且标题不同的结果仍保持输入顺序', () => {
 
   assert.equal(result[0].score, result[1].score);
   assert.deepEqual(result.map(item => item.id), ['first', 'second']);
+  assert.equal(result[0].__knowledgeSearchInputIndex, undefined);
 });
 
 test('空查询将无效更新时间排在有效日期之后且无效日期顺序固定', () => {
@@ -380,6 +406,23 @@ test('浏览器 UMD 入口使用依赖脚本导出统一搜索全局', () => {
   assert.equal(typeof api.searchKnowledge, 'function');
   assert.equal(typeof api.buildKnowledgeContext, 'function');
   assert.equal(api.searchKnowledge(searchableEntries, '句式')[0].id, 'writing');
+});
+
+test('浏览器 UMD 搜索在不稳定 sort 下仍保持并列结果输入顺序', () => {
+  const context = loadBrowserKnowledgeSearch(undefined, { unstableSort: true });
+  const api = context.ForwardStepKnowledgeSearch;
+  const queryResult = api.searchKnowledge([
+    { id: 'first', title: '乙资料', summary: '共同查询词' },
+    { id: 'second', title: '甲资料', summary: '共同查询词' }
+  ], '共同查询词');
+  const emptyResult = api.searchKnowledge([
+    { id: 'invalid-first', title: '乙资料', updatedAt: '未核对' },
+    { id: 'invalid-second', title: '甲资料', updatedAt: '也不是日期' }
+  ], '');
+
+  assert.deepEqual(Array.from(queryResult, item => item.id), ['first', 'second']);
+  assert.deepEqual(Array.from(emptyResult, item => item.id), ['invalid-first', 'invalid-second']);
+  assert.equal(queryResult[0].__knowledgeSearchInputIndex, undefined);
 });
 
 test('缺少 Intl.Segmenter 时中文正则回退仍能命中', () => {

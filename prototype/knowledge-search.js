@@ -218,14 +218,21 @@
     const limit = Number.isNaN(numericLimit)
       ? 10
       : Math.min(20, Math.max(1, numericLimit));
-    const filtered = (Array.isArray(entries) ? entries : []).filter(item => matchesFilters(item, options));
-    const scored = filtered.map(item => scoreEntry(item, terms));
+    const filtered = (Array.isArray(entries) ? entries : [])
+      .map((item, inputIndex) => ({ item, inputIndex }))
+      .filter(({ item }) => matchesFilters(item, options));
+    const scored = filtered.map(({ item, inputIndex }) => ({
+      ...scoreEntry(item, terms),
+      __knowledgeSearchInputIndex: inputIndex
+    }));
     const sorted = terms.length
       ? scored
         .filter(item => item.score > 0)
-        .sort((left, right) => right.score - left.score)
-      : scored.sort(compareUpdatedAt);
-    return sorted.slice(0, limit);
+        .sort((left, right) => right.score - left.score
+          || left.__knowledgeSearchInputIndex - right.__knowledgeSearchInputIndex)
+      : scored.sort((left, right) => compareUpdatedAt(left, right)
+        || left.__knowledgeSearchInputIndex - right.__knowledgeSearchInputIndex);
+    return sorted.slice(0, limit).map(({ __knowledgeSearchInputIndex, ...item }) => item);
   }
 
   function buildKnowledgeContext(entries = [], { limit = 5, maxChars = 6000 } = {}) {
