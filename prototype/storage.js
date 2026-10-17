@@ -117,11 +117,12 @@
       .slice(0, 3);
   }
 
-  // 知识选择只保存资料 id，最多 5 条，且必须指向当前已有的知识条目
+  // 知识选择只保存资料 id，最多 5 条，且必须指向统一索引里已有的条目
+  // 统一索引包含本地知识条目和公开资料，公开资料 id 也算合法选择
   function sanitizeKnowledgeSelection(selection, entries) {
-    const knownIds = new Set((Array.isArray(entries) ? entries : [])
+    const knownIds = new Set([...(Array.isArray(entries) ? entries : [])
       .map(item => item && item.id)
-      .filter(Boolean));
+      .filter(Boolean), ...getReferenceCatalog().map(item => item.id)]);
     return [...new Set(Array.isArray(selection) ? selection : [])]
       .filter(id => typeof id === "string" && knownIds.has(id))
       .slice(0, 5);
@@ -183,7 +184,12 @@
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
       researchSelection: sanitizeResearchSelection(source.researchSelection),
       knowledgeEntries: entries,
-      knowledgeSelection: sanitizeKnowledgeSelection(source.knowledgeSelection, entries),
+      // 旧版 researchSelection 存的就是公开资料 id，且与统一索引里的公开资料 id 一致，
+      // 所以这里直接映射进 knowledgeSelection 合并去重，交给 sanitize 校验和截断
+      knowledgeSelection: sanitizeKnowledgeSelection(
+        [...(Array.isArray(source.knowledgeSelection) ? source.knowledgeSelection : []), ...(Array.isArray(source.researchSelection) ? source.researchSelection : [])],
+        entries
+      ),
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)

@@ -61,7 +61,7 @@ test('复用已带资料摘要的提示词时不会重复注入', () => {
   const withContext = appendReferenceContext(original, [catalog[0]]);
   const reused = appendReferenceContext(withContext, [catalog[0]]);
   assert.equal(reused, withContext);
-  assert.equal((reused.match(/【用户选择的参考资料摘要/g) || []).length, 1);
+  assert.equal((reused.match(/【用户选择的本地资料摘要】/g) || []).length, 1);
 });
 
 test('热门资料和目录收录不会自动标记为已验证', () => {

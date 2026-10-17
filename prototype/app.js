@@ -33,8 +33,15 @@
   };
   const { buildGoalPrompt, buildStagePrompt, buildFollowupPrompt, buildArticleDiagnosticPrompt, buildPromptOptimizationPrompt, buildCaseReviewPrompt, appendKnowledgeContext } = promptEngine;
   // 读取用户勾选的本地资料，最多 5 条；缺失或已删除的条目直接忽略
+  // 发送预览里每条资料的一行说明：类型、摘要、可借鉴方法、来源都展示出来
+  function referenceInfoLine(item, fallbackType) {
+    const type = item.type || item.sourceType || item.kind || fallbackType || "未分类";
+    const patterns = item.reusablePatterns || item.borrowablePatterns || "以来源内容为准";
+    const source = item.sourceUrl || item.url || item.link || "未提供链接";
+    return `${escapeHtml(item.title)}（${escapeHtml(type)}）：${escapeHtml(item.summary || "暂无摘要")} 可借鉴：${escapeHtml(patterns)} 来源：${escapeHtml(source)}`;
+  }
   function renderKnowledgeReference(item) {
-    return `<div class="send-reference"><span>本地资料 ${escapeHtml(item.title)}：${escapeHtml(item.summary || "暂无摘要")}</span><button type="button" data-remove-knowledge-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`;
+    return `<div class="send-reference"><span>本地资料 ${referenceInfoLine(item)}</span><button type="button" data-remove-knowledge-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`;
   }
   function selectedKnowledgeEntries() {
     const api = window.ForwardStepKnowledgeSearch;
@@ -133,6 +140,9 @@
   }
   function renderProject(project) {
     activeProjectId = project.id;
+    // 切换项目时清空上一任务的临时资料选择，避免把别的项目选中的摘要带进新任务的发送上下文
+    state.knowledgeSelection = [];
+    state.researchSelection = [];
     const method = getMethodCard(project.domain);
     document.getElementById("project-domain").textContent = `${project.domain}${method.temporary ? " · 临时方法，可调整" : ""}`;
     document.getElementById("project-title").textContent = "先把目标和步骤理清";
@@ -245,10 +255,24 @@
     const text = sendDraft.renderedText;
     document.getElementById("send-preview-text").value = text;
     document.getElementById("send-preview-model").textContent = serviceConfig.model?.configured ? serviceConfig.model.name : "未配置模型";
+    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
+    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
+    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
+    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
+    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
+    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
+    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
+    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
+    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
+    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
+    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
+    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
+    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
+    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
     const references = document.getElementById("send-preview-references");
     const knowledgeItems = sendDraft.knowledgeEntries || [];
     references.innerHTML = sendDraft.references.length || knowledgeItems.length
-      ? sendDraft.references.map(item => `<div class="send-reference"><span>${escapeHtml(item.title)}：${escapeHtml(item.summary || "暂无摘要")}</span><button type="button" data-remove-send-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`).join("")
+      ? sendDraft.references.map(item => `<div class="send-reference"><span>公开资料 ${referenceInfoLine(item, "公开资料")}</span><button type="button" data-remove-send-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`).join("")
         + knowledgeItems.map(item => renderKnowledgeReference(item)).join("")
       : '<div class="library-meta">未选择资料摘要</div>';
     references.querySelectorAll("[data-remove-send-reference]").forEach(button => button.addEventListener("click", () => {

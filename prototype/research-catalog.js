@@ -7,6 +7,9 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.ForwardStepResearchCatalog = api;
 })(typeof globalThis === "undefined" ? this : globalThis, function (knowledgeSchema) {
+  const knowledgeSearch = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./knowledge-search.js")
+    : (typeof globalThis !== "undefined" ? globalThis.ForwardStepKnowledgeSearch : null);
   const catalog = [
     { id: "prompts-chat", title: "prompts.chat", url: "https://github.com/f/prompts.chat", sourceType: "GitHub 仓库", licenseNote: "仓库许可和具体内容许可未核对；不复制提示词正文。", domains: ["通用计划", "写作"], stages: ["clarify", "plan"], summary: "社区提示词目录，适合观察任务分类与示例组织方式。", borrowablePatterns: "先按任务筛选，再用目标和验收标准审查示例。", limitations: "社区内容质量不一，受模型、版本和使用情境影响。", updatedAt: "未核对", verification: { status: "unverified", note: "仅收录目录信息，未做真实任务测试" }, kind: "prompt-library" },
     { id: "prompt-engineering-guide", title: "Prompt Engineering Guide", url: "https://github.com/dair-ai/Prompt-Engineering-Guide", sourceType: "GitHub 教程", licenseNote: "仓库许可和具体页面许可未核对。", domains: ["通用计划", "软件开发", "学习目标"], stages: ["research", "plan"], summary: "提示词与上下文工程学习资料，可按问题查找概念和方法。", borrowablePatterns: "只取与当前问题相关的方法，并要求说明适用条件。", limitations: "教程示例不保证适用于当前模型或任务；需要核对原始出处与时效。", updatedAt: "未核对", verification: { status: "unverified", note: "目录收录不代表内容已验证" }, kind: "guide" },
@@ -62,8 +65,22 @@
   }
 
   function appendReferenceContext(prompt, references) {
-    if (String(prompt).includes("【用户选择的参考资料摘要")) return String(prompt);
-    return String(prompt) + buildReferenceContext(references);
+    const base = String(prompt || "");
+    // 旧格式和新统一格式都拦截，避免调用方重复拼接时出现两段摘要
+    if (base.includes("【用户选择的参考资料摘要") || base.includes("【用户选择的本地资料摘要】")) return base;
+    // 统一走 buildKnowledgeContext，让公开资料与本地资料共享同一摘要格式和信任边界
+    const build = knowledgeSearch && typeof knowledgeSearch.buildKnowledgeContext === "function"
+      ? knowledgeSearch.buildKnowledgeContext
+      : null;
+    const entries = (references || []).map(item => toKnowledgeEntry(item)).filter(item => item.id);
+    if (build) {
+      // 按条目 id 去重，同一条公开资料不会因为重复出现而被拼接两次
+      const seen = new Set();
+      const unique = entries.filter(item => (seen.has(item.id) ? false : seen.add(item.id)));
+      const context = build(unique, { limit: 3, maxChars: 6000 });
+      return context ? base + context : base;
+    }
+    return base + buildReferenceContext(references);
   }
 
   function createSearchStub(query) {
