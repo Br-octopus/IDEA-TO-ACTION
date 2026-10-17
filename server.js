@@ -4,8 +4,8 @@ const path = require('node:path');
 const { URL } = require('node:url');
 
 const ROOT = __dirname;
-const PORT = Number(process.env.PORT || 4173);
-const HOST = process.env.HOST || '127.0.0.1';
+const DEFAULT_PORT = Number(process.env.PORT || 4173);
+const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
 const MODEL_BASE_URL = (process.env.MODEL_BASE_URL || '').replace(/\/$/, '');
 const MODEL_API_KEY = process.env.MODEL_API_KEY || '';
 const MODEL_NAME = process.env.MODEL_NAME || 'gpt-4o-mini';
@@ -77,9 +77,10 @@ function serveStatic(req, res) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+function createServer() {
+  return http.createServer(async (req, res) => {
   try {
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     if (req.method === 'GET' && requestUrl.pathname === '/favicon.ico') {
       res.writeHead(204);
       return res.end();
@@ -100,12 +101,45 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET') return serveStatic(req, res);
     return sendJson(res, 405, { error: '不支持的请求方法' });
   } catch (error) {
+    if (res.headersSent) {
+      res.destroy(error);
+      return;
+    }
     return sendJson(res, 500, { error: error.message || '服务发生未知错误' });
   }
-});
+  });
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`向前一步已启动：http://${HOST}:${PORT}`);
-  console.log(`模型：${modelConfigured() ? `已配置（${MODEL_NAME}）` : '未配置，保留复制指令模式'}`);
-  console.log(`搜索：${searchConfigured() ? '已配置' : '未配置，保留手动搜索模式'}`);
-});
+function startServer({ port = DEFAULT_PORT, host = DEFAULT_HOST } = {}) {
+  const server = createServer();
+  return new Promise((resolve, reject) => {
+    const onError = error => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      server.on('error', error => {
+        console.error('本地服务运行错误：', error);
+      });
+      resolve(server);
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, host);
+  });
+}
+
+module.exports = { createServer, startServer };
+
+if (require.main === module) {
+  startServer().then(server => {
+    const address = server.address();
+    console.log(`向前一步已启动：http://${DEFAULT_HOST}:${address.port}`);
+    console.log(`模型：${modelConfigured() ? `已配置（${MODEL_NAME}）` : '未配置，保留复制指令模式'}`);
+    console.log(`搜索：${searchConfigured() ? '已配置' : '未配置，保留手动搜索模式'}`);
+  }).catch(error => {
+    console.error('本地服务启动失败：', error);
+    process.exitCode = 1;
+  });
+}
