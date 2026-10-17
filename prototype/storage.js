@@ -5,6 +5,11 @@
 })(typeof globalThis === "undefined" ? this : globalThis, function () {
   const STORAGE_KEY = "forward-step.workspace.v2";
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
+  const CASE_FIELDS = [
+    "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
+    "externalResult", "userFeedback", "dimensions", "evidence", "suggestedLabel", "status",
+    "lessons", "nextPrompt", "createdAt"
+  ];
 
   function createEmptyState() {
     return { schemaVersion: 2, projects: [], prompts: [], references: [], researchSelection: [], cases: [] };
@@ -90,6 +95,40 @@
       .slice(0, 3);
   }
 
+  function listValue(value) {
+    if (Array.isArray(value)) return value.filter(item => item !== null && item !== undefined && String(item).trim());
+    if (typeof value === "string") return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+    return [];
+  }
+
+  function normalizeCase(reviewedCase = {}) {
+    const source = stripModelKeys(reviewedCase);
+    const after = source.after ?? source.externalResult ?? "";
+    const externalResult = source.externalResult ?? after;
+    const rawStatus = String(source.status ?? "待验证").trim();
+    const status = ["成功", "失败", "待验证"].includes(rawStatus) ? rawStatus : "待验证";
+    return {
+      ...source,
+      id: typeof source.id === "string" ? source.id.trim() : "",
+      projectId: String(source.projectId ?? "").trim(),
+      domain: String(source.domain ?? "").trim(),
+      taskType: String(source.taskType ?? "").trim(),
+      goal: String(source.goal ?? "").trim(),
+      preserveItems: listValue(source.preserveItems),
+      before: String(source.before ?? "").trim(),
+      after: String(after).trim(),
+      externalResult: String(externalResult).trim(),
+      userFeedback: String(source.userFeedback ?? source.feedback ?? "").trim(),
+      dimensions: listValue(source.dimensions),
+      evidence: listValue(source.evidence),
+      suggestedLabel: String(source.suggestedLabel ?? "").trim(),
+      status,
+      lessons: String(source.lessons ?? "").trim(),
+      nextPrompt: String(source.nextPrompt ?? "").trim(),
+      createdAt: String(source.createdAt ?? "").trim() || new Date().toISOString()
+    };
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const state = {
@@ -101,7 +140,9 @@
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
       researchSelection: sanitizeResearchSelection(source.researchSelection),
       cases: Array.isArray(source.cases)
-        ? stripModelKeys(source.cases).filter(item => item && item.confirmed === true)
+        ? stripModelKeys(source.cases)
+          .filter(item => item && item.confirmed === true)
+          .map(item => ({ ...normalizeCase(item), confirmed: true, confirmedAt: item.confirmedAt || item.createdAt || new Date().toISOString() }))
         : []
     };
     return state;
@@ -163,10 +204,23 @@
     if (typeof reviewedCase.id !== "string" || !reviewedCase.id.trim()) throw new TypeError("已复核案例必须提供非空 id");
     const caseId = reviewedCase.id.trim();
     if (next.cases.some(item => typeof item.id === "string" && item.id.trim() === caseId)) return next;
-    const sanitizedCase = stripModelKeys(reviewedCase);
-    next.cases.unshift({ ...sanitizedCase, id: caseId, confirmed: true, confirmedAt: sanitizedCase.confirmedAt || new Date().toISOString() });
+    const sanitizedCase = normalizeCase({ ...reviewedCase, id: caseId });
+    next.cases.unshift({ ...sanitizedCase, confirmed: true, confirmedAt: new Date().toISOString() });
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, createEmptyState, migrateState, loadState, saveState, addPromptVersion, confirmCase };
+  function updateCase(state, reviewedCase) {
+    const next = migrateState(state);
+    if (!reviewedCase || typeof reviewedCase !== "object") throw new TypeError("需要提供要修改的案例");
+    if (typeof reviewedCase.id !== "string" || !reviewedCase.id.trim()) throw new TypeError("要修改的案例必须提供非空 id");
+    const caseId = reviewedCase.id.trim();
+    const index = next.cases.findIndex(item => item.id === caseId);
+    if (index < 0) return next;
+    const existing = next.cases[index];
+    const merged = normalizeCase({ ...existing, ...reviewedCase, id: caseId, createdAt: existing.createdAt });
+    next.cases[index] = { ...merged, confirmed: true, confirmedAt: existing.confirmedAt || new Date().toISOString() };
+    return next;
+  }
+
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase };
 });

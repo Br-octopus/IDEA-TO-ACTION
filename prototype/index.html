@@ -335,8 +335,35 @@
                 <div class="form-footer" style="margin-top:12px"><span class="privacy-note">内容保存在本机</span><button class="button-secondary" id="continue-prompt">生成下一步指令<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
                 <div class="result-box" id="followup-result"><div class="field-label">发给 AI 的下一步指令</div><div class="prompt-box" id="followup-prompt"></div><div class="prompt-bottom"><small>结合你的原始目标和最新进展生成</small><button class="button-secondary" id="copy-followup">复制这条指令</button></div></div>
               </article>
+              <article class="content-block" id="project-review-workbench">
+                <div class="step-tag"><span class="step-number">3</span>把外部结果带回来复盘</div>
+                <h2>复盘一次真实尝试</h2>
+                <p class="block-desc">对照当前目标、保留项和实际结果，记录证据并生成下一条修正提示词。本工具不直接改文章、做 PPT、写代码或执行现实任务。</p>
+                <div class="extra-grid">
+                  <div class="wide"><div class="field-label">目标</div><div class="prompt-box" id="project-review-goal"></div></div>
+                  <div><div class="field-label">保留项</div><div class="prompt-box" id="project-review-preserve"></div></div>
+                  <div><label class="field-label" for="project-review-before">尝试前内容</label><textarea id="project-review-before" class="reply-area" placeholder="粘贴原方案、原稿或原提示词……"></textarea></div>
+                  <div><label class="field-label" for="project-review-external-result">外部结果</label><textarea id="project-review-external-result" class="reply-area" placeholder="粘贴外部 AI 或现实尝试返回的结果……"></textarea></div>
+                  <div class="wide"><label class="field-label" for="project-review-feedback">用户意见</label><textarea id="project-review-feedback" class="reply-area" placeholder="哪里成功、失败或偏离了目标？"></textarea></div>
+                </div>
+                <div class="notice" style="margin-top:14px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>生成并复制复盘指令前，请确认原文和外部结果是否包含不愿发送给外部 AI 的隐私、凭证或未公开资料。</span></div>
+                <div class="prompt-bottom"><small>只生成复盘和下一条指令，不直接替你完成任务</small><button class="button-secondary" id="build-project-review" type="button">生成复盘指令</button></div>
+                <div class="result-box" id="project-review-result">
+                  <div class="field-label">交给外部 AI 的复盘指令</div>
+                  <div class="prompt-box" id="project-review-prompt"></div>
+                  <div class="prompt-bottom"><small>复制会把上面的原文和结果外发；复盘结论仍需你确认</small><button class="button-secondary" id="copy-project-review" type="button">复制复盘指令</button></div>
+                  <div class="extra-grid" style="margin-top:16px">
+                    <div class="wide"><label class="field-label" for="project-review-evidence">证据（一行一项）</label><textarea id="project-review-evidence" class="reply-area" placeholder="逐项写出原文、结果、数据或行为证据；没有证据就写待验证"></textarea></div>
+                    <div><label class="field-label" for="project-review-label">建议标签</label><input id="project-review-label" type="text" placeholder="例如：失败：保留项丢失"></div>
+                    <div><label class="field-label" for="project-review-status">判断</label><select id="project-review-status"><option>待验证</option><option>成功</option><option>失败</option></select></div>
+                    <div class="wide"><label class="field-label" for="project-review-lessons">经验教训</label><textarea id="project-review-lessons" class="reply-area" placeholder="这次结果说明了什么？不要泛化成普遍规律"></textarea></div>
+                    <div class="wide"><label class="field-label" for="project-review-next-prompt">下一条指令</label><textarea id="project-review-next-prompt" class="reply-area" placeholder="针对证据生成的下一条修正提示词"></textarea></div>
+                  </div>
+                  <div class="prompt-bottom"><small>只有点击“确认记录”才会写入本地 cases；“修改判断”只更新当前复盘结论</small><div class="button-row"><button class="button-secondary" id="edit-project-review" type="button">修改判断</button><button class="button-secondary" id="skip-project-review" type="button">暂不记录</button><button class="button-primary" id="confirm-project-review" type="button">确认记录</button></div></div>
+                </div>
+              </article>
               <article class="content-block">
-                <div class="block-top"><div><div class="step-tag"><span class="step-number">3</span>建议的推进顺序</div><h2>先看路线，再按实际情况调整</h2></div></div>
+                <div class="block-top"><div><div class="step-tag"><span class="step-number">4</span>建议的推进顺序</div><h2>先看路线，再按实际情况调整</h2></div></div>
                 <p class="block-desc">这是各领域通用的路线骨架，不代表已经针对你的情况验证。让 AI 联网查证后再确定具体步骤。</p>
                 <div class="timeline" id="timeline"></div>
               </article>
@@ -402,8 +429,23 @@
             <div class="field"><label class="field-label" for="article-revised">粘贴外部 AI 修改后的结果</label><textarea id="article-revised" class="reply-area" placeholder="粘贴外部 AI 返回的文章或片段。两栏对照只留在本机，方便检查事实、逻辑和保留项有没有被改偏。"></textarea></div>
             <div class="compare-grid" id="article-comparison" hidden><div class="compare-card"><h3>原稿</h3><pre id="article-original-preview"></pre></div><div class="compare-card"><h3>外部 AI 结果</h3><pre id="article-revised-preview"></pre></div></div>
             <div class="field" style="margin-top:14px"><label class="field-label" for="article-review-feedback">你觉得改得怎么样？哪里成功或偏了？<span class="optional">选填</span></label><textarea id="article-review-feedback" class="reply-area" placeholder="例如：读起来更自然，但原文中的第二个步骤被删掉了"></textarea></div>
-            <div class="prompt-bottom"><small>复盘指令包含原稿、外部结果和你的评价；复制并发送给外部 AI 后，这些内容会离开本机</small><button class="button-secondary" id="build-article-review" type="button">生成复盘指令</button></div>
-            <div class="result-box" id="article-review-result"><div class="field-label">交给 AI 的复盘指令</div><div class="prompt-box" id="article-review-prompt"></div><div class="prompt-bottom"><small>复盘结论仍需你确认，不自动计入已验证案例</small><button class="button-secondary" id="copy-article-review" type="button">复制复盘指令</button></div></div>
+             <div class="prompt-bottom"><small>复盘指令包含原稿、外部结果和你的评价；复制并发送给外部 AI 后，这些内容会离开本机</small><button class="button-secondary" id="build-article-review" type="button">生成复盘指令</button></div>
+             <div class="result-box" id="article-review-result">
+               <div class="field-label">交给 AI 的复盘指令</div>
+               <div class="prompt-box" id="article-review-prompt"></div>
+               <div class="notice" style="margin-top:14px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>复制前请确认：原稿和外部结果可能会离开本机发送给外部 AI；不要发送凭证、隐私或未公开资料。</span></div>
+               <div class="prompt-bottom"><small>复盘结论仍需你确认，不自动计入已验证案例</small><button class="button-secondary" id="copy-article-review" type="button">复制复盘指令</button></div>
+               <div class="extra-grid" style="margin-top:16px">
+                 <div class="wide"><div class="field-label">目标</div><div class="prompt-box" id="article-review-goal"></div></div>
+                 <div><div class="field-label">保留项</div><div class="prompt-box" id="article-review-preserve"></div></div>
+                 <div class="wide"><label class="field-label" for="article-review-evidence">证据（一行一项）</label><textarea id="article-review-evidence" class="reply-area" placeholder="逐项写出前后变化、具体句子、事实或行为证据"></textarea></div>
+                 <div><label class="field-label" for="article-review-label">建议标签</label><input id="article-review-label" type="text" placeholder="例如：待验证：缺少事实核对"></div>
+                 <div><label class="field-label" for="article-review-status">判断</label><select id="article-review-status"><option>待验证</option><option>成功</option><option>失败</option></select></div>
+                 <div class="wide"><label class="field-label" for="article-review-lessons">经验教训</label><textarea id="article-review-lessons" class="reply-area" placeholder="保留这次具体经验，不要泛化"></textarea></div>
+                 <div class="wide"><label class="field-label" for="article-review-next-prompt">下一条指令</label><textarea id="article-review-next-prompt" class="reply-area" placeholder="针对证据生成的下一条修正提示词"></textarea></div>
+               </div>
+               <div class="prompt-bottom"><small>只有点击“确认记录”才会写入本地 cases；“修改判断”不会自动确认</small><div class="button-row"><button class="button-secondary" id="edit-article-review" type="button">修改判断</button><button class="button-secondary" id="skip-article-review" type="button">暂不记录</button><button class="button-primary" id="confirm-article-review" type="button">确认记录</button></div></div>
+             </div>
             <div class="prompt-bottom"><small>对照时重点核实：事实和数字是否保留、是否擅自补了经历、观点是否变了、是否改得太多。</small><button class="button-secondary" id="copy-article-revision">复制外部结果</button></div>
           </article>
           <details class="details" style="max-width:880px;margin-top:19px">
