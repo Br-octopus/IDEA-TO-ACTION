@@ -80,6 +80,28 @@ test('同一 URL 即使资料类型不同也只保留一个条目', () => {
   assert.equal(entries[0].sourceUrl, 'https://example.com/same');
 });
 
+test('URL 规范化后相同来源仍只保留一个条目', () => {
+  const entries = collectKnowledgeEntries({}, {
+    references: [
+      { id: 'same', title: '带片段资料', url: 'https://EXAMPLE.com/same#section' },
+      { id: 'same', title: '规范化资料', url: 'https://example.com/same' }
+    ]
+  });
+
+  assert.equal(entries.length, 1);
+});
+
+test('公开资料无 URL 时不因 sourceType 不同而重复', () => {
+  const entries = collectKnowledgeEntries({}, {
+    references: [
+      { id: 'same', title: 'GitHub 资料', sourceType: 'GitHub 仓库' },
+      { id: 'same', title: '文章资料', sourceType: '文章' }
+    ]
+  });
+
+  assert.equal(entries.length, 1);
+});
+
 test('不同来源使用同名 id 时各自保留，同一来源仍然去重', () => {
   const entries = collectKnowledgeEntries({
     prompts: [
@@ -134,6 +156,31 @@ test('转换公开资料和提示词时只保留摘要与正文摘录', () => {
   assert.equal(prompt.summary, '测试记录');
   assert.equal(prompt.contentExcerpt.length, 240);
   assert.equal(prompt.summary.includes(longText), false);
+});
+
+test('案例 nextPrompt 只保留有限长度摘要', () => {
+  const nextPrompt = '案例中的完整下一步提示词和可能包含的敏感内容'.repeat(100);
+  const entry = collectKnowledgeEntries({
+    cases: [{ id: 'long', confirmed: true, status: '成功', nextPrompt }]
+  }).find(item => item.id === 'case-long');
+
+  assert.equal(entry.contentExcerpt.length, 240);
+  assert.equal(entry.contentExcerpt, nextPrompt.slice(0, 240));
+  assert.equal(entry.contentExcerpt.includes(nextPrompt.slice(240)), false);
+});
+
+test('只有 verified === true 的提示词才标记为用户确认', () => {
+  const entries = collectKnowledgeEntries({
+    prompts: [
+      { id: 'confirmed', title: '已确认', verified: true },
+      { id: 'string-false', title: '字符串假值', verified: 'false' },
+      { id: 'missing', title: '未验证' }
+    ]
+  });
+
+  assert.equal(entries.find(item => item.id === 'prompt-confirmed').verificationStatus, 'user-confirmed');
+  assert.equal(entries.find(item => item.id === 'prompt-string-false').verificationStatus, 'unverified');
+  assert.equal(entries.find(item => item.id === 'prompt-missing').verificationStatus, 'unverified');
 });
 
 test('方法卡转换导出统一条目', () => {

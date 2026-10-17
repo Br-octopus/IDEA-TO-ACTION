@@ -71,15 +71,16 @@ test('将 v1 项目和提示词迁移到 v3，补齐字段并保留资料', () =
   assert.deepEqual(JSON.parse(storage.getItem(STORAGE_KEY)), state);
 });
 
-test('根路径和嵌套页面路径都能按顺序加载知识 schema 和外部脚本', async t => {
+test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一搜索全局', async t => {
   const server = await startServer({ port: 0 });
   t.after(() => new Promise(resolve => server.close(resolve)));
   const { port } = server.address();
   const paths = [
-    '/prototype/method-cards.js',
     '/prototype/knowledge-schema.js',
-    '/prototype/storage.js',
+    '/prototype/method-cards.js',
     '/prototype/research-catalog.js',
+    '/prototype/knowledge-search.js',
+    '/prototype/storage.js',
     '/prototype/app.js'
   ];
 
@@ -88,14 +89,30 @@ test('根路径和嵌套页面路径都能按顺序加载知识 schema 和外部
     assert.equal(pageResponse.status, 200, `${pagePath} 应返回 200`);
     const html = await pageResponse.text();
     const schemaScriptIndex = html.indexOf('src="/prototype/knowledge-schema.js"');
+    const methodCardsScriptIndex = html.indexOf('src="/prototype/method-cards.js"');
+    const researchScriptIndex = html.indexOf('src="/prototype/research-catalog.js"');
+    const knowledgeSearchScriptIndex = html.indexOf('src="/prototype/knowledge-search.js"');
     const storageScriptIndex = html.indexOf('src="/prototype/storage.js"');
+    const appScriptIndex = html.indexOf('src="/prototype/app.js"');
     assert.ok(schemaScriptIndex >= 0, `${pagePath} 应先引用 knowledge-schema.js`);
-    assert.ok(schemaScriptIndex < storageScriptIndex, `${pagePath} 中 knowledge-schema.js 应在 storage.js 前加载`);
+    assert.ok(schemaScriptIndex < methodCardsScriptIndex, `${pagePath} 中 schema 应在 method-cards.js 前加载`);
+    assert.ok(methodCardsScriptIndex < researchScriptIndex, `${pagePath} 中 method-cards.js 应在 research-catalog.js 前加载`);
+    assert.ok(researchScriptIndex < knowledgeSearchScriptIndex, `${pagePath} 中 research-catalog.js 应在 knowledge-search.js 前加载`);
+    assert.ok(knowledgeSearchScriptIndex < storageScriptIndex, `${pagePath} 中 knowledge-search.js 应在 storage.js 前加载`);
+    assert.ok(storageScriptIndex < appScriptIndex, `${pagePath} 中 storage.js 应在 app.js 前加载`);
     for (const scriptPath of paths) {
       assert.ok(html.includes(`src="${scriptPath}"`), `${pagePath} 应引用 ${scriptPath}`);
       const scriptResponse = await fetch(`http://127.0.0.1:${port}${scriptPath}`);
       assert.equal(scriptResponse.status, 200, `${scriptPath} 应返回 200`);
     }
+
+    const context = {};
+    for (const scriptPath of paths.slice(0, 4)) {
+      const source = fs.readFileSync(require.resolve(`..${scriptPath}`), 'utf8');
+      vm.runInNewContext(source, context, { filename: scriptPath });
+    }
+    assert.equal(typeof context.ForwardStepKnowledgeSearch.collectKnowledgeEntries, 'function');
+    assert.equal(typeof context.ForwardStepMethodCards.methodCardsToKnowledgeEntries, 'function');
   }
 });
 

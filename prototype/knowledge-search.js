@@ -24,21 +24,10 @@
   }
 
   function fromMethodCard(card = {}) {
-    if (methodCardsApi && typeof methodCardsApi.methodCardsToKnowledgeEntries === "function") {
-      return methodCardsApi.methodCardsToKnowledgeEntries([card])[0];
+    if (!methodCardsApi || typeof methodCardsApi.methodCardsToKnowledgeEntries !== "function") {
+      throw new TypeError("方法卡转换器不可用");
     }
-    return knowledgeSchema.normalizeKnowledgeEntry({
-      id: prefixId("method-", card.id),
-      type: "method-card",
-      title: card.title || card.name,
-      domains: card.domains || card.domain,
-      stages: card.stages,
-      keywords: card.checks || card.keywords,
-      summary: card.description || card.guidance,
-      reusablePatterns: card.guidance,
-      verificationStatus: "source-reviewed",
-      sourceType: "内置方法卡"
-    });
+    return methodCardsApi.methodCardsToKnowledgeEntries([card])[0];
   }
 
   function fromPrompt(prompt = {}) {
@@ -52,7 +41,7 @@
       summary: prompt.note || "用户保存的提示词版本",
       reusablePatterns: prompt.note,
       contentExcerpt: String(prompt.text || "").slice(0, 240),
-      verificationStatus: prompt.verified ? "user-confirmed" : "unverified",
+      verificationStatus: prompt.verified === true ? "user-confirmed" : "unverified",
       sourceType: "用户提示词"
     });
   }
@@ -70,21 +59,36 @@
       summary: reviewedCase.goal,
       reusablePatterns: reviewedCase.lessons,
       limitations: reviewedCase.evidence,
-      contentExcerpt: reviewedCase.nextPrompt,
+      contentExcerpt: String(reviewedCase.nextPrompt || "").slice(0, 240),
       linkedCaseId: reviewedCase.id,
       verificationStatus: reviewedCase.status === "待验证" ? "unverified" : "user-confirmed",
       sourceType: "用户确认案例"
     });
   }
 
-  function getEntryOrigin(source, entry) {
-    const sourceUrl = String(entry.sourceUrl || "").trim();
-    if (sourceUrl) return `url:${sourceUrl}`;
-    return `source-type:${String(entry.sourceType || source).trim()}`;
+  function normalizeSourceUrl(value) {
+    const sourceUrl = String(value || "").trim();
+    if (!sourceUrl) return "";
+    try {
+      const url = new URL(sourceUrl);
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return sourceUrl;
+    }
   }
 
   function getEntryKey(source, entry) {
-    return [source, entry.id, getEntryOrigin(source, entry)].join("\u001f");
+    const sourceUrl = normalizeSourceUrl(entry.sourceUrl);
+    if (source === "reference") {
+      return sourceUrl
+        ? [source, entry.id, sourceUrl].join("\u001f")
+        : [source, entry.id].join("\u001f");
+    }
+    const origin = sourceUrl
+      ? `url:${sourceUrl}`
+      : `source-type:${String(entry.sourceType || source).trim()}`;
+    return [source, entry.id, origin].join("\u001f");
   }
 
   function collectKnowledgeEntries(state = {}, { references = [], methodCards = [] } = {}) {
