@@ -1,8 +1,13 @@
 (function (root, factory) {
-  const cards = factory();
+  const cards = factory(
+    typeof module === "object" && module.exports
+      ? require("./knowledge-schema.js")
+      : root.ForwardStepKnowledgeSchema,
+    root
+  );
   if (typeof module === "object" && module.exports) module.exports = cards;
   else root.ForwardStepMethodCards = cards;
-})(typeof globalThis === "undefined" ? this : globalThis, function () {
+})(typeof globalThis === "undefined" ? this : globalThis, function (knowledgeSchema, browserRoot) {
   const cards = {
     "通用计划": {
       temporary: false,
@@ -101,5 +106,30 @@
     return { id: cards[key] ? key : "其他", temporary: card.temporary || !cards[key], stages: [...card.stages], stageDetails: card.stageDetails.map(([description, deliverable]) => ({ description, deliverable })), guidance: card.guidance };
   }
 
-  return { getMethodCard };
+  function normalizeKnowledgeEntry(input) {
+    const schema = knowledgeSchema || browserRoot.ForwardStepKnowledgeSchema;
+    return schema.normalizeKnowledgeEntry(input);
+  }
+
+  function toKnowledgeEntry(card = {}, id = card.id) {
+    return normalizeKnowledgeEntry({
+      id,
+      type: "method-card",
+      title: card.title || card.name || id,
+      domains: card.domains || card.domain,
+      stages: card.stages,
+      keywords: card.checks || card.keywords,
+      summary: card.description || card.guidance,
+      reusablePatterns: card.guidance,
+      verificationStatus: "source-reviewed",
+      sourceType: "内置方法卡"
+    });
+  }
+
+  function methodCardsToKnowledgeEntries(source = cards) {
+    if (Array.isArray(source)) return source.map(card => toKnowledgeEntry(card, card.id));
+    return Object.entries(source || {}).map(([id, card]) => toKnowledgeEntry(card, id));
+  }
+
+  return { getMethodCard, methodCardsToKnowledgeEntries };
 });
