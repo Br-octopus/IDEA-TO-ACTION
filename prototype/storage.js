@@ -24,6 +24,7 @@
       references: [],
       researchSelection: [],
       knowledgeEntries: [],
+      knowledgeSelection: [],
       cases: []
     };
   }
@@ -116,6 +117,16 @@
       .slice(0, 3);
   }
 
+  // 知识选择只保存资料 id，最多 5 条，且必须指向当前已有的知识条目
+  function sanitizeKnowledgeSelection(selection, entries) {
+    const knownIds = new Set((Array.isArray(entries) ? entries : [])
+      .map(item => item && item.id)
+      .filter(Boolean));
+    return [...new Set(Array.isArray(selection) ? selection : [])]
+      .filter(id => typeof id === "string" && knownIds.has(id))
+      .slice(0, 5);
+  }
+
   function listValue(value) {
     if (Array.isArray(value)) return value.filter(item => item !== null && item !== undefined && String(item).trim());
     if (typeof value === "string") return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
@@ -162,6 +173,7 @@
 
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
+    const entries = normalizeKnowledgeEntries(source.knowledgeEntries);
     const state = {
       ...createEmptyState(),
       ...stripModelKeys(source),
@@ -170,7 +182,8 @@
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
       researchSelection: sanitizeResearchSelection(source.researchSelection),
-      knowledgeEntries: normalizeKnowledgeEntries(source.knowledgeEntries),
+      knowledgeEntries: entries,
+      knowledgeSelection: sanitizeKnowledgeSelection(source.knowledgeSelection, entries),
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)

@@ -31,7 +31,18 @@
     buildPromptOptimizationPrompt: () => "请诊断提示词并给出优化建议，不执行最终任务。",
     buildCaseReviewPrompt: () => "请复盘结果并生成下一条修正提示词，不执行最终任务。"
   };
-  const { buildGoalPrompt, buildStagePrompt, buildFollowupPrompt, buildArticleDiagnosticPrompt, buildPromptOptimizationPrompt, buildCaseReviewPrompt } = promptEngine;
+  const { buildGoalPrompt, buildStagePrompt, buildFollowupPrompt, buildArticleDiagnosticPrompt, buildPromptOptimizationPrompt, buildCaseReviewPrompt, appendKnowledgeContext } = promptEngine;
+  // 读取用户勾选的本地资料，最多 5 条；缺失或已删除的条目直接忽略
+  function renderKnowledgeReference(item) {
+    return `<div class="send-reference"><span>本地资料 ${escapeHtml(item.title)}：${escapeHtml(item.summary || "暂无摘要")}</span><button type="button" data-remove-knowledge-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`;
+  }
+  function selectedKnowledgeEntries() {
+    const api = window.ForwardStepKnowledgeSearch;
+    if (!api || !Array.isArray(state.knowledgeSelection) || !state.knowledgeSelection.length) return [];
+    const entries = api.collectKnowledgeEntries(state, { references: research.catalog, methodCards: [] });
+    const byId = new Map(entries.map(item => [item.id, item]));
+    return state.knowledgeSelection.map(id => byId.get(id)).filter(Boolean).slice(0, 5);
+  }
   let persistenceBlocked = false;
   let state;
   try {
@@ -235,12 +246,19 @@
     document.getElementById("send-preview-text").value = text;
     document.getElementById("send-preview-model").textContent = serviceConfig.model?.configured ? serviceConfig.model.name : "未配置模型";
     const references = document.getElementById("send-preview-references");
-    references.innerHTML = sendDraft.references.length
+    const knowledgeItems = sendDraft.knowledgeEntries || [];
+    references.innerHTML = sendDraft.references.length || knowledgeItems.length
       ? sendDraft.references.map(item => `<div class="send-reference"><span>${escapeHtml(item.title)}：${escapeHtml(item.summary || "暂无摘要")}</span><button type="button" data-remove-send-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`).join("")
+        + knowledgeItems.map(item => renderKnowledgeReference(item)).join("")
       : '<div class="library-meta">未选择资料摘要</div>';
     references.querySelectorAll("[data-remove-send-reference]").forEach(button => button.addEventListener("click", () => {
       sendDraft.references = sendDraft.references.filter(item => item.id !== button.dataset.removeSendReference);
       if (!sendDraft.userEdited) sendDraft.renderedText = sendDraft.basePrompt + buildSelectedReferenceContext(sendDraft.references);
+      renderSendPanel();
+    }));
+    references.querySelectorAll("[data-remove-knowledge-reference]").forEach(button => button.addEventListener("click", () => {
+      sendDraft.knowledgeEntries = (sendDraft.knowledgeEntries || []).filter(item => item.id !== button.dataset.removeKnowledgeReference);
+      if (!sendDraft.userEdited) sendDraft.renderedText = appendKnowledgeContext(sendDraft.basePrompt + buildSelectedReferenceContext(sendDraft.references), sendDraft.knowledgeEntries);
       renderSendPanel();
     }));
     document.getElementById("send-preview-confirm").hidden = !serviceConfig.model?.configured;
@@ -248,7 +266,14 @@
   }
   function openSendPanel(prompt) {
     if (!prompt) return;
-    sendDraft = { basePrompt: String(prompt), references: selectedReferences(), renderedText: withSelectedReferences(prompt), userEdited: false };
+    const knowledgeEntries = selectedKnowledgeEntries();
+    sendDraft = {
+      basePrompt: String(prompt),
+      references: selectedReferences(),
+      knowledgeEntries,
+      renderedText: appendKnowledgeContext(withSelectedReferences(prompt), knowledgeEntries),
+      userEdited: false
+    };
     renderSendPanel();
     document.getElementById("send-preview").hidden = false;
   }
@@ -727,6 +752,14 @@
       state.knowledgeSelection = [button.dataset.knowledgeSelect];
       persist();
       toast("已选择该摘要用于当前提示词；发送前可在发送预览里确认");
+      // 选择后立刻更新发送预览，避免用户发送时才看到资料变化
+      if (sendDraft) {
+        sendDraft.knowledgeEntries = selectedKnowledgeEntries();
+        if (!sendDraft.userEdited) {
+          sendDraft.renderedText = appendKnowledgeContext(sendDraft.basePrompt + buildSelectedReferenceContext(sendDraft.references), sendDraft.knowledgeEntries);
+        }
+        renderSendPanel();
+      }
     }));
     root.querySelectorAll("[data-knowledge-open]").forEach(button => button.addEventListener("click", () => {
       const item = entries.find(entry => entry.id === button.dataset.knowledgeOpen);

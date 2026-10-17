@@ -3,6 +3,9 @@
   if (typeof module === "object" && module.exports) module.exports = engine;
   else root.ForwardStepPromptEngine = engine;
 })(typeof globalThis === "undefined" ? this : globalThis, function () {
+  const knowledgeSearch = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./knowledge-search.js")
+    : (typeof globalThis !== "undefined" ? globalThis.ForwardStepKnowledgeSearch : null);
   const text = value => Array.isArray(value) ? value.filter(Boolean).join("；") : String(value ?? "").trim();
   const valueOr = (value, fallback) => text(value) || fallback;
   const executionBoundary = "本工具只负责诊断、建议、整理推进步骤，并生成可复制给其他 AI 的提示词；不要替我执行最终任务，不要直接改文章、做 PPT、写代码或实施现实计划。每轮只推进当前阶段，所有建议由我决定是否采用。";
@@ -52,5 +55,15 @@
     return `请根据目标、成功标准、保留项和实际外部结果，协助我完成一次证据化复盘，并形成下一轮修正提示词。只负责诊断和建议，不直接替我完成最终任务。\n\n${executionBoundary}\n\n【领域】${valueOr(sourceProject.domain, "未分类")}\n【原始目标】${valueOr(sourceProject.idea, "未提供")}\n【当前目标摘要】${valueOr(sourceProject.goalSummary, sourceProject.idea || "未明确")}\n【成功标准】${valueOr(sourceProject.successCriteria || sourceProject.success, "未确认")}\n【保留项】${valueOr(sourceProject.preserveItems, "未指定")}\n【复盘维度】${valueOr(combined.dimensions, "目标达成、保留项、事实准确性、表达或方案质量")}\n【尝试前内容】\n${valueOr(combined.before, "未提供")}\n【尝试后内容】\n${valueOr(combined.after, externalResult || "未提供")}\n【外部结果】\n${valueOr(externalResult, "未提供")}\n【用户意见/反馈】\n${valueOr(feedback, "未提供")}\n\n【复盘要求】\n1. 先做“前后对照”：逐项对照目标、成功标准和每一项保留项，引用具体片段、变化、数据或可观察行为作为证据；没有证据就明确写“缺少证据”。\n2. 检查遗漏、矛盾、事实错误或待核实内容、不必要改动，以及外部结果是否擅自改变原意、范围、条件或限制。\n3. 给出明确但克制的结论：只能标为“成功”“失败”或“待验证”，并说明结论依据；证据不足时不要强行判定，不要把模型判断当成事实。\n4. 生成“建议标签”、可复用的“经验教训”和一条“下一条提示词”，下一条提示词必须针对本次证据暴露的具体问题，保留未被否定的目标和保留项。\n5. 区分事实、假设和待确认，最多提出 3 个会改变下一轮方案的问题。不要直接改文章、做 PPT、写代码或执行现实任务。\n\n【固定输出顺序】目标与成功标准；前后对照；具体证据；成功/失败/待验证结论；建议标签；经验教训；下一条修正提示词；仍待确认的问题。案例只有经我明确确认后才能保存为已验证经验；不要把一次结果泛化成普遍规律。`;
   }
 
-  return { buildGoalPrompt, buildStagePrompt, buildFollowupPrompt, buildArticleDiagnosticPrompt, buildPromptOptimizationPrompt, buildCaseReviewPrompt };
+  // 复用知识库搜索模块的上下文格式，保证本地资料与远程资料摘要遵循同样的信任边界
+  function appendKnowledgeContext(prompt = "", entries = []) {
+    const build = knowledgeSearch && typeof knowledgeSearch.buildKnowledgeContext === "function"
+      ? knowledgeSearch.buildKnowledgeContext
+      : null;
+    if (!build) return String(prompt);
+    const context = build(entries || []);
+    return context ? `${String(prompt)}${context}` : String(prompt);
+  }
+
+  return { buildGoalPrompt, buildStagePrompt, buildFollowupPrompt, buildArticleDiagnosticPrompt, buildPromptOptimizationPrompt, buildCaseReviewPrompt, appendKnowledgeContext };
 });

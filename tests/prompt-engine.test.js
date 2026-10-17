@@ -6,7 +6,8 @@ const {
   buildFollowupPrompt,
   buildArticleDiagnosticPrompt,
   buildPromptOptimizationPrompt,
-  buildCaseReviewPrompt
+  buildCaseReviewPrompt,
+  appendKnowledgeContext
 } = require('../prototype/prompt-engine.js');
 const { getMethodCard } = require('../prototype/method-cards.js');
 
@@ -109,6 +110,22 @@ test('案例复盘按目标和保留项诊断并生成下一条修正提示词',
   assert.match(prompt, /成功|失败|待验证/);
   assert.match(prompt, /下一条修正提示词/);
   assert.match(prompt, /不要替我执行最终任务/);
+});
+
+test('本地资料上下文包含摘要、方法和来源，不包含原文摘录', () => {
+  const prompt = appendKnowledgeContext('基础指令', [
+    {
+      id: 'x', title: '参考案例', summary: '保留观点',
+      reusablePatterns: '先做前后对照', sourceUrl: 'https://example.com',
+      contentExcerpt: '完整原文不应进入上下文'
+    }
+  ]);
+  for (const phrase of ['保留观点', '先做前后对照', 'https://example.com']) {
+    assert.ok(prompt.includes(phrase), `应包含 ${phrase}`);
+  }
+  assert.equal(prompt.includes('完整原文不应进入上下文'), false);
+  assert.ok(prompt.includes('基础指令'));
+  assert.equal(appendKnowledgeContext('基础指令', []), '基础指令');
 });
 
 test('领域方法卡覆盖写作、PPT、软件开发、产品/工作、学习和其他', () => {
