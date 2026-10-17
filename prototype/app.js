@@ -761,11 +761,19 @@
   function saveKnowledgeEntry(event) {
     event.preventDefault();
     const value = id => document.getElementById(id).value.trim();
+    // 来源链接可能不是必填，所以空值合法；但填写时必须可安全打开，只允许 http/https，
+    // 防止 javascript: 等协议被存入状态后通过"查看来源"打开。
+    const rawSourceUrl = value("knowledge-entry-url");
+    if (rawSourceUrl && !/^https?:\/\//.test(rawSourceUrl)) {
+      toast("来源链接必须是 http:// 或 https:// 开头");
+      return;
+    }
     const entry = knowledgeSchemaApi.normalizeKnowledgeEntry({
-      id: `manual-${Date.now()}`,
+      // 手动添加的条目复用现有随机 id 模式，避免同毫秒批量添加时 Date.now() 撞 id。
+      id: `manual-${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
       type: value("knowledge-entry-type"),
       title: value("knowledge-entry-title"),
-      sourceUrl: value("knowledge-entry-url"),
+      sourceUrl: rawSourceUrl,
       sourceType: "用户添加",
       domains: value("knowledge-entry-domains"),
       stages: value("knowledge-entry-stages"),
@@ -785,11 +793,6 @@
     toast("已保存资料摘要");
   }
   knowledgeForm.addEventListener("submit", saveKnowledgeEntry);
-  function selectKnowledgeEntry(id) {
-    state.knowledgeSelection = [id];
-    persist();
-    refreshKnowledgeView();
-  }
   refreshKnowledgeView();
   renderSearchResults();
   renderRecent();
