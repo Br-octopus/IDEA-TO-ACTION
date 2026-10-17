@@ -234,11 +234,14 @@ test('搜索可以按领域、阶段和类型过滤', () => {
 test('模型上下文只包含摘要、方法和来源，不包含完整原文', () => {
   const context = buildKnowledgeContext([{
     id: 'x', title: '案例', sourceUrl: 'https://example.com', summary: '短摘要',
-    reusablePatterns: '可借鉴方法', contentExcerpt: '不应默认发送的长原文',
+    reusablePatterns: '可借鉴方法', verificationStatus: 'unverified', limitations: '仅适用于小范围试验',
+    contentExcerpt: '不应默认发送的长原文',
     before: '原稿', after: '改稿'
   }], { maxChars: 1000 });
   assert.match(context, /短摘要/);
   assert.match(context, /可借鉴方法/);
+  assert.match(context, /unverified/);
+  assert.match(context, /仅适用于小范围试验/);
   assert.match(context, /https:\/\/example.com/);
   assert.equal(context.includes('不应默认发送的长原文'), false);
   assert.equal(context.includes('原稿'), false);

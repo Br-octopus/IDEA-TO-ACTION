@@ -224,6 +224,8 @@
         `类型：${item.type || "未分类"}`,
         `摘要：${item.summary || "暂无摘要"}`,
         `可借鉴：${item.reusablePatterns || "暂无"}`,
+        `验证状态：${item.verificationStatus || "unverified"}`,
+        `适用边界：${item.limitations || "暂无"}`,
         `来源：${item.sourceUrl || item.sourceType || "本地资料"}`
       ].join("\n");
       const candidate = `${header}${[...blocks, block].join("\n")}\n${footer}`;
