@@ -242,6 +242,25 @@ test('中文查询优先返回标题和关键词命中的资料', () => {
   assert.ok(result[0].matchedFields.includes('keywords'));
 });
 
+test('搜索结果明确记录命中的查询词', () => {
+  const result = searchKnowledge(searchableEntries, '句式 节奏', { limit: 5 });
+
+  assert.deepEqual(result[0].matchedTerms, ['句式', '节奏']);
+});
+
+test('标题命中按高于摘要的字段权重计分并排在前面', () => {
+  const entries = [
+    { id: 'summary-hit', type: 'test-entry', title: '低权重资料', summary: 'needle' },
+    { id: 'title-hit', type: 'test-entry', title: 'needle', summary: '其他内容' }
+  ];
+
+  const result = searchKnowledge(entries, 'needle', { limit: 5 });
+
+  assert.deepEqual(result.map(item => item.id), ['title-hit', 'summary-hit']);
+  assert.deepEqual(result.map(item => item.score), [8, 3]);
+  assert.deepEqual(result.map(item => item.matchedFields), [['title'], ['summary']]);
+});
+
 test('搜索可以按领域、阶段和类型过滤', () => {
   const result = searchKnowledge(searchableEntries, '标准', {
     domain: '软件开发', stage: 'plan', types: ['success-case'], limit: 5
