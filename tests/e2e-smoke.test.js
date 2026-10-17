@@ -17,6 +17,23 @@ const { createEmptyState, confirmCase } = require('../prototype/storage');
 
 const root = path.resolve(__dirname, '..');
 
+test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () => {
+  const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
+  for (const id of [
+    'knowledge-query',
+    'knowledge-type',
+    'knowledge-domain',
+    'knowledge-stage',
+    'knowledge-search',
+    'knowledge-entry-form',
+    'knowledge-results'
+  ]) {
+    assert.ok(html.includes('id="' + id + '"'), 'index.html 缺少 id: ' + id);
+  }
+  assert.ok(html.includes('资料库'), '应包含资料库入口');
+  assert.ok(html.includes('不要粘贴完整仓库'), '应提示不要粘贴完整仓库');
+});
+
 test('MVP 主流程可在静态边界串联，不等同于真实 Electron UI 验收', () => {
   const project = {
     idea: '把团队周报整理成可复用的工作流程',

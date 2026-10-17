@@ -677,6 +677,120 @@
     copyText(result.instruction);
   });
   renderReferenceCatalog();
+
+  // ===== 本地资料库（Task 4） =====
+  const knowledgeSearchApi = window.ForwardStepKnowledgeSearch;
+  const knowledgeSchemaApi = window.ForwardStepKnowledgeSchema;
+  function getKnowledgeFilters() {
+    const value = id => { const node = document.getElementById(id); return node ? node.value.trim() : ""; };
+    return {
+      query: value("knowledge-query"),
+      type: value("knowledge-type"),
+      domain: value("knowledge-domain"),
+      stage: value("knowledge-stage"),
+      verificationStatus: value("knowledge-verification")
+    };
+  }
+  function knowledgeTypeLabel(type) {
+    return { "user-prompt": "我的提示词", "success-case": "成功案例", "failure-case": "失败案例", "review-insight": "复盘洞察（待验证）", "github-summary": "GitHub 摘要", "article-summary": "文章摘要", "method-card": "方法卡", "prompt-example": "提示词样例", "manual-note": "手动笔记" }[type] || type;
+  }
+  function knowledgeDetail(item) {
+    const stageNames = { clarify: "澄清目标", research: "研究查证", plan: "制定计划", review: "复核评估" };
+    const line = label => value => value ? `<p><strong>${label}：</strong>${escapeHtml(value)}</p>` : "";
+    if (item.type === "user-prompt") {
+      return [line("提示词摘要")(item.summary), line("测试笔记")(item.reusablePatterns || item.contentExcerpt)].join("");
+    }
+    if (item.type === "success-case") {
+      return ['<p><span class="status">成功案例</span></p>', line("经验教训")(item.reusablePatterns), line("适用领域")((item.domains || []).join("、"))].join("");
+    }
+    if (item.type === "failure-case") {
+      return [line("失败原因")(item.summary), line("偏离点")(item.limitations), line("下一条提示词")(item.contentExcerpt)].join("");
+    }
+    if (item.type === "review-insight") {
+      return ['<p><span class="status">待验证</span></p>', line("洞察")(item.summary), line("依据")(item.limitations)].join("");
+    }
+    return [
+      item.sourceUrl ? `<p>来源：<a href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.sourceUrl)} ↗</a></p>` : "",
+      line("许可")(item.licenseNote),
+      line("局限")(item.limitations)
+    ].join("");
+  }
+  function renderKnowledgeResults(entries) {
+    const root = document.getElementById("knowledge-results");
+    const status = document.getElementById("knowledge-search-status");
+    if (!root) return;
+    const filters = getKnowledgeFilters();
+    const scopeLabel = entries.length ? `共匹配 ${entries.length} 条` : "没有匹配的资料";
+    status.textContent = filters.query ? `搜索“${filters.query}”：${scopeLabel}；勾选后的摘要才会进入模型上下文。` : `${scopeLabel}；勾选后的摘要才会进入模型上下文。`;
+    root.innerHTML = entries.map(item => `<article class="reference"><div class="library-item-head"><h3>${escapeHtml(item.title)}</h3><span class="status">${escapeHtml(knowledgeTypeLabel(item.type))}</span></div><p>${escapeHtml(item.summary || "暂无摘要")}</p>${knowledgeDetail(item)}<div class="library-meta">${escapeHtml((item.domains || []).join("、") || "未标注领域")} · 验证状态：${escapeHtml(item.verificationStatus || "unverified")} · ${escapeHtml(item.updatedAt || "")}</div><div class="button-row" style="margin-top:8px"><button class="button-secondary" data-knowledge-select="${escapeHtml(item.id)}" type="button">选择摘要用于当前提示词</button><button class="button-secondary" data-knowledge-open="${escapeHtml(item.id)}" type="button">查看来源</button></div></article>`).join("") || '<p class="library-meta">没有匹配的资料；换个搜索词或清空筛选。</p>';
+    root.querySelectorAll("[data-knowledge-select]").forEach(button => button.addEventListener("click", () => {
+      state.knowledgeSelection = [button.dataset.knowledgeSelect];
+      persist();
+      toast("已选择该摘要用于当前提示词；发送前可在发送预览里确认");
+    }));
+    root.querySelectorAll("[data-knowledge-open]").forEach(button => button.addEventListener("click", () => {
+      const item = entries.find(entry => entry.id === button.dataset.knowledgeOpen);
+      const url = item && item.sourceUrl;
+      if (!url) { toast("该资料没有来源链接"); return; }
+      if (desktopApi?.openExternal) desktopApi.openExternal(url);
+      else window.open(url, "_blank", "noopener");
+    }));
+  }
+  function refreshKnowledgeView() {
+    const root = document.getElementById("knowledge-results");
+    if (!root) return;
+    const entries = knowledgeSearchApi.collectKnowledgeEntries(state, {
+      references: research.catalog,
+      methodCards: []
+    });
+    const filters = getKnowledgeFilters();
+    const results = knowledgeSearchApi.searchKnowledge(entries, filters.query, {
+      limit: 12,
+      types: filters.type ? [filters.type] : [],
+      domain: filters.domain,
+      stage: filters.stage,
+      verificationStatus: filters.verificationStatus
+    });
+    renderKnowledgeResults(results);
+  }
+  document.getElementById("knowledge-search").addEventListener("click", refreshKnowledgeView);
+  ["knowledge-type", "knowledge-domain", "knowledge-stage", "knowledge-verification"].forEach(id => document.getElementById(id).addEventListener("change", refreshKnowledgeView));
+  const knowledgeForm = document.getElementById("knowledge-entry-form");
+  document.getElementById("knowledge-add-open").addEventListener("click", () => { knowledgeForm.hidden = !knowledgeForm.hidden; });
+  document.getElementById("knowledge-entry-cancel").addEventListener("click", () => { knowledgeForm.hidden = true; });
+  function saveKnowledgeEntry(event) {
+    event.preventDefault();
+    const value = id => document.getElementById(id).value.trim();
+    const entry = knowledgeSchemaApi.normalizeKnowledgeEntry({
+      id: `manual-${Date.now()}`,
+      type: value("knowledge-entry-type"),
+      title: value("knowledge-entry-title"),
+      sourceUrl: value("knowledge-entry-url"),
+      sourceType: "用户添加",
+      domains: value("knowledge-entry-domains"),
+      stages: value("knowledge-entry-stages"),
+      keywords: value("knowledge-entry-keywords"),
+      summary: value("knowledge-entry-summary"),
+      reusablePatterns: value("knowledge-entry-patterns"),
+      limitations: value("knowledge-entry-limitations"),
+      licenseNote: value("knowledge-entry-license"),
+      verificationStatus: "unverified"
+    });
+    if (!entry.title || !entry.summary) { toast("标题和短摘要必填"); return; }
+    state.knowledgeEntries.unshift(entry);
+    if (!persist()) return;
+    knowledgeForm.reset();
+    knowledgeForm.hidden = true;
+    refreshKnowledgeView();
+    toast("已保存资料摘要");
+  }
+  knowledgeForm.addEventListener("submit", saveKnowledgeEntry);
+  function selectKnowledgeEntry(id) {
+    state.knowledgeSelection = [id];
+    persist();
+    refreshKnowledgeView();
+  }
+  refreshKnowledgeView();
   renderSearchResults();
   renderRecent();
   async function loadServiceConfig() {

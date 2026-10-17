@@ -248,7 +248,7 @@
           <button data-view="plans"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg></span>我的计划</button>
           <button data-view="article"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span>文章改写</button>
           <button data-view="library"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17M10 7h6M10 11h6"/></svg></span>提示词库</button>
-          <button data-view="references"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span>GitHub 参考</button>
+          <button data-view="references"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span>资料库</button>
           <button data-view="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.5"/></svg></span>设置</button>
         </nav>
       </div>
@@ -510,6 +510,35 @@
             <div class="button-row"><button class="button-secondary" id="search-online" type="button">搜索最多 5 条</button><button class="button-secondary" id="copy-search-instruction" type="button">复制搜索指令</button></div>
             <p class="library-meta" id="search-status">搜索结果不会自动进入模型上下文；请先勾选要使用的摘要。</p>
             <div class="reference-grid" id="search-results"></div>
+          </div>
+          <div class="content-block" style="max-width:900px;margin-top:14px">
+            <h2>搜索本地资料</h2>
+            <div class="extra-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px">
+              <div class="field"><label class="field-label" for="knowledge-query">搜索词</label><input id="knowledge-query" type="text" placeholder="例如：用户访谈 摘要写法"></div>
+              <div class="field"><label class="field-label" for="knowledge-type">类型</label><select id="knowledge-type"><option value="">全部类型</option><option value="user-prompt">我的提示词</option><option value="success-case">成功案例</option><option value="failure-case">失败案例</option><option value="review-insight">复盘洞察</option><option value="github-summary">GitHub 摘要</option><option value="article-summary">文章摘要</option><option value="method-card">方法卡</option><option value="manual-note">手动笔记</option></select></div>
+              <div class="field"><label class="field-label" for="knowledge-domain">领域</label><select id="knowledge-domain"><option value="">全部领域</option><option>通用计划</option><option>写作</option><option>软件开发</option><option>工作任务</option><option>学习目标</option></select></div>
+              <div class="field"><label class="field-label" for="knowledge-stage">阶段</label><select id="knowledge-stage"><option value="">全部阶段</option><option value="clarify">澄清目标</option><option value="research">研究查证</option><option value="plan">制定计划</option><option value="review">复核评估</option></select></div>
+              <div class="field"><label class="field-label" for="knowledge-verification">验证状态</label><select id="knowledge-verification"><option value="">全部状态</option><option value="unverified">未验证</option><option value="source-reviewed">已核对来源</option><option value="user-confirmed">用户确认</option></select></div>
+            </div>
+            <div class="button-row" style="margin-top:10px"><button class="button-primary" id="knowledge-search" type="button">搜索资料</button><button class="button-secondary" id="knowledge-add-open" type="button">添加资料摘要</button></div>
+            <p class="library-meta" id="knowledge-search-status">输入搜索词或直接浏览资料；只有勾选的摘要会进入模型上下文。</p>
+<form id="knowledge-entry-form" hidden aria-label="添加资料摘要" style="margin-top:12px;padding:14px;border:1px solid #e5ebe5;border-radius:12px;background:#fbfcfb">
+              <div class="notice" style="margin-bottom:12px"><span><strong>只保存摘要、可借鉴方法和必要摘录。</strong>不要粘贴完整仓库、私密资料、API 密钥或不具备保存权利的全文。</span></div>
+              <div class="extra-grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+                <div class="field"><label class="field-label" for="knowledge-entry-type">类型</label><select id="knowledge-entry-type"><option value="manual-note">手动笔记</option><option value="github-summary">GitHub 摘要</option><option value="article-summary">文章摘要</option><option value="user-prompt">我的提示词</option><option value="success-case">成功案例</option><option value="failure-case">失败案例</option><option value="review-insight">复盘洞察</option></select></div>
+<div class="field"><label class="field-label" for="knowledge-entry-title">标题（必填）</label><input id="knowledge-entry-title" type="text" required placeholder="例如：某开源项目README笔记"></div>
+                <div class="field"><label class="field-label" for="knowledge-entry-url">来源链接</label><input id="knowledge-entry-url" type="text" placeholder="https://…"></div>
+                <div class="field"><label class="field-label" for="knowledge-entry-license">许可说明</label><input id="knowledge-entry-license" type="text" placeholder="例如：MIT；或“仅个人学习使用”"></div>
+                <div class="field"><label class="field-label" for="knowledge-entry-domains">领域</label><input id="knowledge-entry-domains" type="text" placeholder="用逗号分隔，例如：写作，学习目标"></div>
+                <div class="field"><label class="field-label" for="knowledge-entry-stages">阶段</label><input id="knowledge-entry-stages" type="text" placeholder="用逗号分隔，例如：澄清目标，研究查证"></div>
+              </div>
+              <div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-keywords">关键词</label><input id="knowledge-entry-keywords" type="text" placeholder="用逗号分隔，例如：访谈，摘要，复盘"></div>
+<div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-summary">短摘要（必填）</label><textarea id="knowledge-entry-summary" rows="2" required placeholder="两三句话说清这条资料讲什么、什么时候用。"></textarea></div>
+              <div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-patterns">可借鉴方法</label><textarea id="knowledge-entry-patterns" rows="2" placeholder="只写可复用的做法，不粘贴整段原文。"></textarea></div>
+              <div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-limitations">局限</label><textarea id="knowledge-entry-limitations" rows="2" placeholder="适用范围、未验证之处或授权限制。"></textarea></div>
+              <div class="button-row" style="margin-top:10px"><button class="button-primary" id="knowledge-entry-save" type="submit">保存摘要</button><button class="button-secondary" id="knowledge-entry-cancel" type="button">取消</button></div>
+            </form>
+            <div class="reference-grid" id="knowledge-results" style="margin-top:14px"></div>
           </div>
           <div class="section-heading" style="margin-top:0"><div><h2>提示词样例与写法教程</h2><p>可检索、学习和比较；用之前仍要结合自己的目标验证</p></div></div>
           <div class="reference-grid">
