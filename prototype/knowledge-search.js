@@ -77,6 +77,17 @@
     });
   }
 
+  function getEntryOrigin(source, entry) {
+    const sourceUrl = String(entry.sourceUrl || "").trim();
+    if (sourceUrl) return `url:${sourceUrl}`;
+    return `source-type:${String(entry.sourceType || source).trim()}`;
+  }
+
+  function getEntryKey(source, entry) {
+    const namespace = source === "reference" ? `${source}:${entry.type}` : source;
+    return [namespace, entry.id, getEntryOrigin(source, entry)].join("\u001f");
+  }
+
   function collectKnowledgeEntries(state = {}, { references = [], methodCards = [] } = {}) {
     const entries = [
       ...references.map(reference => ({ source: "reference", entry: fromReference(reference) })),
@@ -99,7 +110,7 @@
 
     const byId = new Map();
     for (const item of entries) {
-      const key = `${item.source}:${item.entry.id}`;
+      const key = getEntryKey(item.source, item.entry);
       if (!byId.has(key)) byId.set(key, item.entry);
     }
     return [...byId.values()];

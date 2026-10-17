@@ -40,6 +40,22 @@ test('同一来源重复 id 只保留一个条目且公开资料保持未验证'
   assert.equal(entries[0].verificationStatus, 'unverified');
 });
 
+test('不同 URL 的公开资料同 id 共存，相同 URL 仍去重', () => {
+  const entries = collectKnowledgeEntries({}, {
+    references: [
+      { id: 'same', title: '资料 A', kind: 'prompt-library', url: 'https://example.com/a' },
+      { id: 'same', title: '资料 A 的重复记录', kind: 'prompt-library', url: 'https://example.com/a' },
+      { id: 'same', title: '资料 B', kind: 'prompt-library', url: 'https://example.com/b' }
+    ]
+  });
+
+  assert.equal(entries.length, 2);
+  assert.deepEqual(entries.map(item => item.sourceUrl), [
+    'https://example.com/a',
+    'https://example.com/b'
+  ]);
+});
+
 test('不同来源使用同名 id 时各自保留，同一来源仍然去重', () => {
   const entries = collectKnowledgeEntries({
     prompts: [
