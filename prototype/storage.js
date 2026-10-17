@@ -3,6 +3,11 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.ForwardStepStorage = api;
 })(typeof globalThis === "undefined" ? this : globalThis, function () {
+  const knowledgeSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./knowledge-schema.js")
+    : typeof globalThis === "undefined"
+      ? null
+      : globalThis.ForwardStepKnowledgeSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
@@ -12,7 +17,15 @@
   ];
 
   function createEmptyState() {
-    return { schemaVersion: 2, projects: [], prompts: [], references: [], researchSelection: [], cases: [] };
+    return {
+      schemaVersion: 3,
+      projects: [],
+      prompts: [],
+      references: [],
+      researchSelection: [],
+      knowledgeEntries: [],
+      cases: []
+    };
   }
 
   class StorageReadError extends Error {
@@ -134,11 +147,16 @@
     const state = {
       ...createEmptyState(),
       ...stripModelKeys(source),
-      schemaVersion: 2,
+      schemaVersion: 3,
       projects: Array.isArray(source.projects) ? stripModelKeys(source.projects).map(withProjectDefaults) : [],
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
       researchSelection: sanitizeResearchSelection(source.researchSelection),
+      knowledgeEntries: Array.isArray(source.knowledgeEntries) && knowledgeSchema
+        ? stripModelKeys(source.knowledgeEntries)
+          .map(knowledgeSchema.normalizeKnowledgeEntry)
+          .filter(item => item.id)
+        : [],
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)

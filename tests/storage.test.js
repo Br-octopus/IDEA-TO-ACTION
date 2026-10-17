@@ -24,7 +24,7 @@ function memoryStorage(entries = {}) {
   };
 }
 
-test('将 v1 项目和提示词迁移到 v2，补齐字段并保留资料', () => {
+test('将 v1 项目和提示词迁移到 v3，补齐字段并保留资料', () => {
   const oldData = {
     projects: [
       { id: 'p1', idea: '学习摄影', domain: '学习目标', success: '能独立拍出清晰的人像', createdAt: '2026-01-01', custom: '保留的旧字段' },
@@ -37,7 +37,7 @@ test('将 v1 项目和提示词迁移到 v2，补齐字段并保留资料', () =
 
   const { state } = loadState(storage);
 
-  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.schemaVersion, 3);
   assert.equal(state.projects[0].idea, '学习摄影');
   assert.equal(state.projects[0].goalSummary, '学习摄影');
   assert.equal(state.projects[0].methodId, '');
@@ -98,6 +98,20 @@ test('资料选择迁移去重并限制为最多三条', () => {
   const state = migrateState({ researchSelection: [catalog[0].id, 'stale-reference', catalog[1].id, catalog[0].id, catalog[2].id, catalog[3].id] });
   assert.deepEqual(state.researchSelection, [catalog[0].id, catalog[1].id, catalog[2].id]);
   assert.deepEqual(migrateState({}).researchSelection, []);
+});
+
+test('旧版状态迁移后拥有知识条目集合', () => {
+  const state = migrateState({ schemaVersion: 2, projects: [], prompts: [], cases: [] });
+  assert.equal(state.schemaVersion, 3);
+  assert.deepEqual(state.knowledgeEntries, []);
+});
+
+test('知识条目不会保留模型凭证字段', () => {
+  const state = migrateState({
+    knowledgeEntries: [{ id: 'x', title: '资料', apiKey: 'secret', token: 'secret' }]
+  });
+  assert.equal(state.knowledgeEntries[0].apiKey, undefined);
+  assert.equal(state.knowledgeEntries[0].token, undefined);
 });
 
 test('普通提示词和未确认复盘不会自动写入已验证案例', () => {
