@@ -1,12 +1,15 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
-const fs = require('node:fs/promises');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require('electron');
 const path = require('node:path');
+const { createSettingsStore } = require(path.join(__dirname, 'settings-store.js'));
+const { createModelClient } = require(path.join(__dirname, '..', 'server', 'model-client.js'));
+const { createSearchClient } = require(path.join(__dirname, '..', 'server', 'search-client.js'));
 
 const DEV_PAGE_URL = process.env.DESKTOP_SERVICE_URL || 'http://127.0.0.1:4173';
 const SERVER_SHUTDOWN_TIMEOUT_MS = 2000;
 let mainWindow;
 let bundledService;
 let localServiceUrl = DEV_PAGE_URL;
+let settingsStore;
 
 function isDevelopment() {
   return !app.isPackaged || process.env.NODE_ENV === 'development';
@@ -39,30 +42,24 @@ function getBundledServerPath() {
   return path.join(app.getAppPath(), 'server.js');
 }
 
+function getSettingsStore() {
+  if (!settingsStore) {
+    settingsStore = createSettingsStore({ safeStorage, getUserDataPath: () => app.getPath('userData') });
+  }
+  return settingsStore;
+}
+
 async function startBundledService() {
   if (bundledService) return localServiceUrl;
 
   const { startServer } = require(getBundledServerPath());
-  bundledService = await startServer({ port: 0, host: '127.0.0.1' });
+  bundledService = await startServer({ port: 0, host: '127.0.0.1', config: getSettingsStore().getServiceConfig() });
   const address = bundledService.address();
   if (!address || typeof address === 'string') {
     throw new Error('内置本地服务没有返回有效的监听地址');
   }
   localServiceUrl = `http://127.0.0.1:${address.port}`;
   return localServiceUrl;
-}
-
-function getConfigPath() {
-  return path.join(app.getPath('userData'), 'config.json');
-}
-
-async function readSavedConfig() {
-  try {
-    return JSON.parse(await fs.readFile(getConfigPath(), 'utf8'));
-  } catch (error) {
-    if (error.code === 'ENOENT' || error instanceof SyntaxError) return {};
-    throw error;
-  }
 }
 
 async function createWindow() {
@@ -105,7 +102,7 @@ async function reportStartupError(error) {
 }
 
 ipcMain.handle('config:get', async () => {
-  const saved = await readSavedConfig();
+  const saved = getSettingsStore().getPublicConfig();
   let service = null;
   try {
     service = await requestLocalService('/api/config');
@@ -119,23 +116,17 @@ ipcMain.handle('config:save', async (_event, config) => {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new TypeError('配置必须是对象');
   }
-  await fs.mkdir(path.dirname(getConfigPath()), { recursive: true });
-  await fs.writeFile(getConfigPath(), JSON.stringify(config, null, 2), 'utf8');
-  return { saved: true };
+  return getSettingsStore().save(config);
 });
 
 ipcMain.handle('model:request', async (_event, payload) => {
-  return requestLocalService('/api/model', {
-    method: 'POST',
-    body: JSON.stringify(payload || {})
-  });
+  const client = createModelClient(getSettingsStore().getServiceConfig());
+  return client.request(payload?.messages, payload?.options);
 });
 
 ipcMain.handle('search:request', async (_event, payload) => {
-  return requestLocalService('/api/search', {
-    method: 'POST',
-    body: JSON.stringify(payload || {})
-  });
+  const client = createSearchClient(getSettingsStore().getServiceConfig());
+  return client.search(String(payload?.query || '').trim(), payload?.options);
 });
 
 app.whenReady().then(() => createWindow()).catch(reportStartupError);

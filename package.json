@@ -8,7 +8,7 @@
     "start": "node server.js",
     "desktop": "electron .",
     "test": "node --test",
-    "check": "node --check server.js && node --check electron/main.js && node --check electron/preload.js",
+    "check": "node --check server.js && node --check server/model-client.js && node --check server/search-client.js && node --check electron/settings-store.js && node --check electron/main.js && node --check electron/preload.js && node --check prototype/app.js",
     "dist:win": "electron-builder --win nsis portable"
   },
   "engines": { "node": ">=18" },
@@ -22,6 +22,7 @@
     "files": [
       "electron/**/*",
       "prototype/**/*",
+      "server/**/*",
       "server.js",
       "package.json"
     ],
