@@ -136,7 +136,9 @@
 
     const words = source.match(/[a-z0-9]+|[\u3400-\u9fff]+/gi) || [];
     return words.flatMap(word => /[\u3400-\u9fff]/.test(word)
-      ? [...word].map((_, index) => word.slice(index, index + 2)).filter(item => item.length === 2)
+      ? word.length === 1
+        ? [word]
+        : [...word].map((_, index) => word.slice(index, index + 2)).filter(item => item.length === 2)
       : [word]);
   }
 

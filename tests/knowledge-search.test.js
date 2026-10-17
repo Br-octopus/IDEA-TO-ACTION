@@ -330,6 +330,20 @@ test('缺少 Intl.Segmenter 时中文正则回退仍能命中', () => {
   assert.deepEqual(Array.from(result, item => item.id), ['chinese']);
 });
 
+test('缺少 Intl.Segmenter 时单字中文查询只返回标题命中资料并计分', () => {
+  const context = loadBrowserKnowledgeSearch(undefined);
+  const result = context.ForwardStepKnowledgeSearch.searchKnowledge(
+    [
+      { id: 'writing', title: '写作指南' },
+      { id: 'reading', title: '阅读指南' }
+    ],
+    '作'
+  );
+
+  assert.deepEqual(Array.from(result, item => item.id), ['writing']);
+  assert.ok(result[0].score > 0);
+});
+
 test('Intl.Segmenter 构造失败时中文正则回退仍能命中', () => {
   const context = loadBrowserKnowledgeSearch(function Segmenter() {
     throw new Error('当前运行环境不支持 Segmenter 配置');
