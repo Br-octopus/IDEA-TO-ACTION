@@ -1,0 +1,302 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const { startServer } = require('../server.js');
+const {
+  LEGACY_STORAGE_KEY,
+  STORAGE_KEY,
+  createEmptyState,
+  migrateState,
+  loadState,
+  saveState,
+  addPromptVersion,
+  confirmCase
+} = require('../prototype/storage.js');
+
+function memoryStorage(entries = {}) {
+  const values = new Map(Object.entries(entries));
+  return {
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    values
+  };
+}
+
+test('将 v1 项目和提示词迁移到 v2，补齐字段并保留资料', () => {
+  const oldData = {
+    projects: [
+      { id: 'p1', idea: '学习摄影', domain: '学习目标', success: '能独立拍出清晰的人像', createdAt: '2026-01-01', custom: '保留的旧字段' },
+      { id: 'p2', idea: '其他计划', domain: '其他' }
+    ],
+    prompts: [{ id: 't1', groupId: 'p1', version: 4, text: '完整的旧提示词正文：请按每周计划学习摄影。' }],
+    references: [{ id: 'r1', title: '参考资料' }]
+  };
+  const storage = memoryStorage({ [LEGACY_STORAGE_KEY]: JSON.stringify(oldData) });
+
+  const { state } = loadState(storage);
+
+  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.projects[0].idea, '学习摄影');
+  assert.equal(state.projects[0].goalSummary, '学习摄影');
+  assert.equal(state.projects[0].methodId, '');
+  assert.equal(state.projects[0].methodTemporary, false);
+  assert.equal(state.projects[0].audience, '');
+  assert.equal(state.projects[0].currentState, '');
+  assert.equal(state.projects[0].constraints, '');
+  assert.deepEqual(state.projects[0].successCriteria, ['能独立拍出清晰的人像']);
+  assert.deepEqual(state.projects[0].assumptions, []);
+  assert.deepEqual(state.projects[0].missingInfo, []);
+  assert.deepEqual(state.projects[0].preserveItems, []);
+  assert.deepEqual(state.projects[0].steps, []);
+  assert.equal(state.projects[0].currentStepId, '');
+  assert.equal(state.projects[0].nextAction, '');
+  assert.equal(state.projects[0].reply, '');
+  assert.equal(state.projects[0].createdAt, '2026-01-01');
+  assert.equal(state.projects[0].custom, '保留的旧字段');
+  for (const field of [
+    'methodId', 'methodTemporary', 'goalSummary', 'audience', 'currentState', 'constraints',
+    'successCriteria', 'assumptions', 'missingInfo', 'preserveItems', 'steps',
+    'currentStepId', 'nextAction', 'reply', 'createdAt'
+  ]) {
+    assert.ok(Object.hasOwn(state.projects[0], field), `迁移项目应包含 ${field}`);
+  }
+  assert.deepEqual(state.projects[0].completed, []);
+  assert.equal(state.projects[1].methodTemporary, true);
+  assert.equal(state.prompts[0].text, oldData.prompts[0].text);
+  assert.equal(state.prompts[0].version, 4);
+  assert.deepEqual(state.references, oldData.references);
+  assert.deepEqual(state.cases, []);
+  assert.deepEqual(JSON.parse(storage.getItem(STORAGE_KEY)), state);
+});
+
+test('根路径和嵌套页面路径都能加载三份外部脚本', async t => {
+  const server = await startServer({ port: 0 });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const { port } = server.address();
+  const paths = [
+    '/prototype/method-cards.js',
+    '/prototype/storage.js',
+    '/prototype/app.js'
+  ];
+
+  for (const pagePath of ['/', '/prototype/index.html']) {
+    const pageResponse = await fetch(`http://127.0.0.1:${port}${pagePath}`);
+    assert.equal(pageResponse.status, 200, `${pagePath} 应返回 200`);
+    const html = await pageResponse.text();
+    for (const scriptPath of paths) {
+      assert.ok(html.includes(`src="${scriptPath}"`), `${pagePath} 应引用 ${scriptPath}`);
+      const scriptResponse = await fetch(`http://127.0.0.1:${port}${scriptPath}`);
+      assert.equal(scriptResponse.status, 200, `${scriptPath} 应返回 200`);
+    }
+  }
+});
+
+test('普通提示词和未确认复盘不会自动写入已验证案例', () => {
+  const initial = createEmptyState();
+  const withPrompt = addPromptVersion(initial, { id: 't1', text: '普通提示词' }).state;
+  const unchanged = confirmCase(withPrompt, { promptId: 't1', result: '成功' }, false);
+
+  assert.deepEqual(unchanged.cases, []);
+  assert.equal(unchanged.prompts.length, 1);
+});
+
+test('仅显式确认的案例才会进入案例库', () => {
+  const state = confirmCase(createEmptyState(), { id: 'c1', result: '复核通过' }, true);
+  assert.equal(state.cases.length, 1);
+  assert.equal(state.cases[0].confirmed, true);
+  assert.ok(state.cases[0].confirmedAt);
+});
+
+test('提示词版本按同组最大版本递增', () => {
+  const initial = { ...createEmptyState(), prompts: [
+    { groupId: 'manual', version: 1 },
+    { groupId: 'manual', version: 3 },
+    { groupId: 'project-1', version: 8 }
+  ] };
+  const first = addPromptVersion(initial, { id: 't2', groupId: 'manual', text: '第二条' });
+  const second = addPromptVersion(first.state, { id: 't3', groupId: 'project-1', text: '项目提示词' });
+
+  assert.equal(first.prompt.version, 4);
+  assert.equal(second.prompt.version, 9);
+  assert.equal(second.prompt.verified, false);
+});
+
+test('模型密钥不会被迁移或保存到本地状态', () => {
+  const storage = memoryStorage();
+  const source = {
+    ...createEmptyState(),
+    modelApiKey: 'secret-top',
+    settings: { apiKey: 'secret-nested', model: 'demo' },
+    projects: [{ id: 'p1', idea: 'test', modelKey: 'secret-project' }]
+  };
+
+  const state = saveState(storage, source);
+  const serialized = storage.getItem(STORAGE_KEY);
+
+  assert.equal(serialized.includes('secret-top'), false);
+  assert.equal(serialized.includes('secret-nested'), false);
+  assert.equal(serialized.includes('secret-project'), false);
+  assert.equal(state.settings.model, 'demo');
+});
+
+test('迁移写回失败会返回内存状态和告警，后续保存可重试且告警不持久化', () => {
+  const source = { projects: [{ id: 'p1', idea: '保留内存计划' }] };
+  const storage = {
+    getItem(key) { return key === STORAGE_KEY ? JSON.stringify(source) : null; },
+    setItem() { throw new Error('quota exceeded'); }
+  };
+
+  const loaded = loadState(storage);
+  const state = loaded.state;
+  assert.equal(state.projects[0].goalSummary, '保留内存计划');
+  assert.equal(loaded.warning.code, 'STORAGE_MIGRATION_WRITE_FAILED');
+  assert.match(loaded.warning.message, /quota exceeded/);
+  assert.equal(Object.hasOwn(state, 'warning'), false);
+  assert.equal(JSON.stringify(state).includes('STORAGE_MIGRATION_WRITE_FAILED'), false);
+
+  const retryStorage = memoryStorage();
+  saveState(retryStorage, state);
+  assert.equal(JSON.parse(retryStorage.getItem(STORAGE_KEY)).projects[0].goalSummary, '保留内存计划');
+  assert.throws(() => saveState({ setItem() { throw new Error('quota exceeded'); } }, source), /quota exceeded/);
+});
+
+test('本地存储 getter、getItem 和 JSON 解析异常均抛出可识别错误', () => {
+  assert.throws(
+    () => loadState({ getItem() { throw new Error('read denied'); } }),
+    error => error.name === 'StorageReadError' && error.code === 'STORAGE_READ_FAILED'
+  );
+  assert.throws(
+    () => loadState(memoryStorage({ [STORAGE_KEY]: '{broken json' })),
+    error => error.name === 'StorageReadError' && error.code === 'STORAGE_PARSE_FAILED'
+  );
+
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get() { throw new Error('getter denied'); }
+  });
+  try {
+    assert.throws(
+      () => loadState(),
+      error => error.name === 'StorageReadError' && error.code === 'STORAGE_READ_FAILED'
+    );
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
+    else delete globalThis.localStorage;
+  }
+});
+
+test('应用读取异常后仍可继续使用，但提交计划不会调用保存接口', () => {
+  const listeners = new Map();
+  const elements = new Map();
+  const makeElement = id => ({
+    id,
+    value: id === 'idea' ? '保留原数据' : '',
+    checked: false,
+    classList: { add() {}, remove() {}, toggle() {} },
+    style: {},
+    addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
+    querySelectorAll() { return []; },
+    scrollIntoView() {}
+  });
+  const document = {
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, makeElement(id));
+      return elements.get(id);
+    },
+    querySelectorAll() { return []; }
+  };
+  let saveCalls = 0;
+  const memoryState = createEmptyState();
+  const window = {
+    ForwardStepStorage: {
+      STORAGE_KEY,
+      createEmptyState() { return memoryState; },
+      loadState() { const error = new Error('读取失败'); error.code = 'STORAGE_READ_FAILED'; throw error; },
+      saveState() { saveCalls += 1; throw new Error('不应触发保存'); },
+      addPromptVersion
+    },
+    ForwardStepMethodCards: {
+      domainStages: { '通用计划': ['阶段一', '阶段二', '阶段三', '阶段四'], '其他': ['阶段一', '阶段二', '阶段三', '阶段四'] },
+      domainGuidance: { '通用计划': '' }
+    },
+    scrollTo() {},
+    confirm() { return false; }
+  };
+  const context = {
+    window,
+    document,
+    navigator: { clipboard: { writeText: async () => {} } },
+    crypto: { randomUUID: () => 'new-project' },
+    fetch: async () => ({ json: async () => ({}) }),
+    setTimeout: () => 1,
+    clearTimeout() {},
+    Date,
+    console
+  };
+  Object.defineProperty(context, 'localStorage', { get() { throw new Error('getter must not be reached'); } });
+  vm.runInNewContext(fs.readFileSync(require.resolve('../prototype/app.js'), 'utf8'), context);
+
+  listeners.get('idea-form:submit')({ preventDefault() {} });
+
+  assert.equal(saveCalls, 0);
+  assert.equal(memoryState.projects.length, 1);
+  assert.equal(memoryState.projects[0].idea, '保留原数据');
+});
+
+test('迁移和保存都会剔除未确认案例', () => {
+  const source = {
+    ...createEmptyState(),
+    cases: [
+      { id: 'confirmed', confirmed: true, result: '保留' },
+      { id: 'pending', confirmed: false, result: '剔除' },
+      { id: 'missing-flag', result: '剔除' }
+    ]
+  };
+  const migrated = migrateState(source);
+  const saved = saveState(memoryStorage(), source);
+
+  assert.deepEqual(migrated.cases.map(item => item.id), ['confirmed']);
+  assert.deepEqual(saved.cases.map(item => item.id), ['confirmed']);
+});
+
+test('项目和确认案例中的凭证字段会递归剔除', () => {
+  const storage = memoryStorage();
+  const source = {
+    ...createEmptyState(),
+    projects: [{ id: 'p1', accessToken: 'a', nested: { refresh_token: 'b', authorization: 'c', clientSecret: 'd', apiKey: 'e', modelKey: 'f', password: 'g', credentials: ['h'] } }],
+    cases: [{ id: 'c1', confirmed: true, credentials: { apiKey: 'case-secret', nested: { accessToken: 'case-token' } } }]
+  };
+
+  const saved = saveState(storage, source);
+  const serialized = storage.getItem(STORAGE_KEY);
+  for (const secret of ['"a"', '"b"', '"c"', '"d"', '"e"', '"f"', '"g"', '"h"', 'case-secret', 'case-token']) {
+    assert.equal(serialized.includes(secret), false, `不应持久化 ${secret}`);
+  }
+  assert.equal(saved.projects[0].id, 'p1');
+  assert.equal(saved.cases[0].id, 'c1');
+
+  const confirmed = confirmCase(createEmptyState(), {
+    id: 'c2', result: 'ok', nested: { clientSecret: 'review-secret', refreshToken: 'review-token' }
+  }, true);
+  assert.equal(JSON.stringify(confirmed).includes('review-secret'), false);
+  assert.equal(JSON.stringify(confirmed).includes('review-token'), false);
+});
+
+test('按案例 id 去重重复确认', () => {
+  const once = confirmCase(createEmptyState(), { id: 'same-id', result: '首次' }, true);
+  const twice = confirmCase(once, { id: 'same-id', result: '重复' }, true);
+
+  assert.equal(twice.cases.length, 1);
+  assert.equal(twice.cases[0].result, '首次');
+});
+
+test('确认案例缺少 id 或 id 为空时抛出 TypeError', () => {
+  for (const reviewedCase of [{ result: '缺少 id' }, { id: '', result: '空 id' }, { id: '   ', result: '空白 id' }]) {
+    assert.throws(
+      () => confirmCase(createEmptyState(), reviewedCase, true),
+      error => error instanceof TypeError && /非空 id/.test(error.message)
+    );
+  }
+});
