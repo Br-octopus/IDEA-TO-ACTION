@@ -3,6 +3,11 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.ForwardStepStorage = api;
 })(typeof globalThis === "undefined" ? this : globalThis, function () {
+  const knowledgeSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./knowledge-schema.js")
+    : typeof globalThis === "undefined"
+      ? null
+      : globalThis.ForwardStepKnowledgeSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
@@ -12,7 +17,23 @@
   ];
 
   function createEmptyState() {
-    return { schemaVersion: 2, projects: [], prompts: [], references: [], researchSelection: [], cases: [] };
+    return {
+      schemaVersion: 3,
+      projects: [],
+      prompts: [],
+      references: [],
+      researchSelection: [],
+      knowledgeEntries: [],
+      cases: []
+    };
+  }
+
+  class KnowledgeSchemaUnavailableError extends Error {
+    constructor() {
+      super("知识条目 schema 未加载，无法安全迁移已有知识条目");
+      this.name = "KnowledgeSchemaUnavailableError";
+      this.code = "KNOWLEDGE_SCHEMA_UNAVAILABLE";
+    }
   }
 
   class StorageReadError extends Error {
@@ -129,16 +150,27 @@
     };
   }
 
+  function normalizeKnowledgeEntries(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) return [];
+    if (!knowledgeSchema || typeof knowledgeSchema.normalizeKnowledgeEntry !== "function") {
+      throw new KnowledgeSchemaUnavailableError();
+    }
+    return stripModelKeys(entries)
+      .map(knowledgeSchema.normalizeKnowledgeEntry)
+      .filter(item => item.id);
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const state = {
       ...createEmptyState(),
       ...stripModelKeys(source),
-      schemaVersion: 2,
+      schemaVersion: 3,
       projects: Array.isArray(source.projects) ? stripModelKeys(source.projects).map(withProjectDefaults) : [],
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
       researchSelection: sanitizeResearchSelection(source.researchSelection),
+      knowledgeEntries: normalizeKnowledgeEntries(source.knowledgeEntries),
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)
@@ -164,6 +196,7 @@
     try {
       migrated = migrateState(JSON.parse(raw));
     } catch (error) {
+      if (error && error.code === "KNOWLEDGE_SCHEMA_UNAVAILABLE") throw error;
       throw new StorageReadError("本地数据格式无效，未加载任何数据", error, "STORAGE_PARSE_FAILED");
     }
 

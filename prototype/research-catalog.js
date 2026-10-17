@@ -1,8 +1,12 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(
+    typeof module === "object" && module.exports
+      ? require("./knowledge-schema.js")
+      : root.ForwardStepKnowledgeSchema
+  );
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.ForwardStepResearchCatalog = api;
-})(typeof globalThis === "undefined" ? this : globalThis, function () {
+})(typeof globalThis === "undefined" ? this : globalThis, function (knowledgeSchema) {
   const catalog = [
     { id: "prompts-chat", title: "prompts.chat", url: "https://github.com/f/prompts.chat", sourceType: "GitHub 仓库", licenseNote: "仓库许可和具体内容许可未核对；不复制提示词正文。", domains: ["通用计划", "写作"], stages: ["clarify", "plan"], summary: "社区提示词目录，适合观察任务分类与示例组织方式。", borrowablePatterns: "先按任务筛选，再用目标和验收标准审查示例。", limitations: "社区内容质量不一，受模型、版本和使用情境影响。", updatedAt: "未核对", verification: { status: "unverified", note: "仅收录目录信息，未做真实任务测试" }, kind: "prompt-library" },
     { id: "prompt-engineering-guide", title: "Prompt Engineering Guide", url: "https://github.com/dair-ai/Prompt-Engineering-Guide", sourceType: "GitHub 教程", licenseNote: "仓库许可和具体页面许可未核对。", domains: ["通用计划", "软件开发", "学习目标"], stages: ["research", "plan"], summary: "提示词与上下文工程学习资料，可按问题查找概念和方法。", borrowablePatterns: "只取与当前问题相关的方法，并要求说明适用条件。", limitations: "教程示例不保证适用于当前模型或任务；需要核对原始出处与时效。", updatedAt: "未核对", verification: { status: "unverified", note: "目录收录不代表内容已验证" }, kind: "guide" },
@@ -10,6 +14,30 @@
     { id: "humanizer-zh", title: "Humanizer-zh", url: "https://github.com/op7418/Humanizer-zh", sourceType: "GitHub 写作项目", licenseNote: "项目页面曾标注 MIT，当前版本和具体文件许可未重新核对；本目录只记录方法摘要。", domains: ["写作"], stages: ["research", "review"], summary: "中文写作编辑参考，关注具体表达问题、修改边界和事实保留。", borrowablePatterns: "指出具体句子问题后做最小修改，保留事实和作者语气。", limitations: "风格判断具有主观性；不应把规则机械套用于所有作者和文体。", updatedAt: "未核对", verification: { status: "unverified", note: "收录不代表已独立验证" }, kind: "writing-method" },
     { id: "agency-agents", title: "Agency Agents", url: "https://github.com/msitarzewski/agency-agents", sourceType: "GitHub 仓库", licenseNote: "仓库许可和具体文件许可未核对。", domains: ["软件开发", "工作任务", "通用计划"], stages: ["plan", "review"], summary: "按职能组织的工作说明，可观察任务拆分、交付与交接表达。", borrowablePatterns: "为当前阶段写明任务、预期产出和交接信息。", limitations: "角色说明可能冗长，且示例不等于真实团队流程验证。", updatedAt: "未核对", verification: { status: "unverified", note: "仅作待评估参考" }, kind: "workflow" }
   ];
+
+  function toKnowledgeEntry(reference = {}) {
+    const keywords = [reference.kind, ...(Array.isArray(reference.domains) ? reference.domains : [])]
+      .filter(Boolean);
+    return knowledgeSchema.normalizeKnowledgeEntry({
+      id: reference.id,
+      type: reference.kind === "guide" || reference.sourceType?.includes("文章")
+        ? "article-summary"
+        : "github-summary",
+      title: reference.title,
+      sourceUrl: reference.url,
+      sourceType: reference.sourceType,
+      domains: reference.domains,
+      stages: reference.stages,
+      keywords,
+      summary: reference.summary,
+      reusablePatterns: reference.borrowablePatterns,
+      limitations: reference.limitations,
+      licenseNote: reference.licenseNote,
+      verificationStatus: reference.verification?.status === "verified"
+        ? "source-reviewed"
+        : "unverified"
+    });
+  }
 
   function filterReferences(references = catalog, { domain = "", stage = "" } = {}) {
     return references.filter(item => (!domain || item.domains.includes(domain)) && (!stage || item.stages.includes(stage)));
@@ -43,5 +71,5 @@
     return { completed: false, status: "未完成研究", query: text, instruction: `请手动搜索：${text || "填写你的研究问题"}\n记录结果标题、链接、摘要、日期和局限；核对来源与许可后，再由用户决定是否采用。` };
   }
 
-  return { catalog, filterReferences, limitReferences, selectReferences, buildReferenceContext, appendReferenceContext, createSearchStub };
+  return { catalog, filterReferences, limitReferences, selectReferences, buildReferenceContext, appendReferenceContext, createSearchStub, toKnowledgeEntry };
 });

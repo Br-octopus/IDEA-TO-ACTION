@@ -24,7 +24,7 @@ function memoryStorage(entries = {}) {
   };
 }
 
-test('将 v1 项目和提示词迁移到 v2，补齐字段并保留资料', () => {
+test('将 v1 项目和提示词迁移到 v3，补齐字段并保留资料', () => {
   const oldData = {
     projects: [
       { id: 'p1', idea: '学习摄影', domain: '学习目标', success: '能独立拍出清晰的人像', createdAt: '2026-01-01', custom: '保留的旧字段' },
@@ -37,7 +37,7 @@ test('将 v1 项目和提示词迁移到 v2，补齐字段并保留资料', () =
 
   const { state } = loadState(storage);
 
-  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.schemaVersion, 3);
   assert.equal(state.projects[0].idea, '学习摄影');
   assert.equal(state.projects[0].goalSummary, '学习摄影');
   assert.equal(state.projects[0].methodId, '');
@@ -71,14 +71,16 @@ test('将 v1 项目和提示词迁移到 v2，补齐字段并保留资料', () =
   assert.deepEqual(JSON.parse(storage.getItem(STORAGE_KEY)), state);
 });
 
-test('根路径和嵌套页面路径都能加载三份外部脚本', async t => {
+test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一搜索全局', async t => {
   const server = await startServer({ port: 0 });
   t.after(() => new Promise(resolve => server.close(resolve)));
   const { port } = server.address();
   const paths = [
+    '/prototype/knowledge-schema.js',
     '/prototype/method-cards.js',
-    '/prototype/storage.js',
     '/prototype/research-catalog.js',
+    '/prototype/knowledge-search.js',
+    '/prototype/storage.js',
     '/prototype/app.js'
   ];
 
@@ -86,11 +88,31 @@ test('根路径和嵌套页面路径都能加载三份外部脚本', async t => 
     const pageResponse = await fetch(`http://127.0.0.1:${port}${pagePath}`);
     assert.equal(pageResponse.status, 200, `${pagePath} 应返回 200`);
     const html = await pageResponse.text();
+    const schemaScriptIndex = html.indexOf('src="/prototype/knowledge-schema.js"');
+    const methodCardsScriptIndex = html.indexOf('src="/prototype/method-cards.js"');
+    const researchScriptIndex = html.indexOf('src="/prototype/research-catalog.js"');
+    const knowledgeSearchScriptIndex = html.indexOf('src="/prototype/knowledge-search.js"');
+    const storageScriptIndex = html.indexOf('src="/prototype/storage.js"');
+    const appScriptIndex = html.indexOf('src="/prototype/app.js"');
+    assert.ok(schemaScriptIndex >= 0, `${pagePath} 应先引用 knowledge-schema.js`);
+    assert.ok(schemaScriptIndex < methodCardsScriptIndex, `${pagePath} 中 schema 应在 method-cards.js 前加载`);
+    assert.ok(methodCardsScriptIndex < researchScriptIndex, `${pagePath} 中 method-cards.js 应在 research-catalog.js 前加载`);
+    assert.ok(researchScriptIndex < knowledgeSearchScriptIndex, `${pagePath} 中 research-catalog.js 应在 knowledge-search.js 前加载`);
+    assert.ok(knowledgeSearchScriptIndex < storageScriptIndex, `${pagePath} 中 knowledge-search.js 应在 storage.js 前加载`);
+    assert.ok(storageScriptIndex < appScriptIndex, `${pagePath} 中 storage.js 应在 app.js 前加载`);
     for (const scriptPath of paths) {
       assert.ok(html.includes(`src="${scriptPath}"`), `${pagePath} 应引用 ${scriptPath}`);
       const scriptResponse = await fetch(`http://127.0.0.1:${port}${scriptPath}`);
       assert.equal(scriptResponse.status, 200, `${scriptPath} 应返回 200`);
     }
+
+    const context = {};
+    for (const scriptPath of paths.slice(0, 4)) {
+      const source = fs.readFileSync(require.resolve(`..${scriptPath}`), 'utf8');
+      vm.runInNewContext(source, context, { filename: scriptPath });
+    }
+    assert.equal(typeof context.ForwardStepKnowledgeSearch.collectKnowledgeEntries, 'function');
+    assert.equal(typeof context.ForwardStepMethodCards.methodCardsToKnowledgeEntries, 'function');
   }
 });
 
@@ -98,6 +120,50 @@ test('资料选择迁移去重并限制为最多三条', () => {
   const state = migrateState({ researchSelection: [catalog[0].id, 'stale-reference', catalog[1].id, catalog[0].id, catalog[2].id, catalog[3].id] });
   assert.deepEqual(state.researchSelection, [catalog[0].id, catalog[1].id, catalog[2].id]);
   assert.deepEqual(migrateState({}).researchSelection, []);
+});
+
+test('旧版状态迁移后拥有知识条目集合', () => {
+  const state = migrateState({ schemaVersion: 2, projects: [], prompts: [], cases: [] });
+  assert.equal(state.schemaVersion, 3);
+  assert.deepEqual(state.knowledgeEntries, []);
+});
+
+test('知识条目不会保留模型凭证字段', () => {
+  const state = migrateState({
+    knowledgeEntries: [{ id: 'x', title: '资料', apiKey: 'secret', token: 'secret' }]
+  });
+  assert.equal(state.knowledgeEntries[0].apiKey, undefined);
+  assert.equal(state.knowledgeEntries[0].token, undefined);
+});
+
+test('知识条目迁移只保留有效 id', () => {
+  const state = migrateState({
+    knowledgeEntries: [
+      { id: ' valid-entry ', title: '有效条目' },
+      { id: '   ', title: '空 id 条目' },
+      { title: '缺失 id 条目' }
+    ]
+  });
+
+  assert.deepEqual(state.knowledgeEntries.map(entry => entry.id), ['valid-entry']);
+});
+
+test('浏览器 VM 缺少知识 schema 时拒绝迁移并且不写回原数据', () => {
+  const context = { console };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../prototype/storage.js'), 'utf8'), context);
+  const raw = JSON.stringify({ knowledgeEntries: [{ id: 'keep-me', title: '保留条目' }] });
+  let writeCalls = 0;
+  const storage = {
+    getItem() { return raw; },
+    setItem() { writeCalls += 1; }
+  };
+
+  assert.throws(
+    () => context.ForwardStepStorage.loadState(storage),
+    error => error.name === 'KnowledgeSchemaUnavailableError'
+      && error.code === 'KNOWLEDGE_SCHEMA_UNAVAILABLE'
+  );
+  assert.equal(writeCalls, 0);
 });
 
 test('普通提示词和未确认复盘不会自动写入已验证案例', () => {
