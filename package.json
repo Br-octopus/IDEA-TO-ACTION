@@ -1,0 +1,39 @@
+{
+  "name": "forward-step",
+  "version": "0.1.0",
+  "private": true,
+  "description": "向前一步：想法推进与提示词助手",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server.js",
+    "desktop": "electron .",
+    "test": "node --test",
+    "check": "node --check server.js && node --check electron/main.js && node --check electron/preload.js",
+    "dist:win": "electron-builder --win nsis portable"
+  },
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.forwardstep.desktop",
+    "productName": "向前一步",
+    "files": [
+      "electron/**/*",
+      "prototype/**/*",
+      "server.js",
+      "package.json"
+    ],
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
+    }
+  }
+}
