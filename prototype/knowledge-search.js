@@ -197,7 +197,9 @@
   function searchKnowledge(entries = [], query, options = {}) {
     const terms = tokenize(query);
     const numericLimit = Number(options.limit);
-    const limit = Math.min(20, Math.max(1, Number.isFinite(numericLimit) && numericLimit > 0 ? numericLimit : 10));
+    const limit = Number.isNaN(numericLimit)
+      ? 10
+      : Math.min(20, Math.max(1, numericLimit));
     const filtered = (Array.isArray(entries) ? entries : []).filter(item => matchesFilters(item, options));
     const scored = filtered.map(item => scoreEntry(item, terms));
     const sorted = terms.length

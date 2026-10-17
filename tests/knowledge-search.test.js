@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const {
   collectKnowledgeEntries,
   searchKnowledge,
@@ -7,6 +9,22 @@ const {
 } = require('../prototype/knowledge-search.js');
 const { toKnowledgeEntry } = require('../prototype/research-catalog.js');
 const { methodCardsToKnowledgeEntries } = require('../prototype/method-cards.js');
+
+function loadBrowserKnowledgeSearch(segmenter) {
+  const intl = Object.create(Intl);
+  if (arguments.length > 0) intl.Segmenter = segmenter;
+  const context = { Intl: intl };
+  for (const file of [
+    'knowledge-schema.js',
+    'method-cards.js',
+    'research-catalog.js',
+    'knowledge-search.js'
+  ]) {
+    const filename = require.resolve(`../prototype/${file}`);
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+  }
+  return context;
+}
 
 test('统一索引包含公开资料、提示词、方法卡和已确认案例', () => {
   const entries = collectKnowledgeEntries({
@@ -231,6 +249,80 @@ test('搜索可以按领域、阶段和类型过滤', () => {
   assert.deepEqual(result.map(item => item.id), ['software']);
 });
 
+test('空查询保留全部资料且无结果查询返回空列表', () => {
+  const emptyQueryResult = searchKnowledge(searchableEntries, '   ');
+  assert.equal(emptyQueryResult.length, searchableEntries.length);
+  assert.ok(emptyQueryResult.every(item => item.score === 0));
+  assert.deepEqual(searchKnowledge(searchableEntries, 'qzxv-unique-token-8271'), []);
+});
+
+test('搜索可以按验证状态筛选', () => {
+  const entries = [
+    { id: 'confirmed', title: '搜索目标', summary: '搜索目标', verificationStatus: 'user-confirmed' },
+    { id: 'unverified', title: '搜索目标', summary: '搜索目标', verificationStatus: 'unverified' }
+  ];
+
+  const result = searchKnowledge(entries, '搜索目标', { verificationStatus: 'unverified' });
+  assert.deepEqual(result.map(item => item.id), ['unverified']);
+});
+
+test('相同分数且标题相同的结果保持输入顺序', () => {
+  const entries = [
+    { id: 'first', title: '同名资料', summary: '共同查询词' },
+    { id: 'second', title: '同名资料', summary: '共同查询词' }
+  ];
+
+  const result = searchKnowledge(entries, '共同查询词');
+  assert.equal(result[0].score, result[1].score);
+  assert.deepEqual(result.map(item => item.id), ['first', 'second']);
+});
+
+test('搜索限制将 NaN 和未提供值设为 10，并将数值夹在 1 到 20', () => {
+  const entries = Array.from({ length: 25 }, (_, index) => ({
+    id: `entry-${index}`,
+    title: `搜索资料 ${index}`,
+    summary: '目标查询词'
+  }));
+
+  assert.equal(searchKnowledge(entries, '目标查询词').length, 10);
+  assert.equal(searchKnowledge(entries, '目标查询词', { limit: Number.NaN }).length, 10);
+  assert.equal(searchKnowledge(entries, '目标查询词', { limit: -1 }).length, 1);
+  assert.equal(searchKnowledge(entries, '目标查询词', { limit: 0 }).length, 1);
+  assert.equal(searchKnowledge(entries, '目标查询词', { limit: 21 }).length, 20);
+});
+
+test('浏览器 UMD 入口使用依赖脚本导出统一搜索全局', () => {
+  const context = loadBrowserKnowledgeSearch();
+  const api = context.ForwardStepKnowledgeSearch;
+
+  assert.equal(typeof api.collectKnowledgeEntries, 'function');
+  assert.equal(typeof api.searchKnowledge, 'function');
+  assert.equal(typeof api.buildKnowledgeContext, 'function');
+  assert.equal(api.searchKnowledge(searchableEntries, '句式')[0].id, 'writing');
+});
+
+test('缺少 Intl.Segmenter 时中文正则回退仍能命中', () => {
+  const context = loadBrowserKnowledgeSearch(undefined);
+  const result = context.ForwardStepKnowledgeSearch.searchKnowledge(
+    [{ id: 'chinese', title: '中文搜索词', summary: '适合中文检索' }],
+    '中文 搜索'
+  );
+
+  assert.deepEqual(Array.from(result, item => item.id), ['chinese']);
+});
+
+test('Intl.Segmenter 构造失败时中文正则回退仍能命中', () => {
+  const context = loadBrowserKnowledgeSearch(function Segmenter() {
+    throw new Error('当前运行环境不支持 Segmenter 配置');
+  });
+  const result = context.ForwardStepKnowledgeSearch.searchKnowledge(
+    [{ id: 'chinese', title: '中文搜索词', summary: '适合中文检索' }],
+    '中文 搜索'
+  );
+
+  assert.deepEqual(Array.from(result, item => item.id), ['chinese']);
+});
+
 test('模型上下文只包含摘要、方法和来源，不包含完整原文', () => {
   const context = buildKnowledgeContext([{
     id: 'x', title: '案例', sourceUrl: 'https://example.com', summary: '短摘要',
@@ -245,4 +337,38 @@ test('模型上下文只包含摘要、方法和来源，不包含完整原文',
   assert.match(context, /https:\/\/example.com/);
   assert.equal(context.includes('不应默认发送的长原文'), false);
   assert.equal(context.includes('原稿'), false);
+});
+
+test('模型上下文最多包含五条且不会越过长度限制或带入原文字段', () => {
+  const entries = Array.from({ length: 6 }, (_, index) => ({
+    id: `context-${index + 1}`,
+    title: index === 4 ? '超限资料' : `上下文资料-${index + 1}`,
+    summary: index === 4 ? '超长摘要'.repeat(2000) : `摘要-${index + 1}`,
+    reusablePatterns: index === 4 ? '超长方法'.repeat(2000) : `方法-${index + 1}`,
+    verificationStatus: 'unverified',
+    limitations: `边界-${index + 1}`,
+    sourceType: '本地资料',
+    contentExcerpt: `全文标记-${index + 1}`,
+    before: `前文标记-${index + 1}`,
+    after: `后文标记-${index + 1}`
+  }));
+  const fiveEntryContext = buildKnowledgeContext(entries.map((entry, index) => ({
+    ...entry,
+    title: `上下文资料-${index + 1}`,
+    summary: `摘要-${index + 1}`,
+    reusablePatterns: `方法-${index + 1}`
+  })), { maxChars: 5000 });
+  const boundedContext = buildKnowledgeContext(entries, { maxChars: 900 });
+  const includedTitles = fiveEntryContext.match(/上下文资料-\d/g) || [];
+
+  assert.equal(includedTitles.length, 5);
+  assert.equal(fiveEntryContext.includes('上下文资料-6'), false);
+  assert.ok(boundedContext.length <= 900);
+  assert.equal(boundedContext.includes('超限资料'), false);
+  assert.equal(boundedContext.includes('上下文资料-6'), false);
+  for (let index = 1; index <= 6; index += 1) {
+    assert.equal(boundedContext.includes(`全文标记-${index}`), false);
+    assert.equal(boundedContext.includes(`前文标记-${index}`), false);
+    assert.equal(boundedContext.includes(`后文标记-${index}`), false);
+  }
 });
