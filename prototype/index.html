@@ -158,6 +158,9 @@
     .send-panel { width: min(780px, 100%); max-height: min(760px, 92vh); overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 22px 70px rgba(24,43,44,.2); padding: 22px; }
     .send-panel textarea { min-height: 260px; width: 100%; resize: vertical; }
     .send-reference { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.5; }
+    .send-reference strong { display: inline-block; color: var(--ink); margin-right: 7px; }
+    .send-reference p { margin: 4px 0 0; color: var(--muted); }
+    .send-reference-type { color: var(--green); font-size: 11px; }
     .send-reference button { border: 0; background: transparent; color: var(--orange); cursor: pointer; white-space: nowrap; }
     .settings-note { padding: 11px 13px; background: var(--green-soft); border-radius: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .reply-area { min-height: 115px; font-size: 12px; padding: 12px; }
@@ -630,7 +633,7 @@
       <div class="block-top"><div><div class="step-tag">发送前确认</div><h2 id="send-preview-title">检查实际发送内容</h2></div><div class="library-meta">目标模型：<strong id="send-preview-model">未配置模型</strong></div></div>
       <p class="block-desc">可以直接编辑文本，也可以删除某条资料摘要。确认发送后只会让模型诊断、建议或生成提示词，不会执行现实任务。</p>
       <div class="field"><label class="field-label" for="send-preview-text">实际发送文本</label><textarea id="send-preview-text"></textarea></div>
-      <div class="field"><div class="field-label">已选资料摘要</div><div id="send-preview-references"></div></div>
+      <div class="field"><div class="field-label">已选资料摘要 <span class="library-meta" id="send-preview-reference-chars">资料上下文：0 字符</span></div><div id="send-preview-references"></div></div>
       <div class="prompt-bottom"><small>未配置模型时只提供复制按钮；模型请求超时或失败会保留当前草稿。</small><div class="button-row"><button class="button-secondary" id="send-preview-cancel" type="button">取消</button><button class="button-secondary" id="send-preview-copy" type="button">仅复制文本</button><button class="button-primary" id="send-preview-confirm" type="button">确认发送</button></div></div>
     </section>
   </div>

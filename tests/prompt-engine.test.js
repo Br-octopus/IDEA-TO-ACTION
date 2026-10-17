@@ -6,7 +6,9 @@ const {
   buildFollowupPrompt,
   buildArticleDiagnosticPrompt,
   buildPromptOptimizationPrompt,
-  buildCaseReviewPrompt
+  buildCaseReviewPrompt,
+  appendKnowledgeContext,
+  appendReferenceContext
 } = require('../prototype/prompt-engine.js');
 const { getMethodCard } = require('../prototype/method-cards.js');
 
@@ -23,6 +25,40 @@ const project = {
   nextAction: '先做一次光线练习',
   webSearch: true
 };
+
+test('提示词只追加用户选中的资料摘要，不发送原文摘录', () => {
+  const prompt = appendKnowledgeContext('基础指令', [{
+    id: 'x',
+    title: '参考案例',
+    type: 'article-summary',
+    summary: '保留观点',
+    reusablePatterns: '先做前后对照',
+    sourceUrl: 'https://example.com',
+    contentExcerpt: '完整原文不应进入上下文'
+  }]);
+
+  assert.match(prompt, /保留观点/);
+  assert.match(prompt, /先做前后对照/);
+  assert.match(prompt, /https:\/\/example\.com/);
+  assert.match(prompt, /不可信引用|待分析参考/);
+  assert.equal(prompt.includes('完整原文不应进入上下文'), false);
+});
+
+test('旧资料上下文也复用统一实现，并避免重复追加', () => {
+  const first = appendReferenceContext('基础指令', [{
+    id: 'legacy',
+    title: '旧资料',
+    summary: '旧摘要',
+    borrowablePatterns: '旧方法',
+    url: 'https://example.com/legacy'
+  }]);
+  const repeated = appendKnowledgeContext(first, [{ id: 'new', title: '新资料', summary: '不应追加' }]);
+
+  assert.match(first, /【用户选择的本地资料摘要】/);
+  assert.match(first, /旧摘要/);
+  assert.equal((repeated.match(/【用户选择的本地资料摘要】/g) || []).length, 1);
+  assert.equal(repeated.includes('不应追加'), false);
+});
 
 test('目标提示词检查遗漏、矛盾、错误、不必要项和成功标准，并限制追问数量', () => {
   const prompt = buildGoalPrompt(project);

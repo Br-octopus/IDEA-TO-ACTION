@@ -119,7 +119,30 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
 test('资料选择迁移去重并限制为最多三条', () => {
   const state = migrateState({ researchSelection: [catalog[0].id, 'stale-reference', catalog[1].id, catalog[0].id, catalog[2].id, catalog[3].id] });
   assert.deepEqual(state.researchSelection, [catalog[0].id, catalog[1].id, catalog[2].id]);
+  assert.deepEqual(state.knowledgeSelection, [catalog[0].id, catalog[1].id, catalog[2].id]);
   assert.deepEqual(migrateState({}).researchSelection, []);
+});
+
+test('知识选择只保留索引中的有效 id、去重并最多保存五条', () => {
+  const state = migrateState({
+    knowledgeEntries: [{ id: 'manual-1', title: '手动资料', summary: '摘要' }],
+    knowledgeSelection: [
+      'manual-1',
+      catalog[0].id,
+      'method-写作',
+      catalog[1].id,
+      catalog[2].id,
+      catalog[3].id,
+      'missing-entry',
+      catalog[0].id
+    ]
+  });
+
+  assert.deepEqual(state.knowledgeSelection, [
+    'manual-1', catalog[0].id, 'method-写作', catalog[1].id, catalog[2].id
+  ]);
+  assert.equal(state.knowledgeSelection.includes('missing-entry'), false);
+  assert.equal(state.knowledgeSelection.length, 5);
 });
 
 test('旧版状态迁移后拥有知识条目集合', () => {

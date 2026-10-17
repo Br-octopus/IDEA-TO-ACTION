@@ -23,6 +23,7 @@
       prompts: [],
       references: [],
       researchSelection: [],
+      knowledgeSelection: [],
       knowledgeEntries: [],
       cases: []
     };
@@ -116,6 +117,32 @@
       .slice(0, 3);
   }
 
+  function getKnowledgeSelectionIds(knowledgeEntries) {
+    const ids = new Set((knowledgeEntries || []).map(item => item.id));
+    getReferenceCatalog().forEach(item => ids.add(item.id));
+
+    try {
+      const methodCards = typeof module === "object" && module.exports && typeof require === "function"
+        ? require("./method-cards.js")
+        : typeof globalThis === "undefined"
+          ? null
+          : globalThis.ForwardStepMethodCards;
+      if (methodCards && typeof methodCards.methodCardsToKnowledgeEntries === "function") {
+        methodCards.methodCardsToKnowledgeEntries().forEach(item => ids.add(item.id));
+      }
+    } catch {
+      // 方法卡不可用时仍保留可确认的公开资料和本地条目选择。
+    }
+    return ids;
+  }
+
+  function sanitizeKnowledgeSelection(selection, knowledgeEntries) {
+    const knownIds = getKnowledgeSelectionIds(knowledgeEntries);
+    return [...new Set(Array.isArray(selection) ? selection : [])]
+      .filter(id => typeof id === "string" && knownIds.has(id))
+      .slice(0, 5);
+  }
+
   function listValue(value) {
     if (Array.isArray(value)) return value.filter(item => item !== null && item !== undefined && String(item).trim());
     if (typeof value === "string") return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
@@ -162,6 +189,8 @@
 
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
+    const knowledgeEntries = normalizeKnowledgeEntries(source.knowledgeEntries);
+    const researchSelection = sanitizeResearchSelection(source.researchSelection);
     const state = {
       ...createEmptyState(),
       ...stripModelKeys(source),
@@ -169,8 +198,12 @@
       projects: Array.isArray(source.projects) ? stripModelKeys(source.projects).map(withProjectDefaults) : [],
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
-      researchSelection: sanitizeResearchSelection(source.researchSelection),
-      knowledgeEntries: normalizeKnowledgeEntries(source.knowledgeEntries),
+      researchSelection,
+      knowledgeSelection: sanitizeKnowledgeSelection(
+        [...(Array.isArray(source.knowledgeSelection) ? source.knowledgeSelection : []), ...researchSelection],
+        knowledgeEntries
+      ),
+      knowledgeEntries,
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)
