@@ -17,6 +17,7 @@ const { createEmptyState, confirmCase } = require('../prototype/storage');
 
 const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
+const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
 
 test('资料库包含搜索、类型筛选和新增资料入口', () => {
   for (const id of [
@@ -26,9 +27,23 @@ test('资料库包含搜索、类型筛选和新增资料入口', () => {
     'knowledge-stage',
     'knowledge-verification',
     'knowledge-search',
+    'knowledge-search-status',
     'knowledge-entry-form',
+    'open-knowledge-entry',
+    'knowledge-entry-type',
+    'knowledge-entry-title',
+    'knowledge-entry-url',
+    'knowledge-entry-domains',
+    'knowledge-entry-stages',
+    'knowledge-entry-keywords',
+    'knowledge-entry-summary',
+    'knowledge-entry-patterns',
+    'knowledge-entry-limitations',
+    'knowledge-entry-license',
+    'cancel-knowledge-entry',
     'knowledge-results',
-    'knowledge-detail'
+    'knowledge-detail',
+    'close-knowledge-detail'
   ]) {
     assert.match(html, new RegExp("id=[\\\"']" + id + "[\\\"']"));
   }
@@ -36,6 +51,21 @@ test('资料库包含搜索、类型筛选和新增资料入口', () => {
   assert.match(html, /搜索本地资料/);
   assert.match(html, /公开资料入口/);
   assert.match(html, /只保存摘要、可借鉴方法和必要摘录/);
+
+  for (const functionName of [
+    'renderKnowledgeResults',
+    'getKnowledgeFilters',
+    'saveKnowledgeEntry',
+    'selectKnowledgeEntry',
+    'refreshKnowledgeView'
+  ]) {
+    assert.match(app, new RegExp(`function ${functionName}\\(`));
+  }
+  assert.match(app, /getElementById\("knowledge-search"\)\.addEventListener\("click", refreshKnowledgeView\)/);
+  assert.match(app, /getElementById\("open-knowledge-entry"\)\.addEventListener\("click"/);
+  assert.match(app, /getElementById\("cancel-knowledge-entry"\)\.addEventListener\("click"/);
+  assert.match(app, /getElementById\("knowledge-entry-form"\)\.addEventListener\("submit", saveKnowledgeEntry\)/);
+  assert.match(app, /getElementById\("close-knowledge-detail"\)\.addEventListener\("click"/);
 });
 
 test('MVP 主流程可在静态边界串联，不等同于真实 Electron UI 验收', () => {
