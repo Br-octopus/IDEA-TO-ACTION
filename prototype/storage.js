@@ -7,7 +7,7 @@
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
 
   function createEmptyState() {
-    return { schemaVersion: 2, projects: [], prompts: [], references: [], cases: [] };
+    return { schemaVersion: 2, projects: [], prompts: [], references: [], researchSelection: [], cases: [] };
   }
 
   class StorageReadError extends Error {
@@ -74,6 +74,22 @@
     };
   }
 
+  function getReferenceCatalog() {
+    if (typeof module === "object" && module.exports && typeof require === "function") {
+      return require("./research-catalog.js").catalog;
+    }
+    return typeof globalThis === "undefined"
+      ? []
+      : globalThis.ForwardStepResearchCatalog?.catalog || [];
+  }
+
+  function sanitizeResearchSelection(selection) {
+    const knownIds = new Set(getReferenceCatalog().map(item => item.id));
+    return [...new Set(Array.isArray(selection) ? selection : [])]
+      .filter(id => typeof id === "string" && knownIds.has(id))
+      .slice(0, 3);
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const state = {
@@ -83,6 +99,7 @@
       projects: Array.isArray(source.projects) ? stripModelKeys(source.projects).map(withProjectDefaults) : [],
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
+      researchSelection: sanitizeResearchSelection(source.researchSelection),
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases).filter(item => item && item.confirmed === true)
         : []

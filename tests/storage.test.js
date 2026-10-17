@@ -13,6 +13,7 @@ const {
   addPromptVersion,
   confirmCase
 } = require('../prototype/storage.js');
+const { catalog } = require('../prototype/research-catalog.js');
 
 function memoryStorage(entries = {}) {
   const values = new Map(Object.entries(entries));
@@ -77,6 +78,7 @@ test('根路径和嵌套页面路径都能加载三份外部脚本', async t => 
   const paths = [
     '/prototype/method-cards.js',
     '/prototype/storage.js',
+    '/prototype/research-catalog.js',
     '/prototype/app.js'
   ];
 
@@ -90,6 +92,12 @@ test('根路径和嵌套页面路径都能加载三份外部脚本', async t => 
       assert.equal(scriptResponse.status, 200, `${scriptPath} 应返回 200`);
     }
   }
+});
+
+test('资料选择迁移去重并限制为最多三条', () => {
+  const state = migrateState({ researchSelection: [catalog[0].id, 'stale-reference', catalog[1].id, catalog[0].id, catalog[2].id, catalog[3].id] });
+  assert.deepEqual(state.researchSelection, [catalog[0].id, catalog[1].id, catalog[2].id]);
+  assert.deepEqual(migrateState({}).researchSelection, []);
 });
 
 test('普通提示词和未确认复盘不会自动写入已验证案例', () => {
@@ -211,6 +219,7 @@ test('应用读取异常后仍可继续使用，但提交计划不会调用保�
   const memoryState = createEmptyState();
   const window = {
     ForwardStepPromptEngine: require('../prototype/prompt-engine.js'),
+    ForwardStepResearchCatalog: require('../prototype/research-catalog.js'),
     ForwardStepStorage: {
       STORAGE_KEY,
       createEmptyState() { return memoryState; },

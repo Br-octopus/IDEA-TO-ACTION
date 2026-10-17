@@ -445,6 +445,21 @@
 
         <section class="view" id="view-references">
           <div class="eyebrow">开源项目调研</div><h1>值得借鉴的 GitHub 项目</h1><p class="lede">参考提示词样例、优化器和 Agent 工作流，把“想法—澄清—计划—执行—验证”连成一条路径。这里只借鉴可追溯的做法，不把热门等同于有效。</p>
+          <div class="notice" style="max-width:900px"><span><strong>未完成研究：</strong>当前没有实时搜索 API。目录是待评估资料，不代表已经检索、核验或验证；工具不会抓取整库，也不会直接执行任务。</span></div>
+          <div class="content-block" style="max-width:900px;margin-top:14px">
+            <h2>按任务筛选资料</h2>
+            <div class="extra-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px">
+              <div class="field"><label class="field-label" for="reference-domain">领域</label><select id="reference-domain"><option value="">全部领域</option><option>通用计划</option><option>写作</option><option>软件开发</option><option>工作任务</option><option>学习目标</option></select></div>
+              <div class="field"><label class="field-label" for="reference-stage">阶段</label><select id="reference-stage"><option value="">全部阶段</option><option value="clarify">澄清目标</option><option value="research">研究查证</option><option value="plan">制定计划</option><option value="review">复核评估</option></select></div>
+            </div>
+            <p class="library-meta" id="reference-selection-count">已选 0/3；仅所选摘要会进入模型上下文</p>
+            <div class="reference-grid" id="reference-catalog"></div>
+          </div>
+          <div class="content-block" style="max-width:900px;margin-top:14px">
+            <h2>手动搜索</h2><p class="block-desc">搜索需在外部完成。复制指令后自行检索并判断结果；搜索结果不会自动进入模型请求。</p>
+            <div class="field"><label class="field-label" for="reference-query">研究问题</label><input id="reference-query" type="text" placeholder="例如：适合初学者的用户访谈分析方法"></div>
+            <button class="button-secondary" id="copy-search-instruction" type="button">复制搜索指令</button>
+          </div>
           <div class="section-heading" style="margin-top:0"><div><h2>提示词样例与写法教程</h2><p>可检索、学习和比较；用之前仍要结合自己的目标验证</p></div></div>
           <div class="reference-grid">
             <article class="reference"><h3>prompts.chat</h3><p>社区提示词库，可按使用场景发现示例。</p><div class="borrow">借鉴：按任务找例子，并把来源、适用场景和测试结果一起保存。</div><a href="https://github.com/f/prompts.chat" target="_blank" rel="noreferrer">查看 GitHub ↗</a></article>
@@ -491,6 +506,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/prototype/method-cards.js"></script>
   <script src="/prototype/storage.js"></script>
+  <script src="/prototype/research-catalog.js"></script>
   <script src="/prototype/prompt-engine.js"></script>
   <script src="/prototype/app.js"></script>
 </body>
