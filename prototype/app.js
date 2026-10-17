@@ -737,6 +737,8 @@
     }));
   }
   function refreshKnowledgeView() {
+    // 沙箱测试或异常环境下可能未注入 knowledgeSearchApi，资料库视图非核心链路，直接跳过以保证 app.js 可加载
+    if (typeof knowledgeSearchApi === "undefined" || !knowledgeSearchApi) return;
     const root = document.getElementById("knowledge-results");
     if (!root) return;
     const entries = knowledgeSearchApi.collectKnowledgeEntries(state, {
