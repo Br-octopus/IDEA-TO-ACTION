@@ -112,8 +112,9 @@
   }
 
   function toKnowledgeEntry(card = {}, id = card.id) {
+    const sourceId = String(id || "").trim();
     return normalizeKnowledgeEntry({
-      id,
+      id: sourceId ? (sourceId.startsWith("method-") ? sourceId : `method-${sourceId}`) : "",
       type: "method-card",
       title: card.title || card.name || id,
       domains: card.domains || card.domain,

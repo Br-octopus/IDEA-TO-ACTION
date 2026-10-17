@@ -13,6 +13,12 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.ForwardStepKnowledgeSearch = api;
 })(typeof globalThis === "undefined" ? this : globalThis, function (knowledgeSchema, researchCatalog, methodCardsApi) {
+  function prefixId(prefix, id) {
+    const sourceId = String(id || "").trim();
+    if (!sourceId) return "";
+    return sourceId.startsWith(prefix) ? sourceId : `${prefix}${sourceId}`;
+  }
+
   function fromReference(reference = {}) {
     return researchCatalog.toKnowledgeEntry(reference);
   }
@@ -22,7 +28,7 @@
       return methodCardsApi.methodCardsToKnowledgeEntries([card])[0];
     }
     return knowledgeSchema.normalizeKnowledgeEntry({
-      id: card.id,
+      id: prefixId("method-", card.id),
       type: "method-card",
       title: card.title || card.name,
       domains: card.domains || card.domain,
@@ -37,7 +43,7 @@
 
   function fromPrompt(prompt = {}) {
     return knowledgeSchema.normalizeKnowledgeEntry({
-      id: prompt.id,
+      id: prefixId("prompt-", prompt.id),
       type: "user-prompt",
       title: prompt.title,
       domains: prompt.domains || prompt.domain,
@@ -56,7 +62,7 @@
       ? "success-case"
       : reviewedCase.status === "失败" ? "failure-case" : "review-insight";
     return knowledgeSchema.normalizeKnowledgeEntry({
-      id: reviewedCase.id,
+      id: prefixId("case-", reviewedCase.id),
       type,
       title: `${reviewedCase.taskType || "任务"}复盘`,
       domains: reviewedCase.domain,
@@ -73,20 +79,28 @@
 
   function collectKnowledgeEntries(state = {}, { references = [], methodCards = [] } = {}) {
     const entries = [
-      ...references.map(fromReference),
-      ...methodCards.map(fromMethodCard),
+      ...references.map(reference => ({ source: "reference", entry: fromReference(reference) })),
+      ...methodCards.map(card => ({ source: "method-card", entry: fromMethodCard(card) })),
       ...(Array.isArray(state.knowledgeEntries)
-        ? state.knowledgeEntries.map(entry => knowledgeSchema.normalizeKnowledgeEntry(entry))
+        ? state.knowledgeEntries.map(entry => ({
+          source: "knowledge-entry",
+          entry: knowledgeSchema.normalizeKnowledgeEntry(entry)
+        }))
         : []),
-      ...(Array.isArray(state.prompts) ? state.prompts.map(fromPrompt) : []),
+      ...(Array.isArray(state.prompts)
+        ? state.prompts.map(prompt => ({ source: "prompt", entry: fromPrompt(prompt) }))
+        : []),
       ...(Array.isArray(state.cases)
-        ? state.cases.filter(item => item && item.confirmed === true).map(fromCase)
+        ? state.cases
+          .filter(item => item && item.confirmed === true)
+          .map(reviewedCase => ({ source: "case", entry: fromCase(reviewedCase) }))
         : [])
-    ].filter(item => item.id);
+    ].filter(item => item.entry.id);
 
     const byId = new Map();
     for (const item of entries) {
-      if (!byId.has(item.id)) byId.set(item.id, item);
+      const key = `${item.source}:${item.entry.id}`;
+      if (!byId.has(key)) byId.set(key, item.entry);
     }
     return [...byId.values()];
   }
