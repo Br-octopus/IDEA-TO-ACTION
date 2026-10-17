@@ -84,8 +84,7 @@
   }
 
   function getEntryKey(source, entry) {
-    const namespace = source === "reference" ? `${source}:${entry.type}` : source;
-    return [namespace, entry.id, getEntryOrigin(source, entry)].join("\u001f");
+    return [source, entry.id, getEntryOrigin(source, entry)].join("\u001f");
   }
 
   function collectKnowledgeEntries(state = {}, { references = [], methodCards = [] } = {}) {

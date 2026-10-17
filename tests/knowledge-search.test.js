@@ -56,6 +56,30 @@ test('不同 URL 的公开资料同 id 共存，相同 URL 仍去重', () => {
   ]);
 });
 
+test('同一 URL 即使资料类型不同也只保留一个条目', () => {
+  const entries = collectKnowledgeEntries({}, {
+    references: [
+      {
+        id: 'same',
+        title: 'GitHub 资料',
+        kind: 'prompt-library',
+        sourceType: 'GitHub 仓库',
+        url: 'https://example.com/same'
+      },
+      {
+        id: 'same',
+        title: '文章资料',
+        kind: 'guide',
+        sourceType: '文章',
+        url: 'https://example.com/same'
+      }
+    ]
+  });
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].sourceUrl, 'https://example.com/same');
+});
+
 test('不同来源使用同名 id 时各自保留，同一来源仍然去重', () => {
   const entries = collectKnowledgeEntries({
     prompts: [
