@@ -131,6 +131,24 @@ test('知识条目迁移只保留有效 id', () => {
   assert.deepEqual(state.knowledgeEntries.map(entry => entry.id), ['valid-entry']);
 });
 
+test('浏览器 VM 缺少知识 schema 时拒绝迁移并且不写回原数据', () => {
+  const context = { console };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../prototype/storage.js'), 'utf8'), context);
+  const raw = JSON.stringify({ knowledgeEntries: [{ id: 'keep-me', title: '保留条目' }] });
+  let writeCalls = 0;
+  const storage = {
+    getItem() { return raw; },
+    setItem() { writeCalls += 1; }
+  };
+
+  assert.throws(
+    () => context.ForwardStepStorage.loadState(storage),
+    error => error.name === 'KnowledgeSchemaUnavailableError'
+      && error.code === 'KNOWLEDGE_SCHEMA_UNAVAILABLE'
+  );
+  assert.equal(writeCalls, 0);
+});
+
 test('普通提示词和未确认复盘不会自动写入已验证案例', () => {
   const initial = createEmptyState();
   const withPrompt = addPromptVersion(initial, { id: 't1', text: '普通提示词' }).state;

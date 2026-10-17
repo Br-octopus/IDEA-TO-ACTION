@@ -26,6 +26,15 @@
     return String(value || "").split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
   }
 
+  function normalizeUserRating(value) {
+    if (value === null || value === undefined || typeof value === "boolean") return null;
+    if (typeof value === "string" && !value.trim()) return null;
+    if (typeof value !== "number" && typeof value !== "string") return null;
+    const rating = Number(value);
+    if (!Number.isFinite(rating)) return null;
+    return Math.min(5, Math.max(1, rating));
+  }
+
   function normalizeKnowledgeEntry(input = {}) {
     const source = input && typeof input === "object" ? input : {};
     const type = Object.values(KNOWLEDGE_TYPES).includes(source.type)
@@ -49,7 +58,7 @@
       limitations: String(source.limitations || "").trim(),
       licenseNote: String(source.licenseNote || "").trim(),
       verificationStatus,
-      userRating: Number.isFinite(Number(source.userRating)) ? Number(source.userRating) : null,
+      userRating: normalizeUserRating(source.userRating),
       applicableCases: listValue(source.applicableCases),
       contentExcerpt: String(source.contentExcerpt || "").trim(),
       linkedProjectId: String(source.linkedProjectId || "").trim(),

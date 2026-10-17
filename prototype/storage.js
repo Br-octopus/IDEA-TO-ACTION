@@ -28,6 +28,14 @@
     };
   }
 
+  class KnowledgeSchemaUnavailableError extends Error {
+    constructor() {
+      super("知识条目 schema 未加载，无法安全迁移已有知识条目");
+      this.name = "KnowledgeSchemaUnavailableError";
+      this.code = "KNOWLEDGE_SCHEMA_UNAVAILABLE";
+    }
+  }
+
   class StorageReadError extends Error {
     constructor(message, cause, code = "STORAGE_READ_FAILED") {
       super(message, { cause });
@@ -142,6 +150,16 @@
     };
   }
 
+  function normalizeKnowledgeEntries(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) return [];
+    if (!knowledgeSchema || typeof knowledgeSchema.normalizeKnowledgeEntry !== "function") {
+      throw new KnowledgeSchemaUnavailableError();
+    }
+    return stripModelKeys(entries)
+      .map(knowledgeSchema.normalizeKnowledgeEntry)
+      .filter(item => item.id);
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const state = {
@@ -152,11 +170,7 @@
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
       researchSelection: sanitizeResearchSelection(source.researchSelection),
-      knowledgeEntries: Array.isArray(source.knowledgeEntries) && knowledgeSchema
-        ? stripModelKeys(source.knowledgeEntries)
-          .map(knowledgeSchema.normalizeKnowledgeEntry)
-          .filter(item => item.id)
-        : [],
+      knowledgeEntries: normalizeKnowledgeEntries(source.knowledgeEntries),
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)
@@ -182,6 +196,7 @@
     try {
       migrated = migrateState(JSON.parse(raw));
     } catch (error) {
+      if (error && error.code === "KNOWLEDGE_SCHEMA_UNAVAILABLE") throw error;
       throw new StorageReadError("本地数据格式无效，未加载任何数据", error, "STORAGE_PARSE_FAILED");
     }
 
