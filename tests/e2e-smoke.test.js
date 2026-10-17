@@ -19,6 +19,12 @@ const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
 
+test('旧公开资料取消选择和切换项目会清理模型上下文', () => {
+  assert.match(app, /state\.researchSelection = \[\.\.\.\(state\.researchSelection \|\| \[\]\), id\];\s*state\.knowledgeSelection = \[\.\.\.\(state\.knowledgeSelection \|\| \[\]\), id\];/);
+  assert.match(app, /state\.researchSelection = \(state\.researchSelection \|\| \[\]\)\.filter\(selected => selected !== id\);\s*state\.knowledgeSelection = \(state\.knowledgeSelection \|\| \[\]\)\.filter\(selected => selected !== id\);/);
+  assert.match(app, /if \(activeProjectId && activeProjectId !== project\.id\) \{\s*state\.knowledgeSelection = \[\];\s*selectedSearchIds\.clear\(\);\s*remoteSearchResults = \[\];\s*sendDraft = null;\s*persist\(\);\s*document\.getElementById\("send-preview"\)\.hidden = true;\s*renderSearchResults\(\);/);
+});
+
 test('资料库包含搜索、类型筛选和新增资料入口', () => {
   for (const id of [
     'knowledge-query',

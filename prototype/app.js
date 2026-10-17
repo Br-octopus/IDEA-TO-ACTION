@@ -164,11 +164,14 @@
     return searches.map(([label, query]) => `<a class="search-link" href="https://www.google.com/search?q=${encodeURIComponent(query)}" target="_blank" rel="noreferrer"><span>${escapeHtml(label)}</span><span>打开搜索 ↗</span></a>`).join("");
   }
   function renderProject(project) {
-    if (activeProjectId && activeProjectId !== project.id && Array.isArray(state.knowledgeSelection) && state.knowledgeSelection.length) {
+    if (activeProjectId && activeProjectId !== project.id) {
       state.knowledgeSelection = [];
-      persist();
+      selectedSearchIds.clear();
+      remoteSearchResults = [];
       sendDraft = null;
+      persist();
       document.getElementById("send-preview").hidden = true;
+      renderSearchResults();
     }
     activeProjectId = project.id;
     const method = getMethodCard(project.domain);
@@ -857,8 +860,13 @@
       const id = input.dataset.referenceId;
       if (input.checked && !(state.researchSelection || []).includes(id)) {
         if ((state.researchSelection || []).length >= 3) { input.checked = false; toast("最多选择三条参考资料"); return; }
+        if ((state.knowledgeSelection || []).length >= 5) { input.checked = false; toast("最多选择五条资料摘要"); return; }
         state.researchSelection = [...(state.researchSelection || []), id];
-      } else state.researchSelection = (state.researchSelection || []).filter(selected => selected !== id);
+        state.knowledgeSelection = [...(state.knowledgeSelection || []), id];
+      } else {
+        state.researchSelection = (state.researchSelection || []).filter(selected => selected !== id);
+        state.knowledgeSelection = (state.knowledgeSelection || []).filter(selected => selected !== id);
+      }
       persist(); renderReferenceCatalog();
     }));
   }

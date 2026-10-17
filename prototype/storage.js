@@ -199,8 +199,9 @@
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
       researchSelection,
+      // 仅在旧状态缺少 knowledgeSelection 时迁移公开资料选择；之后两套选择可独立清理。
       knowledgeSelection: sanitizeKnowledgeSelection(
-        [...(Array.isArray(source.knowledgeSelection) ? source.knowledgeSelection : []), ...researchSelection],
+        Array.isArray(source.knowledgeSelection) ? source.knowledgeSelection : researchSelection,
         knowledgeEntries
       ),
       knowledgeEntries,

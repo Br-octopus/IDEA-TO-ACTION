@@ -123,6 +123,16 @@ test('资料选择迁移去重并限制为最多三条', () => {
   assert.deepEqual(migrateState({}).researchSelection, []);
 });
 
+test('已保存的知识选择允许在保留公开资料选择时清空', () => {
+  const state = migrateState({
+    researchSelection: [catalog[0].id],
+    knowledgeSelection: []
+  });
+
+  assert.deepEqual(state.researchSelection, [catalog[0].id]);
+  assert.deepEqual(state.knowledgeSelection, []);
+});
+
 test('知识选择只保留索引中的有效 id、去重并最多保存五条', () => {
   const state = migrateState({
     knowledgeEntries: [{ id: 'manual-1', title: '手动资料', summary: '摘要' }],
