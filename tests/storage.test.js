@@ -210,6 +210,7 @@ test('应用读取异常后仍可继续使用，但提交计划不会调用保�
   let saveCalls = 0;
   const memoryState = createEmptyState();
   const window = {
+    ForwardStepPromptEngine: require('../prototype/prompt-engine.js'),
     ForwardStepStorage: {
       STORAGE_KEY,
       createEmptyState() { return memoryState; },
@@ -218,8 +219,7 @@ test('应用读取异常后仍可继续使用，但提交计划不会调用保�
       addPromptVersion
     },
     ForwardStepMethodCards: {
-      domainStages: { '通用计划': ['阶段一', '阶段二', '阶段三', '阶段四'], '其他': ['阶段一', '阶段二', '阶段三', '阶段四'] },
-      domainGuidance: { '通用计划': '' }
+      getMethodCard(domain) { return { id: domain, temporary: domain === '其他', stages: ['阶段一', '阶段二', '阶段三', '阶段四'], stageDetails: Array.from({ length: 4 }, () => ({ description: '', deliverable: '' })), guidance: '' }; },
     },
     scrollTo() {},
     confirm() { return false; }

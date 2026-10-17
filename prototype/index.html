@@ -267,6 +267,8 @@
             <div class="field-label">这件事属于哪类？</div>
             <div class="domain-options" role="group" aria-label="选择计划类型">
               <button type="button" class="domain selected" data-domain="通用计划">通用计划</button>
+              <button type="button" class="domain" data-domain="写作">写作</button>
+              <button type="button" class="domain" data-domain="PPT">PPT</button>
               <button type="button" class="domain" data-domain="软件开发">软件开发</button>
               <button type="button" class="domain" data-domain="产品构想">产品构想</button>
               <button type="button" class="domain" data-domain="工作任务">工作任务</button>
@@ -308,6 +310,20 @@
                 <div class="prompt-box" id="master-prompt"></div>
                 <div class="prompt-bottom"><small>如已配置本地模型，可先预览发送内容</small><div class="button-row"><button class="button-secondary" id="preview-master">预览发送内容</button></div></div>
                 <div class="model-result" id="model-result" hidden><div class="field-label">内置模型建议</div><div class="prompt-box" id="model-result-text"></div></div>
+                <div class="draft-fields" style="margin-top:16px">
+                  <h3>本次梳理草稿</h3>
+                  <p class="block-desc">可编辑目标、成功标准和下一步。模型建议不会自动保存；确认后点击保存。</p>
+                  <div class="extra-grid">
+                    <div class="wide"><label class="field-label" for="project-goal-summary">目标摘要</label><textarea id="project-goal-summary" rows="2"></textarea></div>
+                    <div><label class="field-label" for="project-success-criteria">成功标准（一行一项）</label><textarea id="project-success-criteria" rows="3"></textarea></div>
+                    <div><label class="field-label" for="project-assumptions">暂时假设（一行一项）</label><textarea id="project-assumptions" rows="3"></textarea></div>
+                    <div><label class="field-label" for="project-missing-info">待确认事项（一行一项）</label><textarea id="project-missing-info" rows="3"></textarea></div>
+                    <div><label class="field-label" for="project-preserve-items">需要保留的内容（一行一项）</label><textarea id="project-preserve-items" rows="3"></textarea></div>
+                    <div><label class="field-label" for="project-current-step">当前步骤</label><textarea id="project-current-step" rows="2"></textarea></div>
+                    <div><label class="field-label" for="project-next-action">下一步</label><textarea id="project-next-action" rows="2"></textarea></div>
+                  </div>
+                  <div class="prompt-bottom"><small>编辑内容仅在你确认保存后写入本地计划</small><button class="button-secondary" id="save-project-draft" type="button">保存本次梳理</button></div>
+                </div>
                 <div class="prompt-bottom"><small>建议发给支持联网搜索的 AI，开始一段新对话</small><button class="button-primary" id="copy-master"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>复制指令</button></div>
               </article>
               <article class="content-block">
@@ -339,9 +355,9 @@
         </section>
 
         <section class="view" id="view-article">
-          <div class="eyebrow">文章编辑助手</div><h1>觉得文章有 AI 味，但不知道怎么改？</h1>
-          <p class="lede">贴上文章，工具会替你生成一条诊断与改写指令：让 AI 指出具体句子哪里空、重复或不自然，检查遗漏与可疑事实，再按你想要的幅度修改。</p>
-          <div class="notice" style="max-width:880px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span><strong>这不是“AI 文本检测器”。</strong>它把常见写作问题当作待核对的编辑线索，不判定文章是不是 AI 写的；是否修改由你决定。本版本只在本机生成指令，不会自动调用模型。</span></div>
+          <div class="eyebrow">文章诊断</div><h1>觉得文章有 AI 味，但不知道怎么说？</h1>
+          <p class="lede">贴上文章或片段，工具会帮你找出具体问题、提取参考文章中值得借鉴的写法，并生成一条可交给其他 AI 的修改指令。本工具不直接改文章。</p>
+          <div class="notice" style="max-width:880px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span><strong>这不是“AI 文本检测器”。</strong>它把常见写作问题当作待核对的编辑线索，不判定文章是不是 AI 写的；是否采用外部 AI 的修改由你决定。本工具只生成诊断和提示词，不代写或改稿。</span></div>
           <form class="form-panel prompt-form" id="article-form">
             <div class="field"><label class="field-label" for="article-original">把 AI 生成的文章贴在这里</label><textarea id="article-original" required placeholder="粘贴文章或其中一段。可以只写“读起来有点假”，不必先解释清楚问题。"></textarea></div>
             <div class="extra-grid">
@@ -349,7 +365,6 @@
               <div><label class="field-label" for="article-platform">准备发到哪里？<span class="optional">可选</span></label><select id="article-platform"><option value="">还没确定</option><option>小红书</option><option>公众号</option><option>博客 / 网站</option><option>工作汇报</option><option>学术 / 专业文章</option><option>其他</option></select></div>
               <div><label class="field-label" for="article-audience">写给谁看？<span class="optional">可选</span></label><input id="article-audience" type="text" placeholder="例如：第一次接触这个主题的普通读者"></div>
               <div><label class="field-label" for="article-tone">你希望读起来是什么感觉？<span class="optional">可选</span></label><input id="article-tone" type="text" placeholder="例如：像我平时说话，直接、真诚，不要过分活泼"></div>
-              <div><label class="field-label" for="article-edit-level">改动幅度</label><select id="article-edit-level"><option value="light">少改：只动确实僵硬或多余的句子</option><option value="medium">适度调整：保留观点，调整结构和表达</option><option value="diagnose">只诊断：先指出问题，不改正文</option></select></div>
             </div>
             <details class="details">
               <summary><span>参考文章和需要保留的内容</span><span class="summary-right">可选，但能更贴近你的意图<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span></summary>
@@ -375,18 +390,21 @@
               <p class="library-meta">不确定怎么描述个人声音时可以留空：AI 会先给出适合的方向和推荐；以上选项是保留重点，不代表可以补造原文没有的内容。</p>
             </details>
             <label class="search-toggle"><input id="article-web-search" type="checkbox"><span class="toggle-copy">需要时联网核实事实<small>只核对文章中可查证、可能过时的事实；要求列来源和日期，不允许悄悄改掉原意。</small></span></label>
-            <div class="form-footer"><span class="privacy-note">草稿只进入你复制给 AI 的指令；本页不会上传</span><button class="button-primary" type="submit">生成诊断与改写指令<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
+            <div class="form-footer"><span class="privacy-note">草稿只进入你复制给 AI 的指令；本页不会上传</span><button class="button-primary" type="submit">生成诊断与修改指令<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
           </form>
           <article class="content-block result-box" id="article-result" style="max-width:880px">
-            <div class="step-tag"><span class="step-number">1</span>先让 AI 诊断，再决定怎么改</div>
-            <h2>可直接复制给 AI 的指令</h2><p class="block-desc">把它发给支持联网的 AI（若勾选核实），先看诊断和改写稿；不满意时，再把“下一轮修改提示词”交给 AI。</p>
+            <div class="step-tag"><span class="step-number">1</span>把诊断与修改指令交给外部 AI</div>
+            <h2>可直接复制给 AI 的指令</h2><p class="block-desc">让外部 AI 先说明诊断依据，再按指令尝试修改。之后把原稿和外部结果带回来，对照目标与保留项复盘。</p>
             <div class="prompt-box" id="article-instruction"></div>
             <div class="prompt-bottom"><small>只发送这篇文章和少量相关规则，不加载整个提示词仓库</small><button class="button-primary" id="copy-article-instruction">复制指令</button></div>
-            <div class="prompt-bottom"><small>确认指令适用后，可保存到个人提示词库</small><button class="button-secondary" id="save-article-instruction">保存这条指令</button></div>
-            <div class="step-tag" style="margin-top:25px"><span class="step-number">2</span>把 AI 改完的稿子带回来</div>
-            <div class="field"><label class="field-label" for="article-revised">粘贴 AI 回复里的最终改写稿</label><textarea id="article-revised" class="reply-area" placeholder="只粘贴最终稿即可。两栏对照会留在本机，方便检查事实和语气有没有被改坏。"></textarea></div>
-            <div class="compare-grid" id="article-comparison" hidden><div class="compare-card"><h3>原稿</h3><pre id="article-original-preview"></pre></div><div class="compare-card"><h3>AI 改写稿</h3><pre id="article-revised-preview"></pre></div></div>
-            <div class="prompt-bottom"><small>对照时重点核实：事实和数字是否保留、是否擅自补了经历、观点是否变了、是否改得太多。</small><button class="button-secondary" id="copy-article-revision">复制改写稿</button></div>
+            <div class="prompt-bottom"><small>保存会把包含文章正文的整条提示词存入本机提示词库；不会上传</small><button class="button-secondary" id="save-article-instruction">保存这条指令</button></div>
+            <div class="step-tag" style="margin-top:25px"><span class="step-number">2</span>把外部 AI 的结果带回来</div>
+            <div class="field"><label class="field-label" for="article-revised">粘贴外部 AI 修改后的结果</label><textarea id="article-revised" class="reply-area" placeholder="粘贴外部 AI 返回的文章或片段。两栏对照只留在本机，方便检查事实、逻辑和保留项有没有被改偏。"></textarea></div>
+            <div class="compare-grid" id="article-comparison" hidden><div class="compare-card"><h3>原稿</h3><pre id="article-original-preview"></pre></div><div class="compare-card"><h3>外部 AI 结果</h3><pre id="article-revised-preview"></pre></div></div>
+            <div class="field" style="margin-top:14px"><label class="field-label" for="article-review-feedback">你觉得改得怎么样？哪里成功或偏了？<span class="optional">选填</span></label><textarea id="article-review-feedback" class="reply-area" placeholder="例如：读起来更自然，但原文中的第二个步骤被删掉了"></textarea></div>
+            <div class="prompt-bottom"><small>复盘指令包含原稿、外部结果和你的评价；复制并发送给外部 AI 后，这些内容会离开本机</small><button class="button-secondary" id="build-article-review" type="button">生成复盘指令</button></div>
+            <div class="result-box" id="article-review-result"><div class="field-label">交给 AI 的复盘指令</div><div class="prompt-box" id="article-review-prompt"></div><div class="prompt-bottom"><small>复盘结论仍需你确认，不自动计入已验证案例</small><button class="button-secondary" id="copy-article-review" type="button">复制复盘指令</button></div></div>
+            <div class="prompt-bottom"><small>对照时重点核实：事实和数字是否保留、是否擅自补了经历、观点是否变了、是否改得太多。</small><button class="button-secondary" id="copy-article-revision">复制外部结果</button></div>
           </article>
           <details class="details" style="max-width:880px;margin-top:19px">
             <summary><span>看看它会参考哪些写作规则</span><span class="summary-right">本地精简版<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span></summary>
@@ -473,6 +491,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/prototype/method-cards.js"></script>
   <script src="/prototype/storage.js"></script>
+  <script src="/prototype/prompt-engine.js"></script>
   <script src="/prototype/app.js"></script>
 </body>
 </html>
