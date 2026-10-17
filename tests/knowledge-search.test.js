@@ -315,6 +315,18 @@ test('相同分数且标题相同的结果保持输入顺序', () => {
   assert.deepEqual(result.map(item => item.id), ['first', 'second']);
 });
 
+test('相同分数且标题不同的结果仍保持输入顺序', () => {
+  const entries = [
+    { id: 'first', title: '乙资料', summary: '共同查询词' },
+    { id: 'second', title: '甲资料', summary: '共同查询词' }
+  ];
+
+  const result = searchKnowledge(entries, '共同查询词');
+
+  assert.equal(result[0].score, result[1].score);
+  assert.deepEqual(result.map(item => item.id), ['first', 'second']);
+});
+
 test('空查询将无效更新时间排在有效日期之后且无效日期顺序固定', () => {
   const entries = [
     { id: 'invalid-first', title: '无效甲', updatedAt: '未核对' },
@@ -327,6 +339,22 @@ test('空查询将无效更新时间排在有效日期之后且无效日期顺�
 
   assert.deepEqual(result.map(item => item.id), [
     'newer', 'older', 'invalid-first', 'invalid-second'
+  ]);
+});
+
+test('空查询相同有效日期和无效日期都保持输入顺序而非标题顺序', () => {
+  const entries = [
+    { id: 'same-date-first', title: '乙资料', updatedAt: '2026-01-01T00:00:00Z' },
+    { id: 'same-date-second', title: '甲资料', updatedAt: '2026-01-01T00:00:00Z' },
+    { id: 'invalid-first', title: '丁资料', updatedAt: '未核对' },
+    { id: 'invalid-second', title: '丙资料', updatedAt: '也不是日期' },
+    { id: 'newer', title: '最新资料', updatedAt: '2026-02-01T00:00:00Z' }
+  ];
+
+  const result = searchKnowledge(entries, '');
+
+  assert.deepEqual(result.map(item => item.id), [
+    'newer', 'same-date-first', 'same-date-second', 'invalid-first', 'invalid-second'
   ]);
 });
 

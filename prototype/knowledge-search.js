@@ -223,9 +223,8 @@
     const sorted = terms.length
       ? scored
         .filter(item => item.score > 0)
-        .sort((left, right) => right.score - left.score || left.title.localeCompare(right.title, "zh-CN"))
-      : scored.sort((left, right) => compareUpdatedAt(left, right)
-        || left.title.localeCompare(right.title, "zh-CN"));
+        .sort((left, right) => right.score - left.score)
+      : scored.sort(compareUpdatedAt);
     return sorted.slice(0, limit);
   }
 
