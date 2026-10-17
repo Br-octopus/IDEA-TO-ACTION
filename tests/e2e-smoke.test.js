@@ -16,6 +16,27 @@ const {
 const { createEmptyState, confirmCase } = require('../prototype/storage');
 
 const root = path.resolve(__dirname, '..');
+const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
+
+test('资料库包含搜索、类型筛选和新增资料入口', () => {
+  for (const id of [
+    'knowledge-query',
+    'knowledge-type',
+    'knowledge-domain',
+    'knowledge-stage',
+    'knowledge-verification',
+    'knowledge-search',
+    'knowledge-entry-form',
+    'knowledge-results',
+    'knowledge-detail'
+  ]) {
+    assert.match(html, new RegExp("id=[\\\"']" + id + "[\\\"']"));
+  }
+  assert.match(html, /本地资料库/);
+  assert.match(html, /搜索本地资料/);
+  assert.match(html, /公开资料入口/);
+  assert.match(html, /只保存摘要、可借鉴方法和必要摘录/);
+});
 
 test('MVP 主流程可在静态边界串联，不等同于真实 Electron UI 验收', () => {
   const project = {
