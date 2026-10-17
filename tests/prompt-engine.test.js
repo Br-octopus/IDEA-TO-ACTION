@@ -128,6 +128,13 @@ test('本地资料上下文包含摘要、方法和来源，不包含原文摘�
   assert.equal(appendKnowledgeContext('基础指令', []), '基础指令');
 });
 
+test('已包含本地资料摘要标记的文本不会再次注入资料上下文', () => {
+  const first = appendKnowledgeContext('基础指令', [{ id: 'x', title: '参考案例', summary: '保留观点' }]);
+  const second = appendKnowledgeContext(first, [{ id: 'y', title: '第二条资料', summary: '不该再注入' }]);
+  assert.equal(second, first);
+  assert.equal(second.includes('不该再注入'), false);
+});
+
 test('领域方法卡覆盖写作、PPT、软件开发、产品/工作、学习和其他', () => {
   for (const domain of ['写作', 'PPT', '软件开发', '产品构想', '工作任务', '学习目标']) {
     const card = getMethodCard(domain);

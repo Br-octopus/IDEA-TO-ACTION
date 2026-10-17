@@ -257,18 +257,6 @@
     document.getElementById("send-preview-model").textContent = serviceConfig.model?.configured ? serviceConfig.model.name : "未配置模型";
     // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
     document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
-    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
-    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
-    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
-    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
-    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
-    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
-    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
-    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
-    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
-    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
-    // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
-    document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
     const references = document.getElementById("send-preview-references");
     const knowledgeItems = sendDraft.knowledgeEntries || [];
     references.innerHTML = sendDraft.references.length || knowledgeItems.length

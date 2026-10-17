@@ -57,6 +57,8 @@
 
   // 复用知识库搜索模块的上下文格式，保证本地资料与远程资料摘要遵循同样的信任边界
   function appendKnowledgeContext(prompt = "", entries = []) {
+    // 防止同一段文本被注入两次资料上下文：已存在标记时直接返回原文
+    if (String(prompt).includes("【用户选择的本地资料摘要】")) return String(prompt);
     const build = knowledgeSearch && typeof knowledgeSearch.buildKnowledgeContext === "function"
       ? knowledgeSearch.buildKnowledgeContext
       : null;

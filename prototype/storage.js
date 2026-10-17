@@ -182,12 +182,18 @@
       projects: Array.isArray(source.projects) ? stripModelKeys(source.projects).map(withProjectDefaults) : [],
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
       references: Array.isArray(source.references) ? stripModelKeys(source.references) : [],
-      researchSelection: sanitizeResearchSelection(source.researchSelection),
+      // 旧版 researchSelection 的公开资料 id 已全部并入 knowledgeSelection，
+      // 这里必须清空，保证发送路径只有 knowledgeSelection 一条注入通道
+      researchSelection: [],
       knowledgeEntries: entries,
       // 旧版 researchSelection 存的就是公开资料 id，且与统一索引里的公开资料 id 一致，
-      // 所以这里直接映射进 knowledgeSelection 合并去重，交给 sanitize 校验和截断
+      // 所以这里映射进 knowledgeSelection 合并去重。合并时本地资料优先、公开资料按原顺序补位，
+      // 最后由 sanitize 校验合法 id 并统一截断到 5 条
       knowledgeSelection: sanitizeKnowledgeSelection(
-        [...(Array.isArray(source.knowledgeSelection) ? source.knowledgeSelection : []), ...(Array.isArray(source.researchSelection) ? source.researchSelection : [])],
+        [
+          ...(Array.isArray(source.knowledgeSelection) ? source.knowledgeSelection : []),
+          ...(Array.isArray(source.researchSelection) ? source.researchSelection : [])
+        ],
         entries
       ),
       cases: Array.isArray(source.cases)
