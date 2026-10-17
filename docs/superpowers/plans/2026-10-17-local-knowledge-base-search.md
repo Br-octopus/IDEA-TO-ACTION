@@ -48,7 +48,7 @@
 - `prototype/prompt-engine.js`：增加受控的知识摘要上下文拼接函数，禁止默认拼接原始内容。
 - `prototype/app.js`：资料库搜索、保存资料、选择上下文、案例筛选和界面状态管理。
 - `prototype/index.html`：把“GitHub 参考”扩展为“资料库”，增加类型筛选、全文搜索、保存资料和选择摘要控件。
-- `prototype/styles.css`：增加资料类型标签、搜索结果、验证状态和空状态样式；沿用现有视觉系统。
+- `prototype/index.html`：在现有内联样式区域增加资料类型标签、搜索结果、验证状态和空状态样式；沿用现有视觉系统。
 - `tests/storage.test.js`：补充 schema v2 到 v3 的迁移断言。
 - `tests/e2e-smoke.test.js`：补充资料库关键控件和搜索入口检查。
 - `README.md`、`docs/PRODUCT_DESIGN.md`、`docs/MVP_SCOPE.md`、`docs/REFERENCE_SOURCES.md`：同步本地资料库、全文搜索和未来语义检索边界。
@@ -303,6 +303,79 @@ function collectKnowledgeEntries(state = {}, { references = [], methodCards = []
 }
 ```
 
+转换函数使用下面的明确字段映射，不能把完整原文默认放入 `summary`：
+
+```js
+function fromReference(reference = {}) {
+  return normalizeKnowledgeEntry({
+    id: reference.id,
+    type: reference.kind === 'guide' || reference.sourceType?.includes('文章') ? 'article-summary' : 'github-summary',
+    title: reference.title,
+    sourceUrl: reference.url,
+    sourceType: reference.sourceType,
+    domains: reference.domains,
+    stages: reference.stages,
+    keywords: [reference.kind, ...(reference.domains || [])],
+    summary: reference.summary,
+    reusablePatterns: reference.borrowablePatterns,
+    limitations: reference.limitations,
+    licenseNote: reference.licenseNote,
+    verificationStatus: reference.verification?.status === 'verified' ? 'source-reviewed' : 'unverified'
+  });
+}
+
+function fromMethodCard(card = {}) {
+  return normalizeKnowledgeEntry({
+    id: `method-${card.id}`,
+    type: 'method-card',
+    title: card.title || card.name,
+    domains: card.domains || card.domain,
+    stages: card.stages,
+    keywords: card.checks || card.keywords,
+    summary: card.description || card.guidance,
+    reusablePatterns: card.guidance,
+    verificationStatus: 'source-reviewed',
+    sourceType: '内置方法卡'
+  });
+}
+
+function fromPrompt(prompt = {}) {
+  return normalizeKnowledgeEntry({
+    id: `prompt-${prompt.id}`,
+    type: 'user-prompt',
+    title: prompt.title,
+    domains: prompt.domains || prompt.domain,
+    stages: prompt.stages,
+    keywords: prompt.keywords,
+    summary: prompt.note || '用户保存的提示词版本',
+    reusablePatterns: prompt.note,
+    contentExcerpt: String(prompt.text || '').slice(0, 240),
+    verificationStatus: prompt.verified ? 'user-confirmed' : 'unverified',
+    sourceType: '用户提示词'
+  });
+}
+
+function fromCase(reviewedCase = {}) {
+  const type = reviewedCase.status === '成功'
+    ? 'success-case'
+    : reviewedCase.status === '失败' ? 'failure-case' : 'review-insight';
+  return normalizeKnowledgeEntry({
+    id: `case-${reviewedCase.id}`,
+    type,
+    title: `${reviewedCase.taskType || '任务'}复盘`,
+    domains: reviewedCase.domain,
+    keywords: reviewedCase.dimensions,
+    summary: reviewedCase.goal,
+    reusablePatterns: reviewedCase.lessons,
+    limitations: reviewedCase.evidence,
+    contentExcerpt: reviewedCase.nextPrompt,
+    linkedCaseId: reviewedCase.id,
+    verificationStatus: reviewedCase.status === '待验证' ? 'unverified' : 'user-confirmed',
+    sourceType: '用户确认案例'
+  });
+}
+```
+
 转换规则固定如下：
 
 - 公开参考资料：`github-summary` 或已有 `sourceType` 为文章时使用 `article-summary`。
@@ -430,6 +503,42 @@ function searchKnowledge(entries, query, options = {}) {
 }
 ```
 
+其中 `matchesFilters` 和 `scoreEntry` 使用以下固定实现规则：
+
+```js
+function matchesFilters(item, options = {}) {
+  const domainMatch = !options.domain || (item.domains || []).includes(options.domain);
+  const stageMatch = !options.stage || (item.stages || []).includes(options.stage);
+  const typeMatch = !Array.isArray(options.types) || !options.types.length || options.types.includes(item.type);
+  const verificationMatch = !options.verificationStatus || item.verificationStatus === options.verificationStatus;
+  return domainMatch && stageMatch && typeMatch && verificationMatch;
+}
+
+function scoreEntry(item, terms) {
+  const fields = {
+    title: [item.title, 8],
+    keywords: [(item.keywords || []).join(' '), 6],
+    reusablePatterns: [item.reusablePatterns, 4],
+    summary: [item.summary, 3],
+    lessons: [item.lessons, 4],
+    contentExcerpt: [item.contentExcerpt, 1]
+  };
+  let score = 0;
+  const matchedFields = [];
+  const matchedTerms = [];
+  for (const [field, [value, weight]] of Object.entries(fields)) {
+    const tokens = tokenize(value);
+    const matched = terms.filter(term => tokens.includes(term) || String(value || '').includes(term));
+    if (matched.length) {
+      score += matched.length * weight;
+      matchedFields.push(field);
+      matchedTerms.push(...matched);
+    }
+  }
+  return { ...item, score, matchedFields: [...new Set(matchedFields)], matchedTerms: [...new Set(matchedTerms)] };
+}
+```
+
 如果查询为空，只返回筛选后的条目并按 `updatedAt` 降序；如果查询无结果，不调用模型，页面显示“没有找到本地资料”，并提供手动联网搜索入口。
 
 - [ ] **Step 4: 实现上下文摘要和 token 控制**
@@ -480,7 +589,6 @@ git commit -m "feat: 增加本地全文检索"
 **Files:**
 - Modify: `prototype/index.html`
 - Modify: `prototype/app.js`
-- Modify: `prototype/styles.css`
 - Modify: `tests/e2e-smoke.test.js`
 
 - [ ] **Step 1: 写界面冒烟测试，固定用户可找到资料库入口**
@@ -604,7 +712,7 @@ npm run check
 - [ ] **Step 6: 提交界面改动**
 
 ```powershell
-git add prototype/index.html prototype/app.js prototype/styles.css tests/e2e-smoke.test.js
+git add prototype/index.html prototype/app.js tests/e2e-smoke.test.js
 git commit -m "feat: 增加本地资料库界面"
 ```
 
