@@ -63,7 +63,24 @@ function createState() {
         }
       }
     }],
-    references: [{ id: 'reference-1', title: '公开资料' }],
+    references: [{
+      id: 'reference-1',
+      title: '公开资料',
+      token: '参考业务 token',
+      secret: '参考业务 secret',
+      apiKey: '参考业务 apiKey',
+      authorization: 'reference-authorization',
+      config: {
+        apiKey: 'reference-config-api-key',
+        api_key: 'reference-config-api-key-snake',
+        refreshToken: 'reference-refresh-token',
+        client_secret: 'reference-client-secret'
+      },
+      nested: {
+        authorization: 'nested-reference-authorization',
+        model_api_key: 'nested-reference-model-api-key'
+      }
+    }],
     researchSelection: ['reference-1'],
     knowledgeEntries: [{
       id: 'entry-1',
@@ -165,7 +182,10 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
     'case-refresh-token-snake', 'case-client-secret-camel', 'case-client-secret-snake',
     'case-model-api-key-camel', 'case-model-api-key-snake', 'nested-metadata-refresh-token-camel',
     'nested-metadata-client-secret-snake', 'nested-metadata-model-api-key-snake',
-    'nested-metadata-api-key-snake'
+    'nested-metadata-api-key-snake', 'reference-authorization',
+    'reference-config-api-key', 'reference-config-api-key-snake',
+    'reference-refresh-token', 'reference-client-secret',
+    'nested-reference-authorization', 'nested-reference-model-api-key'
   ];
   for (const credential of credentials) assert.equal(serialized.includes(credential), false, `不应导出 ${credential}`);
   assert.equal(Object.hasOwn(backup.data, 'knowledgeMetadata'), true);
@@ -174,6 +194,9 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   assert.match(serialized, /项目业务 apiKey/);
   assert.match(serialized, /提示词业务 token/);
   assert.match(serialized, /案例业务 apiKey/);
+  assert.match(serialized, /参考业务 token/);
+  assert.match(serialized, /参考业务 secret/);
+  assert.match(serialized, /参考业务 apiKey/);
   assert.deepEqual(state.projects[0].apiKey, '项目业务 apiKey');
 
   const knowledgeBackup = createBackup(state, { scope: 'knowledge-base', now: exportedAt });
@@ -181,6 +204,24 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   for (const credential of credentials) {
     assert.equal(knowledgeSerialized.includes(credential), false, `资料库不应导出 ${credential}`);
   }
+});
+
+test('references 凭证清洗后仍可替换和合并', () => {
+  const backup = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  const replaced = replaceState({}, backup);
+  assert.deepEqual(replaced.references, backup.data.references);
+  assert.equal(replaced.references[0].id, 'reference-1');
+  assert.equal(replaced.references[0].title, '公开资料');
+
+  const result = mergeState({
+    projects: [{ id: 'p1' }],
+    prompts: [{ id: 'prompt-1' }],
+    cases: [{ id: 'case-1' }],
+    knowledgeEntries: [{ id: 'entry-1' }],
+    references: []
+  }, backup);
+  assert.deepEqual(result.state.references, backup.data.references);
+  assert.deepEqual(result.added, [{ collection: 'references', id: 'reference-1' }]);
 });
 
 test('资料库备份只包含资料、案例和资料相关状态', () => {

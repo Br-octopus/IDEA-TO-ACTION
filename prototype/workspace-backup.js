@@ -41,7 +41,7 @@
     }
     const source = clone(isObject(state) ? state : {});
     const sanitized = clone(source);
-    for (const field of ["projects", "prompts", "cases", "knowledgeEntries", "knowledgeMetadata"]) {
+    for (const field of ["projects", "prompts", "cases", "knowledgeEntries", "references", "knowledgeMetadata"]) {
       if (Object.hasOwn(source, field)) {
         sanitized[field] = storage.stripModelKeys(source[field], {
           fields: BACKUP_CREDENTIAL_FIELDS,
