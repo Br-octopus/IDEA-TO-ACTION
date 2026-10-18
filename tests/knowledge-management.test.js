@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const appSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
 const managementContext = { Date };
 vm.runInNewContext(appSource.slice(0, appSource.indexOf('(() => {')), managementContext);
-const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry'].map(name => [name, managementContext[name]]));
+const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
 const { normalizeKnowledgeEntry } = require('../prototype/knowledge-schema.js');const { createBackup, validateBackup, replaceState } = require('../prototype/workspace-backup.js');
 
 function state() {
@@ -88,6 +88,22 @@ test('资料选择过滤隐藏项并最多选择五条', () => {
   const next = management.selectKnowledgeEntries(current, current.knowledgeEntries.map(item => item.id), 5);
   assert.equal(next.knowledgeSelection.length, 5);
   assert.equal(next.knowledgeSelection.includes('manual-6'), false);
+});
+
+test('浏览器安全备份必须由用户确认后才能继续导入', () => {
+  let message = '';
+  assert.equal(management.confirmBrowserSafetyBackup(text => { message = text; return true; }), true);
+  assert.match(message, /安全备份/);
+  assert.throws(() => management.confirmBrowserSafetyBackup(() => false), error => String(error).includes('未确认已保存安全备份'));
+});
+
+test('浏览器安全备份未确认时阻断导入写入', async () => {
+  let writes = 0;
+  await assert.rejects(async () => {
+    await management.confirmBrowserSafetyBackup(() => false);
+    writes += 1;
+  }, error => String(error).includes('未确认已保存安全备份'));
+  assert.equal(writes, 0);
 });
 
 test('非法导入在校验前后都不替换当前状态', () => {

@@ -40,9 +40,21 @@ function buildManualKnowledgeEntry(previousEntry, fields, normalizeKnowledgeEntr
   };
   return normalizeKnowledgeEntry({ ...previousEntry, ...editableFields });
 }
-const knowledgeManagementApi = { toggleKnowledgeFavorite, toggleKnowledgePinned, markKnowledgeUsed, hideKnowledgeEntry, restoreKnowledgeEntry, deleteKnowledgeEntries, selectKnowledgeEntries, buildManualKnowledgeEntry };
+const SAFETY_BACKUP_NOT_CONFIRMED = 'SAFETY_BACKUP_NOT_CONFIRMED';
+function confirmBrowserSafetyBackup(confirmFn) {
+  const confirmed = typeof confirmFn === 'function' && confirmFn('安全备份文件已下载，请确认已保存安全备份。确认后才会继续导入。') === true;
+  if (!confirmed) {
+    const error = new Error('未确认已保存安全备份');
+    error.code = SAFETY_BACKUP_NOT_CONFIRMED;
+    throw error;
+  }
+  return true;
+}
+const knowledgeManagementApi = { toggleKnowledgeFavorite, toggleKnowledgePinned, markKnowledgeUsed, hideKnowledgeEntry, restoreKnowledgeEntry, deleteKnowledgeEntries, selectKnowledgeEntries, buildManualKnowledgeEntry, confirmBrowserSafetyBackup, SAFETY_BACKUP_NOT_CONFIRMED };
 if (typeof module === "object" && module.exports) module.exports = knowledgeManagementApi;
 if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement = knowledgeManagementApi;
+
+
 
 (() => {
   const { STORAGE_KEY, createEmptyState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry } = window.ForwardStepStorage;
@@ -1040,6 +1052,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     }
     const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = "forward-step-safety-backup.json"; link.click(); URL.revokeObjectURL(url);
+    confirmBrowserSafetyBackup(window.confirm);
     return { browser: true };
   }
   async function importBackupContent(raw) {
