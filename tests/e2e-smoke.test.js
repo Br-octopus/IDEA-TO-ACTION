@@ -81,12 +81,14 @@ test('发送面板接入安全预览并保留编辑与失败状态契约', () =>
   ]) {
     assert.ok(html.includes('id="' + id + '"'), '发送面板缺少安全预览控件: ' + id);
   }
+  assert.match(html, /本地规则检测明显敏感信息.*不能保证识别所有凭证/);
   const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
   assert.ok(app.includes('window.ForwardStepSendSafety'), 'app.js 必须读取正式安全预览模块');
   assert.ok(app.includes('buildSendReport'), '发送面板必须生成安全报告');
   assert.ok(app.includes('sendDraft.renderedText = event.target.value'), '编辑文本必须保留为实际发送文本');
   assert.ok(app.includes('renderSendPanel()'), '编辑和删除资料后必须重新渲染安全统计');
-  assert.match(app, /sendDraft\.renderedText = appendKnowledgeContext\(sendDraft\.renderedText, sendDraft\.knowledgeEntries\)/, '删除公开资料后必须保留本地资料上下文');
+  assert.match(app, /function buildSendContent\(\)[\s\S]*return \{ text: fullText, segments \}/, '安全报告和发送文本必须来自同一分段构造');
+  assert.match(app, /syncUneditedSendText\(\)/, '资料变更后必须同步重建未编辑文本');
   assert.match(app, /send-preview-confirm"\)\.disabled\s*=\s*!serviceConfig\.model\?\.configured/);
   assert.match(app, /sendDraft\.confirmedRisk/);
   assert.match(app, /if \(succeeded\) closeSendPanel\(\);/);

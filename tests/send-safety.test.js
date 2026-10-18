@@ -4,7 +4,12 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function createSendPanelVm({ includeSafety = true } = {}) {
+function createSendPanelVm({
+  includeSafety = true,
+  initialPrompt = 'password=secret-value',
+  selectedReferenceIds = [],
+  knowledgeEntries = []
+} = {}) {
   const listeners = new Map();
   const elements = new Map();
   const checkbox = {
@@ -46,21 +51,24 @@ function createSendPanelVm({ includeSafety = true } = {}) {
     prompts: [],
     cases: [],
     references: [],
-    knowledgeEntries: [],
-    knowledgeSelection: [],
-    researchSelection: []
+    knowledgeEntries,
+    knowledgeSelection: knowledgeEntries.map(item => item.id),
+    researchSelection: selectedReferenceIds
   };
   let requestModelCalls = 0;
   const requestModelPrompts = [];
   let configCalls = 0;
   const promptEngine = {
-    buildGoalPrompt() { return 'password=secret-value'; },
+    buildGoalPrompt() { return initialPrompt; },
     buildStagePrompt() { return ''; },
     buildFollowupPrompt() { return ''; },
     buildArticleDiagnosticPrompt() { return ''; },
     buildPromptOptimizationPrompt() { return ''; },
     buildCaseReviewPrompt() { return ''; },
-    appendKnowledgeContext(prompt) { return String(prompt); }
+    appendKnowledgeContext(prompt, entries) {
+      const context = require('../prototype/knowledge-search').buildKnowledgeContext(entries);
+      return context ? `${String(prompt)}${context}` : String(prompt);
+    }
   };
   const fetch = async url => {
     if (url === '/api/config') return { json: async () => ({ model: { configured: true, name: '测试模型' }, search: { configured: false } }) };
@@ -71,7 +79,7 @@ function createSendPanelVm({ includeSafety = true } = {}) {
     ForwardStepResearchCatalog: require('../prototype/research-catalog'),
     ForwardStepMethodCards: require('../prototype/method-cards'),
     ForwardStepKnowledgeSearch: {
-      collectKnowledgeEntries() { return []; },
+      collectKnowledgeEntries() { return knowledgeEntries; },
       searchKnowledge() { return []; }
     },
     ForwardStepStorage: {
@@ -128,6 +136,7 @@ function createSendPanelVm({ includeSafety = true } = {}) {
   vm.runInNewContext(source, context, { filename: 'prototype/app.js' });
   return {
     listeners,
+    state,
     checkbox,
     confirmButton: document.getElementById('send-preview-confirm'),
     text: document.getElementById('send-preview-text'),
@@ -163,7 +172,7 @@ test('检测常见高风险凭证并保留来源和位置', () => {
   const text = [
     'api_key=sk-test-1234567890',
     'password: very-secret-value',
-    'Authorization: Bearer abcdefghijklmnop',
+    'Authorization:\n Bearer folded-token-value',
     '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----',
     'postgres://user:pass@example.com:5432/app'
   ].join('\n');
@@ -222,14 +231,30 @@ test('密码占位值降为一般风险，未知值保持高风险', () => {
     'password=test',
     'password=<your-password>',
     'password=changeme',
-    'password=real-unknown-value'
+    'password=real-unknown-value',
+    'password=<real-token>',
+    'password="your password"',
+    'password=abc',
+    'password=YOUR_PASSWORD',
+    'password=${DB_PASSWORD}',
+    'password=password'
   ].join('\n'), { source: '文档' });
   const passwords = findings.filter(item => item.kind === 'password');
-  assert.equal(passwords.length, 7);
+  assert.equal(passwords.length, 13);
   assert.deepEqual(passwords.slice(0, 6).map(item => item.severity), [
     'medium', 'medium', 'medium', 'medium', 'medium', 'medium'
   ]);
-  assert.equal(passwords[6].severity, 'high');
+  assert.deepEqual(passwords.slice(6).map(item => item.severity), [
+    'high', 'high', 'medium', 'high', 'medium', 'medium', 'high'
+  ]);
+  assert.match(passwords[8].fragment, /your password/);
+});
+
+test('折行 Authorization 头部仍按高风险检测完整凭证', () => {
+  const findings = detectSensitiveContent('Authorization:\r\n\tBearer folded-token-value', { source: '用户原文' });
+  const authorization = findings.find(item => item.kind === 'authorization');
+  assert.equal(authorization.severity, 'high');
+  assert.match(authorization.fragment, /Bearer folded-token-value/);
 });
 
 test('检测常见前缀 API Key，并覆盖超长文本尾部敏感内容', () => {
@@ -267,6 +292,46 @@ test('发送首尾空白高风险文本时保留原文且仍执行确认门禁',
   assert.equal(vmApp.requestModelCalls, 1);
   assert.equal(vmApp.requestModelPrompts[0], rawText);
   assert.equal(vmApp.text.value, rawText);
+  assert.equal(vmApp.reports[vmApp.reports.length - 1].text, vmApp.requestModelPrompts[0]);
+});
+
+test('未编辑发送时报告与请求共用完整提示词及本地资料文本', async () => {
+  const knowledgeEntries = [{
+    id: 'local-summary',
+    type: 'prompt-summary',
+    title: '本地摘要',
+    summary: '用于验证实际注入内容',
+    reusablePatterns: '保留来源',
+    limitations: '仅测试'
+  }];
+  const vmApp = createSendPanelVm({ initialPrompt: '请分析这段材料。', knowledgeEntries });
+  await vmApp.waitForConfig();
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.state.knowledgeSelection = knowledgeEntries.map(item => item.id);
+  vmApp.listeners.get('preview-master:click')();
+  const actualText = vmApp.text.value;
+  assert.match(actualText, /【用户选择的本地资料摘要】/);
+  await vmApp.listeners.get('send-preview-confirm:click')({});
+  assert.equal(vmApp.requestModelCalls, 1);
+  assert.equal(vmApp.requestModelPrompts[0], actualText);
+  assert.equal(vmApp.reports[vmApp.reports.length - 1].text, vmApp.requestModelPrompts[0]);
+});
+
+test('提示词已有公开资料标记时不重复拼接所选资料且报告匹配请求', async () => {
+  const research = require('../prototype/research-catalog');
+  const selectedReferenceIds = ['prompts-chat'];
+  const selectedReferences = research.selectReferences(selectedReferenceIds);
+  const initialPrompt = `已有提示词\n${research.buildReferenceContext(selectedReferences)}`;
+  const vmApp = createSendPanelVm({ initialPrompt, selectedReferenceIds });
+  await vmApp.waitForConfig();
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.state.researchSelection = selectedReferenceIds;
+  vmApp.listeners.get('preview-master:click')();
+  const actualText = vmApp.text.value;
+  assert.equal((actualText.match(/【用户选择的参考资料摘要/g) || []).length, 1);
+  await vmApp.listeners.get('send-preview-confirm:click')({});
+  assert.equal(vmApp.requestModelCalls, 1);
+  assert.equal(vmApp.requestModelPrompts[0], actualText);
   assert.equal(vmApp.reports[vmApp.reports.length - 1].text, vmApp.requestModelPrompts[0]);
 });
 

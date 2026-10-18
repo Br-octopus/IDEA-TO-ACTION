@@ -7,7 +7,7 @@
   const MEDIUM_RISK = "medium";
   const PASSWORD_PLACEHOLDERS = new Set([
     "true", "false", "example", "test", "changeme", "change-me",
-    "your-password", "your_password", "your password", "password"
+    "your-password", "your_password", "your password"
   ]);
 
   function asText(value) {
@@ -43,20 +43,26 @@
   }
 
   function isPasswordPlaceholder(value) {
-    const normalized = asText(value).trim().toLocaleLowerCase();
+    let normalized = asText(value).trim().toLocaleLowerCase();
+    if (normalized.startsWith("<") && normalized.endsWith(">")) {
+      normalized = normalized.slice(1, -1).trim();
+    }
     return PASSWORD_PLACEHOLDERS.has(normalized)
-      || /^<[^>]+>$/.test(normalized)
-      || /^your[-_ ]?password$/.test(normalized);
+      || /^\$\{[a-z_][a-z0-9_]*\}$/.test(normalized)
+      || /^\$[a-z_][a-z0-9_]*$/.test(normalized)
+      || /^%[a-z_][a-z0-9_]*%$/.test(normalized)
+      || /^\{\{[a-z_][a-z0-9_]*\}\}$/.test(normalized);
   }
 
   function addPasswordFindings(findings, text, source) {
-    const matcher = /\b(?:password|passwd|pwd)\s*[:=]\s*["']?([^\s"'`,;]{4,})["']?/gi;
+    const matcher = /\b(?:password|passwd|pwd)\s*[:=]\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s"'`,;]+))/gi;
     let match;
     while ((match = matcher.exec(text))) {
       const fragment = match[0];
+      const value = match[1] ?? match[2] ?? match[3];
       findings.push({
         kind: "password",
-        severity: isPasswordPlaceholder(match[1]) ? MEDIUM_RISK : HIGH_RISK,
+        severity: isPasswordPlaceholder(value) ? MEDIUM_RISK : HIGH_RISK,
         source,
         start: match.index,
         end: match.index + fragment.length,
@@ -73,7 +79,7 @@
     const findings = [];
     addFindings(findings, text, source, "privateKey", HIGH_RISK, /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g);
     addFindings(findings, text, source, "databaseConnection", HIGH_RISK, /(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis):\/\/[^\s"'<>]+/gi);
-    addFindings(findings, text, source, "authorization", HIGH_RISK, /\bAuthorization\s*:[ \t]*[^\r\n]+/gi);
+    addFindings(findings, text, source, "authorization", HIGH_RISK, /\bAuthorization\s*:[ \t]*(?:\r?\n[ \t]+)?[^\r\n]+(?:\r?\n[ \t]+[^\r\n]+)*/gi);
     addFindings(findings, text, source, "apiKey", HIGH_RISK, /\b(?:api[_ -]?key|x-api-key)\s*[:=]\s*["']?[A-Za-z0-9_\-]{8,}["']?|\b(?:sk-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi);
     addPasswordFindings(findings, text, source);
     addFindings(findings, text, source, "idCard", MEDIUM_RISK, /(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)/g);

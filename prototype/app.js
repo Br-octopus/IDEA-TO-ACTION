@@ -161,18 +161,25 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
   function renderKnowledgeReference(item) {
     return `<div class="send-reference"><span>本地资料 ${referenceInfoLine(item)}</span><button type="button" data-remove-knowledge-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`;
   }
-  function buildSendSegments() {
-    if (!sendDraft) return [];
+  function buildSendContent() {
+    if (!sendDraft) return { text: "", segments: [] };
     // 用户编辑后整段文本作为单一来源，避免把当前内容误归因到基础提示词或资料。
-    if (sendDraft.userEdited) return [{ source: "用户原文/当前编辑文本", text: sendDraft.renderedText }];
-    const referenceText = buildSelectedReferenceContext(sendDraft.references);
+    if (sendDraft.userEdited) {
+      const text = sendDraft.renderedText;
+      return { text, segments: [{ source: "用户原文/当前编辑文本", text }] };
+    }
+    const hasReferenceContext = sendDraft.basePrompt.includes("【用户选择的参考资料摘要");
+    const referenceText = hasReferenceContext ? "" : buildSelectedReferenceContext(sendDraft.references);
     const promptWithReferences = sendDraft.basePrompt + referenceText;
     const fullText = appendKnowledgeContext(promptWithReferences, sendDraft.knowledgeEntries);
     const localText = fullText.slice(promptWithReferences.length);
     const segments = [{ source: "基础提示词", text: sendDraft.basePrompt }];
     if (referenceText) segments.push({ source: "公开资料", text: referenceText });
     if (localText) segments.push({ source: "本地资料", text: localText });
-    return segments;
+    return { text: fullText, segments };
+  }
+  function syncUneditedSendText() {
+    if (sendDraft && !sendDraft.userEdited) sendDraft.renderedText = buildSendContent().text;
   }
   function renderSendSafety(report) {
     const stats = document.getElementById("send-preview-stats");
@@ -401,12 +408,14 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
   }
   function renderSendPanel() {
     if (!sendDraft) return;
-    const text = sendDraft.renderedText;
+    const content = buildSendContent();
+    if (!sendDraft.userEdited) sendDraft.renderedText = content.text;
+    const text = content.text;
     document.getElementById("send-preview-text").value = text;
     document.getElementById("send-preview-model").textContent = serviceConfig.model?.configured ? serviceConfig.model.name : "未配置模型";
     // 资料总字符数口径：发送预览全文（含提示词与拼接后的资料上下文）的字符数，简单一致
     document.getElementById("send-preview-reference-total").textContent = "资料上下文总字符数：" + String(text.length);
-    renderSendSafety(buildSendReport(buildSendSegments()));
+    renderSendSafety(buildSendReport(content.segments));
     const references = document.getElementById("send-preview-references");
     const knowledgeItems = sendDraft.knowledgeEntries || [];
     references.innerHTML = sendDraft.references.length || knowledgeItems.length
@@ -415,13 +424,12 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       : '<div class="library-meta">未选择资料摘要</div>';
     references.querySelectorAll("[data-remove-send-reference]").forEach(button => button.addEventListener("click", () => {
       sendDraft.references = sendDraft.references.filter(item => item.id !== button.dataset.removeSendReference);
-      if (!sendDraft.userEdited) sendDraft.renderedText = sendDraft.basePrompt + buildSelectedReferenceContext(sendDraft.references);
-      if (!sendDraft.userEdited) sendDraft.renderedText = appendKnowledgeContext(sendDraft.renderedText, sendDraft.knowledgeEntries);
+      syncUneditedSendText();
       renderSendPanel();
     }));
     references.querySelectorAll("[data-remove-knowledge-reference]").forEach(button => button.addEventListener("click", () => {
       sendDraft.knowledgeEntries = (sendDraft.knowledgeEntries || []).filter(item => item.id !== button.dataset.removeKnowledgeReference);
-      if (!sendDraft.userEdited) sendDraft.renderedText = appendKnowledgeContext(sendDraft.basePrompt + buildSelectedReferenceContext(sendDraft.references), sendDraft.knowledgeEntries);
+      syncUneditedSendText();
       renderSendPanel();
     }));
     document.getElementById("send-preview-confirm").hidden = !serviceConfig.model?.configured;
@@ -450,13 +458,13 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       sendDraft.renderedText = event.target.value;
       sendDraft.userEdited = true;
       sendDraft.confirmedRisk = false;
-      renderSendSafety(buildSendReport(buildSendSegments()));
+      renderSendSafety(buildSendReport(buildSendContent().segments));
     }
   });
   document.getElementById("send-preview-confirmation").addEventListener("change", event => {
     if (!sendDraft) return;
     sendDraft.confirmedRisk = event.target.checked;
-    renderSendSafety(buildSendReport(buildSendSegments()));
+    renderSendSafety(buildSendReport(buildSendContent().segments));
   });
   document.getElementById("send-preview-cancel").addEventListener("click", closeSendPanel);
   document.getElementById("send-preview-copy").addEventListener("click", () => {
@@ -464,9 +472,10 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
   });
   document.getElementById("send-preview-confirm").addEventListener("click", async () => {
     if (!sendDraft || !serviceConfig.model?.configured) return;
-    const text = sendDraft.renderedText;
+    const { text, segments } = buildSendContent();
+    if (!sendDraft.userEdited) sendDraft.renderedText = text;
     if (!text.trim()) { toast("发送内容不能为空"); return; }
-    const report = buildSendReport(buildSendSegments());
+    const report = buildSendReport(segments);
     if (report.blocked || report.safetyUnavailable) {
       toast("安全检查不可用，已阻止发送");
       renderSendSafety(report);
@@ -1046,9 +1055,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       // 选择后立刻更新发送预览，避免用户发送时才看到资料变化
       if (sendDraft) {
         sendDraft.knowledgeEntries = selectedKnowledgeEntries();
-        if (!sendDraft.userEdited) {
-          sendDraft.renderedText = appendKnowledgeContext(sendDraft.basePrompt + buildSelectedReferenceContext(sendDraft.references), sendDraft.knowledgeEntries);
-        }
+        syncUneditedSendText();
         renderSendPanel();
       }
     }));
