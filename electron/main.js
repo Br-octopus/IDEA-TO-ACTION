@@ -1,5 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
+const { createBackupStore } = require(path.join(__dirname, 'backup-store.js'));
 const { createSettingsStore } = require(path.join(__dirname, 'settings-store.js'));
 const { createModelClient } = require(path.join(__dirname, '..', 'server', 'model-client.js'));
 const { createSearchClient } = require(path.join(__dirname, '..', 'server', 'search-client.js'));
@@ -10,6 +12,7 @@ let mainWindow;
 let bundledService;
 let localServiceUrl = DEV_PAGE_URL;
 let settingsStore;
+let backupStore;
 
 function isDevelopment() {
   return !app.isPackaged || process.env.NODE_ENV === 'development';
@@ -47,6 +50,25 @@ function getSettingsStore() {
     settingsStore = createSettingsStore({ safeStorage, getUserDataPath: () => app.getPath('userData') });
   }
   return settingsStore;
+}
+
+function getBackupStore() {
+  if (!backupStore) {
+    backupStore = createBackupStore({ userDataPath: app.getPath('userData') });
+  }
+  return backupStore;
+}
+
+function showFileDialog(method, options) {
+  if (mainWindow && !mainWindow.isDestroyed()) return dialog[method](mainWindow, options);
+  return dialog[method](options);
+}
+
+function serializeBackupContent(content) {
+  if (typeof content === 'string' || Buffer.isBuffer(content)) return content;
+  const serialized = JSON.stringify(content);
+  if (serialized === undefined) throw new TypeError('备份内容必须是字符串或可序列化对象');
+  return serialized;
 }
 
 async function startBundledService() {
@@ -128,6 +150,43 @@ ipcMain.handle('search:request', async (_event, payload) => {
   const client = createSearchClient(getSettingsStore().getServiceConfig());
   return client.search(String(payload?.query || '').trim(), payload?.options);
 });
+
+ipcMain.handle('backup:export', async (_event, content) => {
+  const result = await showFileDialog('showSaveDialog', {
+    title: '导出备份',
+    defaultPath: path.join(app.getPath('documents'), 'forward-step-backup.json'),
+    filters: [{ name: 'JSON 备份', extensions: ['json'] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+
+  fs.writeFileSync(result.filePath, serializeBackupContent(content), {
+    encoding: 'utf8',
+    mode: 0o600
+  });
+  return { canceled: false, filePath: result.filePath };
+});
+
+ipcMain.handle('backup:import', async () => {
+  const result = await showFileDialog('showOpenDialog', {
+    title: '导入备份',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON 备份', extensions: ['json'] }]
+  });
+  const filePath = result.filePaths?.[0];
+  if (result.canceled || !filePath) return { canceled: true };
+  if (path.extname(filePath).toLowerCase() !== '.json') {
+    throw new TypeError('只能导入 JSON 备份文件');
+  }
+  return {
+    canceled: false,
+    filePath,
+    content: fs.readFileSync(filePath, 'utf8')
+  };
+});
+
+ipcMain.handle('backup:list', async () => getBackupStore().listBackups());
+
+ipcMain.handle('backup:read', async (_event, filename) => getBackupStore().readBackup(filename));
 
 app.whenReady().then(() => createWindow()).catch(reportStartupError);
 

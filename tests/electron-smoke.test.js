@@ -22,9 +22,35 @@ test('Electron security settings and preload whitelist are present', () => {
   assert.match(main, /contextIsolation:\s*true/);
   assert.match(main, /nodeIntegration:\s*false/);
   assert.match(main, /sandbox:\s*true/);
-  for (const method of ['getConfig', 'saveConfig', 'requestModel', 'requestSearch']) {
+  for (const method of [
+    'getConfig', 'saveConfig', 'requestModel', 'requestSearch',
+    'exportBackup', 'importBackup', 'listBackups', 'readBackup'
+  ]) {
     assert.match(preload, new RegExp(`${method}\\s*:`));
   }
+});
+
+test('Electron 备份 IPC 使用受限通道和文件对话框', () => {
+  const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'electron', 'preload.js'), 'utf8');
+  const backupStore = fs.readFileSync(path.join(root, 'electron', 'backup-store.js'), 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+  for (const channel of ['backup:export', 'backup:import', 'backup:list', 'backup:read']) {
+    assert.match(main, new RegExp(`ipcMain\\.handle\\(['"]${channel}['"]`));
+  }
+  assert.match(main, /showSaveDialog/);
+  assert.match(main, /showOpenDialog/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:export['"]/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:import['"]/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:list['"]/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:read['"]/);
+  assert.match(main, /createBackupStore/);
+  assert.doesNotMatch(preload, /require\(['"]node:fs['"]\)/);
+  assert.doesNotMatch(preload, /userData/);
+  assert.match(backupStore, /BACKUP_DIRECTORY\s*=\s*['"]backups['"]/);
+  assert.match(backupStore, /path\.basename|pathModule\.basename/);
+  assert.ok(packageJson.build.files.includes('electron/**/*'));
 });
 
 test('真实服务支持随机端口，首页和配置接口可访问', async t => {
@@ -148,7 +174,10 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'start-bundled-service:127.0.0.1:0',
     'load-url:http://127.0.0.1:50987'
   ]);
-  assert.equal(registeredHandlers.size, 4);
+  assert.equal(registeredHandlers.size, 8);
+  for (const channel of ['backup:export', 'backup:import', 'backup:list', 'backup:read']) {
+    assert.equal(registeredHandlers.has(channel), true);
+  }
   assert.doesNotMatch(mainSource, /loadFile\(/);
 
   let prevented = false;
