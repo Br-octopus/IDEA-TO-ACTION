@@ -110,6 +110,17 @@ function writeBackupFileAtomically(filePath, content) {
   }
 }
 
+function readBackupFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (cause) {
+    const error = new Error('备份文件读取失败，请检查文件是否存在或访问权限。');
+    error.code = 'BACKUP_IMPORT_READ_FAILED';
+    error.cause = cause;
+    throw error;
+  }
+}
+
 async function startBundledService() {
   if (bundledService) return localServiceUrl;
 
@@ -217,7 +228,7 @@ ipcMain.handle('backup:import', async () => {
   return {
     canceled: false,
     filePath,
-    content: fs.readFileSync(filePath, 'utf8')
+    content: readBackupFile(filePath)
   };
 });
 

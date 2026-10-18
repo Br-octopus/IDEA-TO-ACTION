@@ -10,7 +10,7 @@ const { startServer } = require('../server');
 const root = path.resolve(__dirname, '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
-function loadBackupExportHandler({ filePath, fsModule = fs }) {
+function loadBackupHandler({ channel, filePath, fsModule = fs, importCanceled = false }) {
   const registeredHandlers = new Map();
   const dialogOptions = [];
   const app = {
@@ -32,7 +32,9 @@ function loadBackupExportHandler({ filePath, fsModule = fs }) {
       dialogOptions.push(options);
       return { canceled: false, filePath };
     },
-    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+    showOpenDialog: async () => importCanceled
+      ? { canceled: true, filePaths: [] }
+      : { canceled: false, filePaths: [filePath] }
   };
   const context = {
     console,
@@ -60,9 +62,17 @@ function loadBackupExportHandler({ filePath, fsModule = fs }) {
     filename: path.join(root, 'electron', 'main.js')
   });
   return new Promise(resolve => setImmediate(() => resolve({
-    handler: registeredHandlers.get('backup:export'),
+    handler: registeredHandlers.get(channel),
     dialogOptions
   })));
+}
+
+function loadBackupExportHandler(options) {
+  return loadBackupHandler({ ...options, channel: 'backup:export' });
+}
+
+function loadBackupImportHandler(options) {
+  return loadBackupHandler({ ...options, channel: 'backup:import' });
 }
 
 function createFsModule(overrides = {}) {
@@ -196,6 +206,70 @@ test('backup:export 替换失败时保留原文件并清理临时文件', async 
     assert.equal(fs.readFileSync(filePath, 'utf8'), '原文件');
     assert.equal(tempPaths.length, 1);
     assert.equal(fs.existsSync(tempPaths[0]), false);
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('backup:import 用户取消时保持稳定取消结果', async () => {
+  const { handler } = await loadBackupImportHandler({
+    filePath: path.join(os.tmpdir(), 'forward-step-cancelled.json'),
+    importCanceled: true
+  });
+
+  const result = await handler();
+  assert.equal(result.canceled, true);
+});
+
+test('backup:import 非 JSON 扩展名保持明确错误', async () => {
+  const { handler } = await loadBackupImportHandler({
+    filePath: path.join(os.tmpdir(), 'forward-step-invalid.txt')
+  });
+
+  await assert.rejects(() => handler(), error => {
+    assert.equal(error.name, 'TypeError');
+    assert.match(error.message, /JSON/);
+    return true;
+  });
+});
+
+test('backup:import 文件不存在时返回稳定错误码且不泄露路径', async () => {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-import-'));
+  const filePath = path.join(tempDirectory, 'missing.json');
+
+  try {
+    const { handler } = await loadBackupImportHandler({ filePath });
+    await assert.rejects(() => handler(), error => {
+      assert.equal(error.code, 'BACKUP_IMPORT_READ_FAILED');
+      assert.match(error.message, /备份文件读取失败/);
+      assert.equal(error.message.includes(filePath), false);
+      assert.equal(error.cause.code, 'ENOENT');
+      return true;
+    });
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('backup:import 无权限时返回稳定错误码且不泄露路径', async () => {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-import-'));
+  const filePath = path.join(tempDirectory, 'forbidden.json');
+  const cause = Object.assign(new Error(`EACCES: ${filePath}`), { code: 'EACCES' });
+  const fsModule = createFsModule({
+    readFileSync: () => {
+      throw cause;
+    }
+  });
+
+  try {
+    const { handler } = await loadBackupImportHandler({ filePath, fsModule });
+    await assert.rejects(() => handler(), error => {
+      assert.equal(error.code, 'BACKUP_IMPORT_READ_FAILED');
+      assert.match(error.message, /备份文件读取失败/);
+      assert.equal(error.message.includes(filePath), false);
+      assert.equal(error.cause, cause);
+      return true;
+    });
   } finally {
     fs.rmSync(tempDirectory, { recursive: true, force: true });
   }
