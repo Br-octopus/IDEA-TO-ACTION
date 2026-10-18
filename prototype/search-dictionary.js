@@ -118,9 +118,20 @@
     return candidates;
   }
 
-  function suggestSearchTerms(query, entriesOrOptions = [], maybeOptions = {}) {
-    const entries = Array.isArray(entriesOrOptions) ? entriesOrOptions : entriesOrOptions.entries;
-    const options = Array.isArray(entriesOrOptions) ? maybeOptions : entriesOrOptions;
+  function suggestSearchTerms(query, entriesOrOptions, maybeOptions = {}) {
+    let entries;
+    let options;
+    if (Array.isArray(entriesOrOptions)) {
+      entries = entriesOrOptions;
+      options = maybeOptions && typeof maybeOptions === "object" && !Array.isArray(maybeOptions)
+        ? maybeOptions
+        : {};
+    } else if (entriesOrOptions && typeof entriesOrOptions === "object") {
+      entries = Array.isArray(entriesOrOptions.entries) ? entriesOrOptions.entries : [];
+      options = entriesOrOptions;
+    } else {
+      return [];
+    }
     const sourceTerms = splitChineseTerms(query);
     if (!sourceTerms.length) return [];
     const queryText = normalize(query);

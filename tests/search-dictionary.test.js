@@ -52,6 +52,12 @@ test('搜索建议最多三条且排序稳定', () => {
   assert.deepEqual(first.slice(0, 2), ['案例', '示例']);
 });
 
+test('搜索建议对 null、undefined 和非对象参数安全返回空数组', () => {
+  for (const value of [null, undefined, 'invalid', 42]) {
+    assert.deepEqual(suggestSearchTerms('案', value), []);
+  }
+});
+
 test('超长输入的拆词和扩展词数量保持有界', () => {
   const query = '中文'.repeat(200);
 
