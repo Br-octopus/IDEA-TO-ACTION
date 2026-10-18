@@ -10,16 +10,18 @@ const {
 const { toKnowledgeEntry } = require('../prototype/research-catalog.js');
 const { methodCardsToKnowledgeEntries } = require('../prototype/method-cards.js');
 
-function loadBrowserKnowledgeSearch(segmenter, { unstableSort = false } = {}) {
+function loadBrowserKnowledgeSearch(segmenter, { unstableSort = false, includeDictionary = true } = {}) {
   const intl = Object.create(Intl);
   if (arguments.length > 0) intl.Segmenter = segmenter;
   const context = { Intl: intl };
-  for (const file of [
+  const files = [
     'knowledge-schema.js',
     'method-cards.js',
-    'research-catalog.js',
-    'knowledge-search.js'
-  ]) {
+    'research-catalog.js'
+  ];
+  if (includeDictionary) files.push('search-dictionary.js');
+  files.push('knowledge-search.js');
+  for (const file of files) {
     const filename = require.resolve(`../prototype/${file}`);
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context, { filename });
   }
@@ -294,6 +296,45 @@ test('搜索结果明确记录命中的查询词', () => {
   assert.deepEqual(result[0].matchedTerms, ['句式', '节奏']);
 });
 
+test('英文别名可以命中中文资料并提供高亮字段信息', () => {
+  const result = searchKnowledge([
+    { id: 'prompt', title: '提示词复核', summary: '检查发送内容' }
+  ], 'prompt review');
+
+  assert.deepEqual(result.map(item => item.id), ['prompt']);
+  assert.ok(result[0].matchedTerms.includes('prompt'));
+  assert.ok(result[0].matchedTerms.includes('review'));
+  assert.deepEqual(result[0].matchedFields, ['title']);
+  assert.deepEqual(result[0].highlightFields.title, ['提示词', '复核']);
+});
+
+test('重复别名只计算一次同一字段命中分数', () => {
+  const result = searchKnowledge([
+    { id: 'prompt', title: '提示词' }
+  ], '提示词 prompt');
+
+  assert.equal(result[0].score, 8);
+  assert.deepEqual(result[0].matchedFields, ['title']);
+});
+
+test('自定义别名只在当前搜索中生效', () => {
+  const entries = [{ id: 'prompt', title: '提示词' }];
+
+  assert.equal(searchKnowledge(entries, '口令', {
+    aliases: { 提示词: ['口令'] }
+  })[0].id, 'prompt');
+  assert.deepEqual(searchKnowledge(entries, '口令'), []);
+});
+
+test('资料条目的自定义别名只作用于该条目', () => {
+  const result = searchKnowledge([
+    { id: 'prompt', title: '提示词', customAliases: ['口令'] },
+    { id: 'other', title: '其他资料' }
+  ], '口令');
+
+  assert.deepEqual(result.map(item => item.id), ['prompt']);
+});
+
 test('标题命中按高于摘要的字段权重计分并排在前面', () => {
   const entries = [
     { id: 'summary-hit', type: 'test-entry', title: '低权重资料', summary: 'needle' },
@@ -427,6 +468,15 @@ test('浏览器 UMD 入口使用依赖脚本导出统一搜索全局', () => {
   assert.equal(typeof api.searchKnowledge, 'function');
   assert.equal(typeof api.buildKnowledgeContext, 'function');
   assert.equal(api.searchKnowledge(searchableEntries, '句式')[0].id, 'writing');
+});
+
+test('浏览器旧入口未加载词典时仍可使用增强搜索', () => {
+  const context = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false });
+  const result = context.ForwardStepKnowledgeSearch.searchKnowledge(
+    [{ id: 'prompt', title: '提示词复核' }], 'prompt review'
+  );
+
+  assert.deepEqual(Array.from(result, item => item.id), ['prompt']);
 });
 
 test('浏览器 UMD 搜索在不稳定 sort 下仍保持并列结果输入顺序', () => {

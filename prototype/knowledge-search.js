@@ -8,11 +8,68 @@
       : root.ForwardStepResearchCatalog,
     typeof module === "object" && module.exports
       ? require("./method-cards.js")
-      : root.ForwardStepMethodCards
+      : root.ForwardStepMethodCards,
+    typeof module === "object" && module.exports
+      ? require("./search-dictionary.js")
+      : root.ForwardStepSearchDictionary
   );
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.ForwardStepKnowledgeSearch = api;
-})(typeof globalThis === "undefined" ? this : globalThis, function (knowledgeSchema, researchCatalog, methodCardsApi) {
+})(typeof globalThis === "undefined" ? this : globalThis, function (knowledgeSchema, researchCatalog, methodCardsApi, searchDictionary) {
+  // 入口页仍可能只加载旧脚本；缺少词典时保留同等搜索能力，避免浏览器启动失败。
+  if (!searchDictionary) {
+    const groups = [
+      ["提示词", "prompt"], ["复核", "review"],
+      ["验收", "测试", "完成标准", "test", "testing", "acceptance"],
+      ["计划", "方案", "plan"], ["案例", "示例", "example", "case"],
+      ["失败", "问题", "failure", "issue", "problem"]
+    ];
+    const cjkPattern = /[\u3400-\u9fff]/u;
+    const add = (target, value) => {
+      const term = String(value || "").trim().toLocaleLowerCase();
+      if (term && !target.includes(term)) target.push(term);
+    };
+    const split = value => {
+      const source = String(value || "").trim().toLocaleLowerCase();
+      const terms = [];
+      if (!source) return terms;
+      const addChinese = word => {
+        const characters = [...word];
+        if (characters.length <= 4) add(terms, word);
+        for (let index = 0; index < characters.length - 1; index += 1) {
+          add(terms, characters.slice(index, index + 2).join(""));
+        }
+      };
+      if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+        try {
+          const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
+          for (const item of segmenter.segment(source)) {
+            if (cjkPattern.test(item.segment)) addChinese(item.segment);
+            else if (/[a-z0-9]/i.test(item.segment)) add(terms, item.segment);
+          }
+          return terms;
+        } catch {
+          // 回退到正则拆分。
+        }
+      }
+      for (const word of source.match(/[a-z0-9]+|[\u3400-\u9fff]+/gi) || []) {
+        if (cjkPattern.test(word)) addChinese(word);
+        else add(terms, word);
+      }
+      return terms;
+    };
+    const groupFor = term => groups.find(group => group.includes(term)) || [term];
+    searchDictionary = {
+      splitChineseTerms: split,
+      expandSearchTerms(query) {
+        const terms = split(query);
+        for (const term of terms) for (const alias of groupFor(term)) add(terms, alias);
+        return terms;
+      },
+      getTermGroup: groupFor
+    };
+  }
+
   function prefixId(prefix, id) {
     const sourceId = String(id || "").trim();
     if (!sourceId) return "";
@@ -122,38 +179,37 @@
     return [...byId.values()];
   }
 
-  function tokenize(value) {
-    const source = String(value || "").toLocaleLowerCase();
-    if (!source) return [];
-
-    if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
-      try {
-        const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
-        return [...segmenter.segment(source)]
-          .map(item => item.segment.trim())
-          .filter(item => /[\p{L}\p{N}]/u.test(item));
-      } catch {
-        // 某些运行环境暴露了 Segmenter 但不支持指定配置，继续使用正则回退。
-      }
-    }
-
-    const words = source.match(/[a-z0-9]+|[\u3400-\u9fff]+/gi) || [];
-    return words.flatMap(word => /[\u3400-\u9fff]/.test(word)
-      ? word.length === 1
-        ? [word]
-        : [...word].map((_, index) => word.slice(index, index + 2)).filter(item => item.length === 2)
-      : [word]);
-  }
-
   const SEARCH_STOP_WORDS = new Set([
     "的", "了", "和", "是", "我", "你", "他", "她", "它", "这", "那",
     "在", "有", "与", "及", "或", "也", "都", "就", "而", "但", "对", "为",
     "从", "到", "中", "上", "下", "里", "很", "更", "想", "找", "请", "要"
   ]);
 
-  function normalizeSearchTerms(query) {
-    return [...new Set(tokenize(query))]
+  function normalizeSearchTerms(query, options = {}) {
+    return searchDictionary.expandSearchTerms(query, options)
       .filter(term => !SEARCH_STOP_WORDS.has(term));
+  }
+
+  function queryTerms(query) {
+    return searchDictionary.splitChineseTerms(query)
+      .filter(term => !SEARCH_STOP_WORDS.has(term));
+  }
+
+  function removeContainedTerms(terms) {
+    return terms.filter(term => !terms.some(other => other.length > term.length && other.includes(term)));
+  }
+
+  function optionsForEntry(item, options = {}) {
+    const aliases = options.aliases && typeof options.aliases === "object"
+      ? { ...options.aliases }
+      : {};
+    const customAliases = Array.isArray(item.customAliases)
+      ? item.customAliases.filter(Boolean)
+      : [];
+    if (customAliases.length && item.title) {
+      aliases[item.title] = [...(Array.isArray(aliases[item.title]) ? aliases[item.title] : []), ...customAliases];
+    }
+    return Object.keys(aliases).length ? { ...options, aliases } : options;
   }
 
   function listIncludes(value, expected) {
@@ -171,33 +227,55 @@
     return domainMatch && stageMatch && typeMatch && verificationMatch;
   }
 
-  function scoreEntry(item, terms) {
+  function scoreEntry(item, terms, expandedTerms, options = {}) {
     const fields = {
       title: [item.title, 8],
       keywords: [(item.keywords || []).join(" "), 6],
       reusablePatterns: [item.reusablePatterns, 4],
       summary: [item.summary, 3],
       lessons: [item.lessons, 4],
+      limitations: [item.limitations, 1],
       contentExcerpt: [item.contentExcerpt, 1]
     };
     let score = 0;
     const matchedFields = [];
     const matchedTerms = [];
+    const highlightFields = {};
+    const scoreTerms = removeContainedTerms(expandedTerms);
+    const rawScoreTerms = removeContainedTerms(terms);
     for (const [field, [value, weight]] of Object.entries(fields)) {
       const text = String(value || "");
-      const tokens = tokenize(text);
-      const matched = terms.filter(term => tokens.includes(term) || text.includes(term));
-      if (matched.length) {
-        score += matched.length * weight;
+      const lowerText = text.toLocaleLowerCase();
+      const fieldTerms = searchDictionary.splitChineseTerms(text);
+      const matched = [];
+      const matchedGroups = new Set();
+      for (const term of scoreTerms) {
+        const group = searchDictionary.getTermGroup(term, options);
+        const groupKey = group.join("\u001f");
+        const termMatched = fieldTerms.includes(term) || lowerText.includes(term);
+        if (!termMatched) continue;
+        if (!matched.includes(term)) matched.push(term);
+        if (!matchedGroups.has(groupKey)) {
+          matchedGroups.add(groupKey);
+          score += weight;
+        }
+      }
+      const rawMatched = rawScoreTerms.filter(term => {
+        const group = searchDictionary.getTermGroup(term, options);
+        return group.some(alias => fieldTerms.includes(alias) || lowerText.includes(alias));
+      });
+      if (rawMatched.length) {
         matchedFields.push(field);
-        matchedTerms.push(...matched);
+        matchedTerms.push(...rawMatched);
+        highlightFields[field] = matched;
       }
     }
     return {
       ...item,
       score,
       matchedFields: [...new Set(matchedFields)],
-      matchedTerms: [...new Set(matchedTerms)]
+      matchedTerms: [...new Set(matchedTerms)],
+      highlightFields
     };
   }
 
@@ -215,7 +293,7 @@
 
   function searchKnowledge(entries = [], query, options = {}) {
     const rawQuery = String(query || "").trim();
-    const terms = normalizeSearchTerms(query);
+    const terms = queryTerms(query);
     if (rawQuery && !terms.length) return [];
     const numericLimit = Number(options.limit);
     const limit = Number.isNaN(numericLimit)
@@ -224,10 +302,13 @@
     const filtered = (Array.isArray(entries) ? entries : [])
       .map((item, inputIndex) => ({ item, inputIndex }))
       .filter(({ item }) => matchesFilters(item, options));
-    const scored = filtered.map(({ item, inputIndex }) => ({
-      ...scoreEntry(item, terms),
-      __knowledgeSearchInputIndex: inputIndex
-    }));
+    const scored = filtered.map(({ item, inputIndex }) => {
+      const itemOptions = optionsForEntry(item, options);
+      return {
+        ...scoreEntry(item, terms, normalizeSearchTerms(query, itemOptions), itemOptions),
+        __knowledgeSearchInputIndex: inputIndex
+      };
+    });
     const sorted = terms.length
       ? scored
         .filter(item => item.score > 0)
