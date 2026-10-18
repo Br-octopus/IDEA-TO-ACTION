@@ -204,3 +204,48 @@ test('合并兼容旧状态时保留无效当前条目并报告可追踪的 skip
   }]);
   assert.deepEqual(result.added, ['p2']);
 });
+
+test('合并外部备份时跳过非法 id 并继续处理合法条目，严格校验仍然拒绝', () => {
+  const backup = createBackup({
+    projects: [{ id: 'p1', title: '问题项目' }, { id: 'p2', title: '合法项目' }],
+    prompts: [],
+    cases: [],
+    knowledgeEntries: []
+  }, { scope: 'workspace', now: exportedAt });
+  backup.data.projects[0].id = '';
+
+  assert.throws(() => validateBackup(backup), /id/);
+
+  const result = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, backup);
+
+  assert.equal(result.state.projects.length, 1);
+  assert.equal(result.state.projects[0].id, 'p2');
+  assert.equal(result.state.projects[0].title, '合法项目');
+  assert.deepEqual(result.added, ['p2']);
+  assert.deepEqual(result.skipped, [{
+    collection: 'projects',
+    index: 0,
+    id: '',
+    reason: 'incoming-invalid-id'
+  }]);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test('合并外部备份时报告非法 id 的原始值', () => {
+  const backup = createBackup({
+    projects: [{ id: 'p1' }],
+    prompts: [],
+    cases: [],
+    knowledgeEntries: []
+  }, { scope: 'workspace', now: exportedAt });
+  backup.data.projects[0].id = 42;
+
+  const result = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, backup);
+
+  assert.deepEqual(result.skipped, [{
+    collection: 'projects',
+    index: 0,
+    id: 42,
+    reason: 'incoming-invalid-id'
+  }]);
+});

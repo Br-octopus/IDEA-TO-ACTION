@@ -103,7 +103,7 @@
     }
   }
 
-  function validateBackup(value) {
+  function validateBackupStructure(value) {
     if (!isObject(value)) throw new TypeError("备份必须是对象");
     if (value.format !== FORMAT) throw new TypeError("备份格式不匹配");
     if (value.schemaVersion !== SCHEMA_VERSION) throw new TypeError("备份版本不受支持");
@@ -115,11 +115,19 @@
     if (!isObject(value.counts) || !isObject(value.data)) throw new TypeError("备份统计或数据无效");
 
     const collections = value.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
-    collections.forEach(field => validateCollection(value.data, field));
+    collections.forEach(field => {
+      if (!Array.isArray(value.data[field])) throw new TypeError(`备份核心数据无效：${field}`);
+    });
     validateCounts(value.data, value.counts, collections);
     validateSelection(value.data, "knowledgeSelection");
     if (value.scope === "workspace") validateSelection(value.data, "researchSelection");
     if (!isObject(value.data.knowledgeFilters)) throw new TypeError("备份筛选状态无效：knowledgeFilters");
+    return collections;
+  }
+
+  function validateBackup(value) {
+    const collections = validateBackupStructure(value);
+    collections.forEach(field => validateCollection(value.data, field));
     return true;
   }
 
@@ -146,7 +154,7 @@
     current.forEach((item, index) => {
       const id = item && typeof item.id === "string" ? item.id.trim() : "";
       if (!id) {
-        report.skipped.push({ collection, index, id: null, reason: "current-invalid-id" });
+        report.skipped.push({ collection, index, id: getOriginalId(item), reason: "current-invalid-id" });
         return;
       }
       knownIds.add(id);
@@ -156,7 +164,7 @@
     for (const [index, item] of incoming.entries()) {
       const id = item && typeof item.id === "string" ? item.id.trim() : "";
       if (!id) {
-        report.skipped.push({ collection, index, id: null, reason: "incoming-invalid-id" });
+        report.skipped.push({ collection, index, id: getOriginalId(item), reason: "incoming-invalid-id" });
         continue;
       }
       if (importedIds.has(id)) {
@@ -175,16 +183,19 @@
     return current;
   }
 
+  function getOriginalId(item) {
+    return isObject(item) && Object.hasOwn(item, "id") ? item.id : null;
+  }
+
   function unique(values) {
     return [...new Set(values)];
   }
 
   function mergeState(currentState, backup) {
-    validateBackup(backup);
+    const collections = validateBackupStructure(backup);
     const state = isObject(currentState) ? clone(currentState) : {};
     const data = backup.data;
     const report = { added: [], skipped: [], conflicts: [] };
-    const collections = backup.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
 
     for (const field of collections) {
       if (Array.isArray(data[field])) {
