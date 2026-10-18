@@ -45,7 +45,7 @@
       if (Object.hasOwn(source, field)) {
         sanitized[field] = storage.stripModelKeys(source[field], {
           fields: BACKUP_CREDENTIAL_FIELDS,
-          preserveBusinessFields: true
+          preserveBusinessFields: field !== "knowledgeMetadata"
         });
       }
     }

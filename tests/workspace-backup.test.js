@@ -35,15 +35,21 @@ function createState() {
         client_secret: 'project-client-secret-snake',
         modelApiKey: 'project-model-api-key-camel',
         model_api_key: 'project-model-api-key-snake'
+      },
+      nested: {
+        apiKey: 'project-nested-api-key',
+        api_key: 'project-nested-api-key-snake',
+        API_KEY: 'project-nested-api-key-upper',
+        refreshToken: 'project-nested-refresh-token'
       }
     }],
     prompts: [{
       id: 'prompt-1',
+      token: '提示词业务 token',
+      secret: '提示词业务 secret',
+      apiKey: '提示词业务 apiKey',
       text: '提示词正文包含 token、secret 和 apiKey',
       metadata: {
-        token: '提示词业务 token',
-        secret: '提示词业务 secret',
-        apiKey: '提示词业务 apiKey',
         accessToken: 'prompt-access-token',
         refresh_token: 'prompt-refresh-token',
         authorization: 'prompt-authorization',
@@ -61,6 +67,12 @@ function createState() {
           modelApiKey: 'prompt-model-api-key-camel',
           model_api_key: 'prompt-model-api-key-snake'
         }
+      },
+      nested: {
+        apiKey: 'prompt-nested-api-key',
+        api_key: 'prompt-nested-api-key-snake',
+        API_KEY: 'prompt-nested-api-key-upper',
+        refreshToken: 'prompt-nested-refresh-token'
       }
     }],
     references: [{
@@ -77,6 +89,10 @@ function createState() {
         client_secret: 'reference-client-secret'
       },
       nested: {
+        apiKey: 'nested-reference-api-key',
+        api_key: 'nested-reference-api-key-snake',
+        API_KEY: 'nested-reference-api-key-upper',
+        refreshToken: 'nested-reference-refresh-token',
         authorization: 'nested-reference-authorization',
         model_api_key: 'nested-reference-model-api-key'
       }
@@ -103,6 +119,12 @@ function createState() {
           client_secret: 'knowledge-client-secret-snake',
           modelApiKey: 'knowledge-model-api-key-camel',
           model_api_key: 'knowledge-model-api-key-snake'
+        },
+        nested: {
+          apiKey: 'knowledge-nested-api-key',
+          api_key: 'knowledge-nested-api-key-snake',
+          API_KEY: 'knowledge-nested-api-key-upper',
+          refreshToken: 'knowledge-nested-refresh-token'
         }
       }
     }],
@@ -131,6 +153,12 @@ function createState() {
         client_secret: 'case-client-secret-snake',
         modelApiKey: 'case-model-api-key-camel',
         model_api_key: 'case-model-api-key-snake'
+      },
+      nested: {
+        apiKey: 'case-nested-api-key',
+        api_key: 'case-nested-api-key-snake',
+        API_KEY: 'case-nested-api-key-upper',
+        refreshToken: 'case-nested-refresh-token'
       }
     }],
     knowledgeMetadata: {
@@ -140,7 +168,10 @@ function createState() {
         refreshToken: 'nested-metadata-refresh-token-camel',
         client_secret: 'nested-metadata-client-secret-snake',
         model_api_key: 'nested-metadata-model-api-key-snake',
-        api_key: 'nested-metadata-api-key-snake'
+        api_key: 'nested-metadata-api-key-snake',
+        apiKey: 'nested-metadata-api-key',
+        API_KEY: 'nested-metadata-api-key-upper',
+        refreshToken: 'nested-metadata-refresh-token-camel'
       }
     }
   };
@@ -182,10 +213,18 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
     'case-refresh-token-snake', 'case-client-secret-camel', 'case-client-secret-snake',
     'case-model-api-key-camel', 'case-model-api-key-snake', 'nested-metadata-refresh-token-camel',
     'nested-metadata-client-secret-snake', 'nested-metadata-model-api-key-snake',
-    'nested-metadata-api-key-snake', 'reference-authorization',
+    'nested-metadata-api-key-snake', 'nested-metadata-api-key', 'nested-metadata-api-key-upper',
+    'reference-authorization',
     'reference-config-api-key', 'reference-config-api-key-snake',
     'reference-refresh-token', 'reference-client-secret',
-    'nested-reference-authorization', 'nested-reference-model-api-key'
+    'nested-reference-authorization', 'nested-reference-model-api-key',
+    'project-nested-api-key', 'project-nested-api-key-snake', 'project-nested-api-key-upper',
+    'project-nested-refresh-token', 'prompt-nested-api-key', 'prompt-nested-api-key-snake',
+    'prompt-nested-api-key-upper', 'prompt-nested-refresh-token', 'nested-reference-api-key',
+    'nested-reference-api-key-snake', 'nested-reference-api-key-upper', 'nested-reference-refresh-token',
+    'knowledge-nested-api-key', 'knowledge-nested-api-key-snake', 'knowledge-nested-api-key-upper',
+    'knowledge-nested-refresh-token', 'case-nested-api-key', 'case-nested-api-key-snake',
+    'case-nested-api-key-upper', 'case-nested-refresh-token'
   ];
   for (const credential of credentials) assert.equal(serialized.includes(credential), false, `不应导出 ${credential}`);
   assert.equal(Object.hasOwn(backup.data, 'knowledgeMetadata'), true);
