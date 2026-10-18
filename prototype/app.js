@@ -25,7 +25,22 @@ function selectKnowledgeEntries(state, ids, limit = 5) {
   for (const id of Array.isArray(ids) ? ids : []) { if (available.has(id) && !selected.includes(id)) selected.push(id); if (selected.length >= max) break; }
   return { ...cloneKnowledgeState(state), knowledgeSelection: selected };
 }
-const knowledgeManagementApi = { toggleKnowledgeFavorite, toggleKnowledgePinned, markKnowledgeUsed, hideKnowledgeEntry, restoreKnowledgeEntry, deleteKnowledgeEntries, selectKnowledgeEntries };
+function buildManualKnowledgeEntry(previousEntry, fields, normalizeKnowledgeEntry) {
+  const editableFields = {
+    type: fields.type,
+    title: fields.title,
+    sourceUrl: fields.sourceUrl,
+    domains: fields.domains,
+    stages: fields.stages,
+    keywords: fields.keywords,
+    summary: fields.summary,
+    reusablePatterns: fields.reusablePatterns,
+    limitations: fields.limitations,
+    licenseNote: fields.licenseNote
+  };
+  return normalizeKnowledgeEntry({ ...previousEntry, ...editableFields });
+}
+const knowledgeManagementApi = { toggleKnowledgeFavorite, toggleKnowledgePinned, markKnowledgeUsed, hideKnowledgeEntry, restoreKnowledgeEntry, deleteKnowledgeEntries, selectKnowledgeEntries, buildManualKnowledgeEntry };
 if (typeof module === "object" && module.exports) module.exports = knowledgeManagementApi;
 if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement = knowledgeManagementApi;
 
@@ -970,22 +985,28 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       toast("来源链接必须是 http:// 或 https:// 开头");
       return;
     }
-    const entry = knowledgeSchemaApi.normalizeKnowledgeEntry({
-      // 手动添加的条目复用现有随机 id 模式，避免同毫秒批量添加时 Date.now() 撞 id。
-      id: editingId || `manual-${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
+    const fields = {
       type: value("knowledge-entry-type"),
       title: value("knowledge-entry-title"),
       sourceUrl: rawSourceUrl,
-      sourceType: "用户添加",
       domains: value("knowledge-entry-domains"),
       stages: value("knowledge-entry-stages"),
       keywords: value("knowledge-entry-keywords"),
       summary: value("knowledge-entry-summary"),
       reusablePatterns: value("knowledge-entry-patterns"),
       limitations: value("knowledge-entry-limitations"),
-      licenseNote: value("knowledge-entry-license"),
-      verificationStatus: "unverified"
-    });
+      licenseNote: value("knowledge-entry-license")
+    };
+    const previousEntry = editingId ? state.knowledgeEntries.find(item => item.id === editingId) : null;
+    const entry = editingId
+      ? buildManualKnowledgeEntry(previousEntry || {}, fields, knowledgeSchemaApi.normalizeKnowledgeEntry)
+      : knowledgeSchemaApi.normalizeKnowledgeEntry({
+        // 手动添加的条目复用现有随机 id 模式，避免同毫秒批量添加时 Date.now() 撞 id。
+        id: `manual-${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
+        ...fields,
+        sourceType: "用户添加",
+        verificationStatus: "unverified"
+      });
     if (!entry.title || !entry.summary) { toast("标题和短摘要必填"); return; }
     state = editingId ? { ...state, knowledgeEntries: state.knowledgeEntries.map(item => item.id === editingId ? entry : item) } : { ...state, knowledgeEntries: [entry, ...state.knowledgeEntries] };
     if (!persist()) return;

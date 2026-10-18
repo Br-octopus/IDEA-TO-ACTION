@@ -4,7 +4,8 @@ const vm = require('node:vm');
 const appSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
 const managementContext = { Date };
 vm.runInNewContext(appSource.slice(0, appSource.indexOf('(() => {')), managementContext);
-const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries'].map(name => [name, managementContext[name]]));const { createBackup, validateBackup, replaceState } = require('../prototype/workspace-backup.js');
+const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry'].map(name => [name, managementContext[name]]));
+const { normalizeKnowledgeEntry } = require('../prototype/knowledge-schema.js');const { createBackup, validateBackup, replaceState } = require('../prototype/workspace-backup.js');
 
 function state() {
   return { knowledgeEntries: [
@@ -15,6 +16,50 @@ function state() {
   ], knowledgeSelection: [] };
 }
 
+test('编辑手动资料保留管理和来源元数据并更新表单字段', () => {
+  const previousEntry = normalizeKnowledgeEntry({
+    id: 'manual-stable-id',
+    type: 'manual-note',
+    title: '旧标题',
+    sourceUrl: 'https://old.example.com',
+    sourceType: '用户添加',
+    sourceKind: 'manual',
+    sourceId: 'source-stable-id',
+    favorite: true,
+    pinned: true,
+    lastUsedAt: '2026-10-18T01:02:03.000Z',
+    hiddenAt: '2026-10-18T02:00:00.000Z',
+    createdAt: '2026-10-01T00:00:00.000Z',
+    linkedCaseId: 'case-stable-id',
+    summary: '旧摘要'
+  });
+  const edited = management.buildManualKnowledgeEntry(previousEntry, {
+    type: 'manual-note',
+    title: '新标题',
+    sourceUrl: 'https://new.example.com',
+    domains: '软件开发',
+    stages: '执行',
+    keywords: '编辑,元数据',
+    summary: '新摘要',
+    reusablePatterns: '新模式',
+    limitations: '新限制',
+    licenseNote: 'MIT'
+  }, normalizeKnowledgeEntry);
+
+  assert.equal(edited.id, previousEntry.id);
+  assert.equal(edited.title, '新标题');
+  assert.equal(edited.summary, '新摘要');
+  assert.equal(edited.sourceUrl, 'https://new.example.com');
+  assert.deepEqual(edited.domains, ['软件开发']);
+  assert.equal(edited.favorite, true);
+  assert.equal(edited.pinned, true);
+  assert.equal(edited.lastUsedAt, previousEntry.lastUsedAt);
+  assert.equal(edited.hiddenAt, previousEntry.hiddenAt);
+  assert.equal(edited.createdAt, previousEntry.createdAt);
+  assert.equal(edited.sourceKind, 'manual');
+  assert.equal(edited.sourceId, 'source-stable-id');
+  assert.equal(edited.linkedCaseId, 'case-stable-id');
+});
 test('资料管理动作不可变且只更新目标条目', () => {
   const current = state();
   const before = JSON.stringify(current);
