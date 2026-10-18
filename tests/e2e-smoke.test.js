@@ -174,3 +174,18 @@ test('入口文件和本地服务的无模型/无搜索降级可验证', async t
   assert.deepEqual(search.results, []);
   assert.match(search.message, /复制搜索指令/);
 });
+
+
+test('浏览器导入入口先确认安全备份，再打开文件选择并导入', () => {
+  const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
+  const importStart = app.indexOf('async function importKnowledgeBackup()');
+  const changeStart = app.indexOf('document.getElementById("knowledge-import-file").addEventListener');
+  const importBlock = app.slice(importStart, changeStart);
+  assert.ok(importBlock.indexOf('await createSafetyBackup();') < importBlock.indexOf('.click();'), '必须先完成安全备份确认再打开文件选择器');
+  assert.ok(importBlock.includes('browserImportGate.confirmed = true;'), '确认成功后必须显式放行');
+  assert.ok(importBlock.includes('document.getElementById("knowledge-import-file").click();'), '确认后才打开文件选择器');
+  assert.ok(importBlock.indexOf('if (!desktopApi)') < importBlock.indexOf('await createSafetyBackup();'), '桌面模式不应走浏览器安全门禁');
+  assert.ok(app.includes('consumeBrowserImportGate(importGate);'), 'change 和导入函数必须保留令牌防御检查');
+  assert.ok(app.includes('browserImportGate = null;'), '令牌必须在 change 前后清理，防止重复导入');
+  assert.ok(app.indexOf('consumeBrowserImportGate(importGate);') < app.indexOf('await importBackupContent(await file.text(), importGate);'), '未通过令牌检查不能调用导入');
+});

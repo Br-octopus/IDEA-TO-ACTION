@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const appSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
 const managementContext = { Date };
 vm.runInNewContext(appSource.slice(0, appSource.indexOf('(() => {')), managementContext);
-const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
+const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'consumeBrowserImportGate', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
 const { normalizeKnowledgeEntry } = require('../prototype/knowledge-schema.js');const { createBackup, validateBackup, replaceState } = require('../prototype/workspace-backup.js');
 
 function state() {
@@ -104,6 +104,14 @@ test('浏览器安全备份未确认时阻断导入写入', async () => {
     writes += 1;
   }, error => String(error).includes('未确认已保存安全备份'));
   assert.equal(writes, 0);
+});
+
+test('浏览器导入令牌只能显式确认后消费一次', () => {
+  const gate = { confirmed: false, used: false };
+  assert.throws(() => management.consumeBrowserImportGate(gate), error => String(error.message || error).includes('未确认已保存安全备份'));
+  gate.confirmed = true;
+  assert.equal(management.consumeBrowserImportGate(gate), true);
+  assert.throws(() => management.consumeBrowserImportGate(gate), error => String(error.message || error).includes('未确认已保存安全备份'));
 });
 
 test('非法导入在校验前后都不替换当前状态', () => {
