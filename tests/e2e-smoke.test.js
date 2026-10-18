@@ -42,6 +42,12 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
   const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
   assert.ok(app.includes('data-knowledge-edit'), '手动资料应提供编辑入口');
   assert.ok(app.includes('data-knowledge-source'), '派生资料应提供编辑原始来源入口');
+  assert.ok(app.includes('data-knowledge-edit'), '手动资料编辑按钮必须存在');
+  assert.ok(app.includes('beginKnowledgeEntryEdit(entry)'), '手动资料编辑按钮必须绑定可执行事件');
+  assert.ok(app.includes('data-knowledge-source'), '派生资料来源按钮必须存在');
+  assert.ok(app.includes('handleKnowledgeSourceAction(entry)'), '派生资料来源按钮必须绑定可执行事件');
+  assert.ok(app.includes('knowledgeForm.dataset.editId = entry.id'), '手动资料编辑必须设置 edit id');
+  assert.match(app, /当前来源暂不支持直接编辑，资料卡和原始项目均未删除/, '不可编辑来源必须给出明确提示');
   assert.ok(html.includes('不要粘贴完整仓库'), '应提示不要粘贴完整仓库');
   for (const copy of [
     '本地资料库',

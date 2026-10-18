@@ -135,6 +135,20 @@ test('非法导入在校验前后都不替换当前状态', () => {
   assert.equal(replaceState(current, createBackup(current, { scope: 'knowledge-base' })).knowledgeEntries[0].id, 'manual-1');
 });
 
+test('资料卡编辑和来源事件分支可执行且来源分支不删除原始项目', () => {
+  assert.ok(appSource.includes('data-knowledge-edit'));
+  assert.ok(appSource.includes('beginKnowledgeEntryEdit(entry)'));
+  assert.ok(appSource.includes('knowledgeForm.dataset.editId = entry.id'));
+  assert.ok(appSource.includes('data-knowledge-source'));
+  assert.ok(appSource.includes('handleKnowledgeSourceAction(entry)'));
+  assert.ok(appSource.includes('function handleKnowledgeSourceAction'));
+  assert.ok(appSource.includes('未执行任何删除操作'));
+  const sourceBranch = appSource.slice(appSource.indexOf('function handleKnowledgeSourceAction'), appSource.indexOf('function saveKnowledgeEntry'));
+  assert.equal(sourceBranch.includes('deleteKnowledgeEntries'), false);
+  assert.equal(sourceBranch.includes('state.cases ='), false);
+  assert.equal(sourceBranch.includes('state.projects ='), false);
+});
+
 test('导出备份支持 workspace 和 knowledge-base 范围', () => {
   const current = { ...state(), projects: [{ id: 'project-1' }], prompts: [], cases: [], references: [] };
   assert.equal(createBackup(current, { scope: 'workspace' }).scope, 'workspace');
