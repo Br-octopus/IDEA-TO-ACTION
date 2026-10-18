@@ -13,7 +13,8 @@
   const CASE_FIELDS = [
     "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
     "externalResult", "userFeedback", "dimensions", "evidence", "suggestedLabel", "status",
-    "lessons", "nextPrompt", "createdAt"
+    "lessons", "nextPrompt", "createdAt", "currentVersion", "versionHistory",
+    "applicableWhen", "notApplicableWhen", "reviewCount", "lastReviewedAt", "changeNote"
   ];
 
   function createEmptyState() {
@@ -134,6 +135,33 @@
     return [];
   }
 
+  function positiveInteger(value, fallback) {
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : fallback;
+  }
+
+  function nonNegativeInteger(value, fallback) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 0 ? number : fallback;
+  }
+
+  function createCaseVersionSnapshot(caseItem, version, changeNote = "") {
+    const {
+      versionHistory,
+      currentVersion,
+      reviewCount,
+      lastReviewedAt,
+      confirmed,
+      confirmedAt,
+      ...snapshot
+    } = caseItem;
+    return {
+      ...snapshot,
+      version,
+      changeNote: String(changeNote || "").trim()
+    };
+  }
+
   function normalizeCase(reviewedCase = {}) {
     const source = stripModelKeys(reviewedCase);
     const after = source.after ?? source.externalResult ?? "";
@@ -158,7 +186,14 @@
       status,
       lessons: String(source.lessons ?? "").trim(),
       nextPrompt: String(source.nextPrompt ?? "").trim(),
-      createdAt: String(source.createdAt ?? "").trim() || new Date().toISOString()
+      createdAt: String(source.createdAt ?? "").trim() || new Date().toISOString(),
+      currentVersion: positiveInteger(source.currentVersion, 1),
+      versionHistory: Array.isArray(source.versionHistory) ? source.versionHistory : [],
+      applicableWhen: listValue(source.applicableWhen),
+      notApplicableWhen: listValue(source.notApplicableWhen),
+      reviewCount: nonNegativeInteger(source.reviewCount, 0),
+      lastReviewedAt: String(source.lastReviewedAt ?? "").trim(),
+      changeNote: String(source.changeNote ?? "").trim()
     };
   }
 
@@ -263,7 +298,17 @@
     const caseId = reviewedCase.id.trim();
     if (next.cases.some(item => typeof item.id === "string" && item.id.trim() === caseId)) return next;
     const sanitizedCase = normalizeCase({ ...reviewedCase, id: caseId });
-    next.cases.unshift({ ...sanitizedCase, confirmed: true, confirmedAt: new Date().toISOString() });
+    const confirmedAt = new Date().toISOString();
+    const versionOne = createCaseVersionSnapshot(sanitizedCase, 1, sanitizedCase.changeNote);
+    next.cases.unshift({
+      ...sanitizedCase,
+      currentVersion: 1,
+      versionHistory: [versionOne],
+      reviewCount: 1,
+      lastReviewedAt: confirmedAt,
+      confirmed: true,
+      confirmedAt
+    });
     return next;
   }
 
@@ -275,8 +320,30 @@
     const index = next.cases.findIndex(item => item.id === caseId);
     if (index < 0) return next;
     const existing = next.cases[index];
-    const merged = normalizeCase({ ...existing, ...reviewedCase, id: caseId, createdAt: existing.createdAt });
-    next.cases[index] = { ...merged, confirmed: true, confirmedAt: existing.confirmedAt || new Date().toISOString() };
+    const currentVersion = positiveInteger(existing.currentVersion, 1);
+    const nextVersion = currentVersion + 1;
+    const changeNote = String(reviewedCase.changeNote ?? "").trim();
+    const merged = normalizeCase({
+      ...existing,
+      ...reviewedCase,
+      id: caseId,
+      createdAt: existing.createdAt,
+      changeNote
+    });
+    const versionHistory = Array.isArray(existing.versionHistory) && existing.versionHistory.length > 0
+      ? existing.versionHistory.slice()
+      : [createCaseVersionSnapshot(existing, currentVersion, existing.changeNote)];
+    versionHistory.push(createCaseVersionSnapshot(merged, nextVersion, changeNote));
+    const lastReviewedAt = new Date().toISOString();
+    next.cases[index] = {
+      ...merged,
+      currentVersion: nextVersion,
+      versionHistory,
+      reviewCount: nonNegativeInteger(existing.reviewCount, 0) + 1,
+      lastReviewedAt,
+      confirmed: true,
+      confirmedAt: existing.confirmedAt || lastReviewedAt
+    };
     return next;
   }
 

@@ -21,6 +21,10 @@
     USER_CONFIRMED: "user-confirmed"
   });
 
+  const SOURCE_KINDS = Object.freeze([
+    "manual", "prompt", "case", "method-card", "reference"
+  ]);
+
   function listValue(value) {
     if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean);
     return String(value || "").split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
@@ -40,6 +44,7 @@
     const type = Object.values(KNOWLEDGE_TYPES).includes(source.type)
       ? source.type
       : KNOWLEDGE_TYPES.MANUAL_NOTE;
+    const sourceKind = SOURCE_KINDS.includes(source.sourceKind) ? source.sourceKind : "manual";
     const verificationStatus = Object.values(VERIFICATION_STATES).includes(source.verificationStatus)
       ? source.verificationStatus
       : VERIFICATION_STATES.UNVERIFIED;
@@ -50,6 +55,13 @@
       title: String(source.title || "").trim(),
       sourceUrl: String(source.sourceUrl || source.url || "").trim(),
       sourceType: String(source.sourceType || "用户添加").trim(),
+      sourceKind,
+      sourceId: String(source.sourceId || "").trim(),
+      hiddenAt: String(source.hiddenAt || "").trim(),
+      favorite: source.favorite === true,
+      pinned: source.pinned === true,
+      lastUsedAt: String(source.lastUsedAt || "").trim(),
+      customAliases: listValue(source.customAliases),
       domains: listValue(source.domains),
       stages: listValue(source.stages),
       keywords: listValue(source.keywords),

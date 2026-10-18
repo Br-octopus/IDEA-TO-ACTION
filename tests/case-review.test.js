@@ -74,6 +74,21 @@ test('未确认案例不进入 cases，明确确认后进入且字段完整', ()
   }
 });
 
+test('首次确认案例创建 v1 版本', () => {
+  const confirmed = confirmCase(createEmptyState(), {
+    id: 'case-v1',
+    status: '失败',
+    goal: '目标',
+    evidence: ['初始证据'],
+    lessons: '初始经验'
+  }, true);
+
+  assert.equal(confirmed.cases[0].currentVersion, 1);
+  assert.equal(confirmed.cases[0].versionHistory.length, 1);
+  assert.equal(confirmed.cases[0].versionHistory[0].version, 1);
+  assert.equal(confirmed.cases[0].versionHistory[0].status, '失败');
+});
+
 test('案例确认会为不完整输入补齐统一字段，页面提供完整确认动作', () => {
   const confirmed = confirmCase(createEmptyState(), { id: 'sparse-case' }, true);
   for (const field of [
@@ -116,6 +131,32 @@ test('修改判断更新已有案例结论但不产生重复 id', () => {
   assert.equal(updated.cases[0].suggestedLabel, '失败：保留项丢失');
   assert.deepEqual(updated.cases[0].evidence, ['第二个步骤被删除']);
   assert.equal(repeated.cases.length, 1);
+});
+
+test('修改案例生成新版本并保留旧版本', () => {
+  const first = confirmCase(createEmptyState(), {
+    id: 'case-versioned',
+    status: '失败',
+    goal: '目标',
+    evidence: ['旧证据'],
+    lessons: '旧经验'
+  }, true);
+  const second = updateCase(first, {
+    id: 'case-versioned',
+    status: '成功',
+    evidence: ['新证据'],
+    lessons: '新经验',
+    changeNote: '补充第二次测试'
+  });
+
+  assert.equal(second.cases[0].currentVersion, 2);
+  assert.equal(second.cases[0].versionHistory.length, 2);
+  assert.equal(second.cases[0].versionHistory[0].status, '失败');
+  assert.equal(second.cases[0].versionHistory[0].lessons, '旧经验');
+  assert.equal(second.cases[0].versionHistory[1].status, '成功');
+  assert.equal(second.cases[0].versionHistory[1].lessons, '新经验');
+  assert.equal(second.cases[0].versionHistory[1].changeNote, '补充第二次测试');
+  assert.equal(second.cases[0].changeNote, '补充第二次测试');
 });
 
 test('只有用户确认的成功或失败案例进入可复用案例检索', () => {
