@@ -25,6 +25,7 @@
       ["失败", "问题", "failure", "issue", "problem"]
     ];
     const cjkPattern = /[\u3400-\u9fff]/u;
+    const cjkRunPattern = /[\u3400-\u9fff]+/g;
     const add = (target, value) => {
       const term = String(value || "").trim().toLocaleLowerCase();
       if (term && !target.includes(term)) target.push(term);
@@ -46,6 +47,9 @@
           for (const item of segmenter.segment(source)) {
             if (cjkPattern.test(item.segment)) addChinese(item.segment);
             else if (/[a-z0-9]/i.test(item.segment)) add(terms, item.segment);
+          }
+          for (const run of source.match(cjkRunPattern) || []) {
+            if ([...run].length <= 4) addChinese(run);
           }
           return terms;
         } catch {

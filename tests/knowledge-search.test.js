@@ -521,6 +521,37 @@ test('正式词典和旧入口回退对条目及选项自定义别名保持一�
   }
 });
 
+test('正式词典和旧入口回退在 Intl.Segmenter 可用时保持完整结果一致', () => {
+  const entries = [
+    { id: 'a', title: '完成标准测试', customAliases: ['验收门槛'] },
+    { id: 'b', title: '成标准' },
+    { id: 'c', title: '中文搜索案例' }
+  ];
+  const dictionaryApi = loadBrowserKnowledgeSearch().ForwardStepKnowledgeSearch;
+  const fallbackApi = loadBrowserKnowledgeSearch(Intl.Segmenter, { includeDictionary: false }).ForwardStepKnowledgeSearch;
+  const cases = [
+    { query: '完成标准' },
+    { query: '中文 搜索' },
+    { query: '验收门槛' },
+    { query: '外号', options: { aliases: { '完成标准测试': ['外号'] } } }
+  ];
+
+  for (const { query, options } of cases) {
+    const select = result => result.map(item => ({
+      id: item.id,
+      score: item.score,
+      queryTerms: item.queryTerms,
+      matchedTerms: item.matchedTerms,
+      highlightFields: item.highlightFields
+    }));
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(select(dictionaryApi.searchKnowledge(entries, query, options)))),
+      JSON.parse(JSON.stringify(select(fallbackApi.searchKnowledge(entries, query, options)))),
+      `搜索结果不一致: ${query}`
+    );
+  }
+});
+
 test('浏览器 UMD 搜索在不稳定 sort 下仍保持并列结果输入顺序', () => {
   const context = loadBrowserKnowledgeSearch(undefined, { unstableSort: true });
   const api = context.ForwardStepKnowledgeSearch;
