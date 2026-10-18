@@ -49,6 +49,7 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
 test('资料库备份只包含资料、案例和资料相关状态', () => {
   const backup = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
 
+  assert.equal(validateBackup(backup), true);
   assert.equal(backup.scope, 'knowledge-base');
   assert.equal(backup.data.knowledgeEntries.length, 1);
   assert.equal(backup.data.cases.length, 1);
@@ -57,6 +58,16 @@ test('资料库备份只包含资料、案例和资料相关状态', () => {
   assert.equal(Object.hasOwn(backup.data, 'projects'), false);
   assert.equal(Object.hasOwn(backup.data, 'prompts'), false);
   assert.equal(Object.hasOwn(backup.data, 'references'), false);
+});
+
+test('空 workspace 和 knowledge-base 备份包含合法的选择和筛选状态', () => {
+  for (const scope of ['workspace', 'knowledge-base']) {
+    const backup = createBackup({}, { scope, now: exportedAt });
+
+    assert.equal(validateBackup(backup), true);
+    assert.deepEqual(backup.data.knowledgeSelection, []);
+    assert.deepEqual(backup.data.knowledgeFilters, {});
+  }
 });
 
 test('非法备份会被拒绝', () => {
@@ -70,6 +81,42 @@ test('非法备份会被拒绝', () => {
     counts: {},
     data: { projects: [] }
   }), /核心数据/);
+});
+
+test('缺少 workspace 或 knowledge-base 的选择和筛选状态会被拒绝', () => {
+  for (const scope of ['workspace', 'knowledge-base']) {
+    const backup = createBackup(createState(), { scope, now: exportedAt });
+    delete backup.data.knowledgeSelection;
+    assert.throws(() => validateBackup(backup), /选择/);
+
+    const backupWithoutFilters = createBackup(createState(), { scope, now: exportedAt });
+    delete backupWithoutFilters.data.knowledgeFilters;
+    assert.throws(() => validateBackup(backupWithoutFilters), /筛选/);
+  }
+});
+
+test('核心集合类型错误或 counts 与实际长度不一致会被拒绝', () => {
+  const wrongArrayType = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  wrongArrayType.data.projects = {};
+  assert.throws(() => validateBackup(wrongArrayType), /核心数据/);
+
+  const wrongFilterType = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+  wrongFilterType.data.knowledgeFilters = [];
+  assert.throws(() => validateBackup(wrongFilterType), /筛选/);
+
+  const wrongCounts = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  wrongCounts.counts.projects = 99;
+  assert.throws(() => validateBackup(wrongCounts), /统计/);
+});
+
+test('集合条目缺少或包含非法稳定 id 会被拒绝', () => {
+  const missingId = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  missingId.data.prompts[0].id = '';
+  assert.throws(() => validateBackup(missingId), /id/);
+
+  const invalidId = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+  invalidId.data.knowledgeEntries[0].id = 42;
+  assert.throws(() => validateBackup(invalidId), /id/);
 });
 
 test('备份摘要返回范围和各类数量', () => {
@@ -129,4 +176,31 @@ test('合并按 id 去重，保留当前数据并报告新增、跳过和冲突'
   assert.deepEqual(result.skipped, []);
   assert.deepEqual(result.conflicts, ['p1', 'prompt-1']);
   assert.deepEqual(currentState, JSON.parse(currentBefore));
+});
+
+test('合并兼容旧状态时保留无效当前条目并报告可追踪的 skipped', () => {
+  const currentState = {
+    projects: [{ title: '旧项目，没有 id' }],
+    prompts: [],
+    cases: [],
+    knowledgeEntries: []
+  };
+  const backup = createBackup({
+    projects: [{ id: 'p2', title: '新项目' }],
+    prompts: [],
+    cases: [],
+    knowledgeEntries: []
+  }, { scope: 'workspace', now: exportedAt });
+
+  const result = mergeState(currentState, backup);
+
+  assert.equal(result.state.projects.length, 2);
+  assert.equal(result.state.projects[0].title, '旧项目，没有 id');
+  assert.deepEqual(result.skipped, [{
+    collection: 'projects',
+    index: 0,
+    id: null,
+    reason: 'current-invalid-id'
+  }]);
+  assert.deepEqual(result.added, ['p2']);
 });

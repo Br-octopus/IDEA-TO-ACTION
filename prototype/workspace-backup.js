@@ -9,7 +9,8 @@
   const FORMAT = "forward-step-workspace";
   const SCHEMA_VERSION = 1;
   const SCOPES = new Set(["workspace", "knowledge-base"]);
-  const ENTITY_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
+  const WORKSPACE_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
+  const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeSelection", "knowledgeFilters",
     "knowledgeMetadata", "caseFilters", "filterState"
@@ -33,10 +34,16 @@
   }
 
   function selectKnowledgeData(state) {
-    return KNOWLEDGE_DATA_FIELDS.reduce((data, field) => {
+    const data = {
+      knowledgeEntries: Array.isArray(state.knowledgeEntries) ? clone(state.knowledgeEntries) : [],
+      cases: Array.isArray(state.cases) ? clone(state.cases) : [],
+      knowledgeSelection: Array.isArray(state.knowledgeSelection) ? clone(state.knowledgeSelection) : [],
+      knowledgeFilters: isObject(state.knowledgeFilters) ? clone(state.knowledgeFilters) : {}
+    };
+    return KNOWLEDGE_DATA_FIELDS.reduce((result, field) => {
       if (Object.hasOwn(state, field)) data[field] = clone(state[field]);
-      return data;
-    }, {});
+      return result;
+    }, data);
   }
 
   function countData(data) {
@@ -51,9 +58,16 @@
   function createBackup(state, { scope = "workspace", appVersion = "", now } = {}) {
     if (!SCOPES.has(scope)) throw new TypeError("备份范围无效");
     const sanitized = sanitizeState(state);
-    const data = scope === "workspace" ? sanitized : selectKnowledgeData(sanitized);
+    const data = scope === "workspace"
+      ? {
+        ...sanitized,
+        researchSelection: Array.isArray(sanitized.researchSelection) ? clone(sanitized.researchSelection) : [],
+        knowledgeSelection: Array.isArray(sanitized.knowledgeSelection) ? clone(sanitized.knowledgeSelection) : [],
+        knowledgeFilters: isObject(sanitized.knowledgeFilters) ? clone(sanitized.knowledgeFilters) : {}
+      }
+      : selectKnowledgeData(sanitized);
     const exportedAt = new Date(now === undefined ? Date.now() : now).toISOString();
-    return {
+    const backup = {
       format: FORMAT,
       schemaVersion: SCHEMA_VERSION,
       appVersion: String(appVersion ?? ""),
@@ -62,6 +76,31 @@
       counts: countData(data),
       data
     };
+    validateBackup(backup);
+    return backup;
+  }
+
+  function validateCollection(data, field) {
+    if (!Array.isArray(data[field])) throw new TypeError(`备份核心数据无效：${field}`);
+    data[field].forEach((item, index) => {
+      if (!isObject(item) || typeof item.id !== "string" || !item.id.trim()) {
+        throw new TypeError(`备份集合条目稳定 id 无效：${field}[${index}]`);
+      }
+    });
+  }
+
+  function validateSelection(data, field) {
+    if (!Array.isArray(data[field]) || data[field].some(id => typeof id !== "string" || !id.trim())) {
+      throw new TypeError(`备份选择状态无效：${field}`);
+    }
+  }
+
+  function validateCounts(data, counts, collections) {
+    for (const field of collections) {
+      if (!Number.isInteger(counts[field]) || counts[field] < 0 || counts[field] !== data[field].length) {
+        throw new TypeError(`备份统计无效：${field}`);
+      }
+    }
   }
 
   function validateBackup(value) {
@@ -75,12 +114,12 @@
     if (!SCOPES.has(value.scope)) throw new TypeError("备份范围无效");
     if (!isObject(value.counts) || !isObject(value.data)) throw new TypeError("备份统计或数据无效");
 
-    const requiredFields = value.scope === "workspace"
-      ? ["projects", "prompts", "cases", "knowledgeEntries"]
-      : ["knowledgeEntries", "cases"];
-    for (const field of requiredFields) {
-      if (!Array.isArray(value.data[field])) throw new TypeError(`备份核心数据无效：${field}`);
-    }
+    const collections = value.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
+    collections.forEach(field => validateCollection(value.data, field));
+    validateCounts(value.data, value.counts, collections);
+    validateSelection(value.data, "knowledgeSelection");
+    if (value.scope === "workspace") validateSelection(value.data, "researchSelection");
+    if (!isObject(value.data.knowledgeFilters)) throw new TypeError("备份筛选状态无效：knowledgeFilters");
     return true;
   }
 
@@ -100,18 +139,28 @@
     return { ...(isObject(currentState) ? clone(currentState) : {}), ...data };
   }
 
-  function mergeCollection(currentItems, incomingItems, report) {
+  function mergeCollection(currentItems, incomingItems, report, collection) {
     const current = Array.isArray(currentItems) ? clone(currentItems) : [];
     const incoming = Array.isArray(incomingItems) ? incomingItems : [];
-    const knownIds = new Set(current
-      .map(item => item && typeof item.id === "string" ? item.id : "")
-      .filter(Boolean));
+    const knownIds = new Set();
+    current.forEach((item, index) => {
+      const id = item && typeof item.id === "string" ? item.id.trim() : "";
+      if (!id) {
+        report.skipped.push({ collection, index, id: null, reason: "current-invalid-id" });
+        return;
+      }
+      knownIds.add(id);
+    });
     const importedIds = new Set();
 
-    for (const item of incoming) {
+    for (const [index, item] of incoming.entries()) {
       const id = item && typeof item.id === "string" ? item.id.trim() : "";
-      if (!id || importedIds.has(id)) {
-        if (id) report.skipped.push(id);
+      if (!id) {
+        report.skipped.push({ collection, index, id: null, reason: "incoming-invalid-id" });
+        continue;
+      }
+      if (importedIds.has(id)) {
+        report.skipped.push(id);
         continue;
       }
       importedIds.add(id);
@@ -135,13 +184,11 @@
     const state = isObject(currentState) ? clone(currentState) : {};
     const data = backup.data;
     const report = { added: [], skipped: [], conflicts: [] };
-    const collections = backup.scope === "workspace"
-      ? ENTITY_COLLECTIONS
-      : ["knowledgeEntries", "cases"];
+    const collections = backup.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
 
     for (const field of collections) {
       if (Array.isArray(data[field])) {
-        state[field] = mergeCollection(state[field], data[field], report);
+        state[field] = mergeCollection(state[field], data[field], report, field);
       }
     }
 
