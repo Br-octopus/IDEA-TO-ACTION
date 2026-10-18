@@ -168,21 +168,30 @@
 
   function hasCaseVersionChange(previousCase, nextCase) {
     return CASE_VERSION_FIELDS.some(field => (
-      JSON.stringify(previousCase[field]) !== JSON.stringify(nextCase[field])
+      !sameCaseValue(previousCase[field], nextCase[field])
     ));
   }
 
-  function hasValidCaseVersionHistory(versionHistory, currentVersion, reviewCount, lastReviewedAt) {
+  function sameCaseValue(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function hasValidCaseVersionHistory(caseItem) {
+    const { versionHistory, currentVersion, reviewCount, lastReviewedAt } = caseItem;
     const targetVersion = positiveInteger(currentVersion, 0);
     if (!Array.isArray(versionHistory) || versionHistory.length === 0 || versionHistory.length !== targetVersion) {
       return false;
     }
     if (positiveInteger(reviewCount, 0) <= 0 || !String(lastReviewedAt ?? "").trim()) return false;
-    return versionHistory.every((version, index) => (
+    const hasContinuousVersions = versionHistory.every((version, index) => (
       version
       && typeof version === "object"
       && positiveInteger(version.version, 0) === index + 1
     ));
+    if (!hasContinuousVersions) return false;
+
+    const latestVersion = versionHistory[versionHistory.length - 1];
+    return CASE_VERSION_FIELDS.every(field => sameCaseValue(latestVersion[field], caseItem[field]));
   }
 
   function migrateConfirmedCase(reviewedCase) {
@@ -191,12 +200,7 @@
     const createdAt = String(reviewedCase.createdAt ?? normalized.createdAt ?? "").trim();
     const reviewedAt = confirmedAt || createdAt || new Date().toISOString();
 
-    if (hasValidCaseVersionHistory(
-      normalized.versionHistory,
-      normalized.currentVersion,
-      normalized.reviewCount,
-      normalized.lastReviewedAt
-    )) {
+    if (hasValidCaseVersionHistory(normalized)) {
       return {
         ...normalized,
         confirmed: true,

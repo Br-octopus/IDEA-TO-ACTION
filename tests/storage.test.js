@@ -182,13 +182,23 @@ test('已有有效案例版本历史的迁移不会重复覆盖版本元数据',
     {
       version: 1,
       status: '失败',
+      suggestedLabel: '初始结论',
       evidence: ['初始证据'],
+      lessons: '初始经验',
+      nextPrompt: '初始下一条提示词',
+      applicableWhen: ['初始适用场景'],
+      notApplicableWhen: ['初始不适用场景'],
       changeNote: '初始版本'
     },
     {
       version: 2,
       status: '成功',
+      suggestedLabel: '当前结论',
       evidence: ['补充证据'],
+      lessons: '当前经验',
+      nextPrompt: '当前下一条提示词',
+      applicableWhen: ['当前适用场景'],
+      notApplicableWhen: ['当前不适用场景'],
       changeNote: '补充版本'
     }
   ];
@@ -197,6 +207,12 @@ test('已有有效案例版本历史的迁移不会重复覆盖版本元数据',
       id: 'versioned-case',
       confirmed: true,
       status: '成功',
+      suggestedLabel: '当前结论',
+      evidence: ['补充证据'],
+      lessons: '当前经验',
+      nextPrompt: '当前下一条提示词',
+      applicableWhen: ['当前适用场景'],
+      notApplicableWhen: ['当前不适用场景'],
       currentVersion: 2,
       versionHistory,
       reviewCount: 3,
@@ -210,6 +226,60 @@ test('已有有效案例版本历史的迁移不会重复覆盖版本元数据',
   assert.deepEqual(migrated.versionHistory, versionHistory);
   assert.equal(migrated.reviewCount, 3);
   assert.equal(migrated.lastReviewedAt, '2026-10-12T00:00:00.000Z');
+});
+
+test('最新版本快照业务字段与当前案例不一致时迁移为一致的 v1', () => {
+  const state = migrateState({
+    cases: [{
+      id: 'stale-latest-version',
+      confirmed: true,
+      currentVersion: 2,
+      status: '成功',
+      suggestedLabel: '当前结论',
+      evidence: ['当前证据'],
+      lessons: '当前经验',
+      nextPrompt: '当前下一条提示词',
+      applicableWhen: ['当前适用场景'],
+      notApplicableWhen: ['当前不适用场景'],
+      versionHistory: [
+        {
+          version: 1,
+          status: '失败',
+          suggestedLabel: '初始结论',
+          evidence: ['初始证据'],
+          lessons: '初始经验',
+          nextPrompt: '初始下一条提示词',
+          applicableWhen: ['初始适用场景'],
+          notApplicableWhen: ['初始不适用场景']
+        },
+        {
+          version: 2,
+          status: '失败',
+          suggestedLabel: '过期结论',
+          evidence: ['过期证据'],
+          lessons: '过期经验',
+          nextPrompt: '过期下一条提示词',
+          applicableWhen: ['过期适用场景'],
+          notApplicableWhen: ['过期不适用场景']
+        }
+      ],
+      reviewCount: 2,
+      lastReviewedAt: '2026-10-12T00:00:00.000Z',
+      confirmedAt: '2026-10-13T00:00:00.000Z'
+    }]
+  });
+  const migrated = state.cases[0];
+
+  assert.equal(migrated.currentVersion, 1);
+  assert.equal(migrated.versionHistory.length, 1);
+  for (const field of [
+    'status', 'suggestedLabel', 'evidence', 'lessons', 'nextPrompt',
+    'applicableWhen', 'notApplicableWhen'
+  ]) {
+    assert.deepEqual(migrated.versionHistory[0][field], migrated[field], field);
+  }
+  assert.equal(migrated.reviewCount, 1);
+  assert.equal(migrated.lastReviewedAt, '2026-10-13T00:00:00.000Z');
 });
 
 test('不完整或不一致的案例版本历史迁移为一致的 v1 元数据', () => {
