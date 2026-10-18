@@ -439,6 +439,12 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     if (!sendDraft || !serviceConfig.model?.configured) return;
     const text = sendDraft.renderedText.trim();
     if (!text) { toast("发送内容不能为空"); return; }
+    const report = buildSendReport(buildSendSegments());
+    if (report.requiresConfirmation && !sendDraft.confirmedRisk) {
+      toast("请先确认高风险内容后再发送");
+      renderSendSafety(report);
+      return;
+    }
     const succeeded = await requestModel(text);
     if (succeeded) closeSendPanel();
   });

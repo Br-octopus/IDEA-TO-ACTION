@@ -1,5 +1,133 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
+
+function createSendPanelVm() {
+  const listeners = new Map();
+  const elements = new Map();
+  const checkbox = {
+    checked: false,
+    disabled: false
+  };
+  const makeElement = id => ({
+    id,
+    value: id === 'idea' ? '测试发送安全' : '',
+    checked: false,
+    hidden: false,
+    disabled: false,
+    dataset: {},
+    style: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
+    querySelector(selector) { return id === 'send-preview-confirmation' && selector === 'input' ? checkbox : null; },
+    querySelectorAll() { return []; },
+    append() {},
+    remove() {},
+    reset() {},
+    focus() {},
+    scrollIntoView() {},
+    click() {},
+    select() {}
+  });
+  const document = {
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, makeElement(id));
+      return elements.get(id);
+    },
+    querySelectorAll() { return []; },
+    createElement() { return makeElement('created'); },
+    body: { append() {} },
+    execCommand() { return true; }
+  };
+  const state = {
+    projects: [],
+    prompts: [],
+    cases: [],
+    references: [],
+    knowledgeEntries: [],
+    knowledgeSelection: [],
+    researchSelection: []
+  };
+  let modelCalls = 0;
+  let configCalls = 0;
+  const promptEngine = {
+    buildGoalPrompt() { return 'password=secret-value'; },
+    buildStagePrompt() { return ''; },
+    buildFollowupPrompt() { return ''; },
+    buildArticleDiagnosticPrompt() { return ''; },
+    buildPromptOptimizationPrompt() { return ''; },
+    buildCaseReviewPrompt() { return ''; },
+    appendKnowledgeContext(prompt) { return String(prompt); }
+  };
+  const fetch = async url => {
+    if (url === '/api/config') return { json: async () => ({ model: { configured: true, name: '测试模型' }, search: { configured: false } }) };
+    modelCalls += 1;
+    return { ok: true, json: async () => ({ text: '模型结果' }) };
+  };
+  const window = {
+    ForwardStepPromptEngine: promptEngine,
+    ForwardStepResearchCatalog: require('../prototype/research-catalog'),
+    ForwardStepMethodCards: require('../prototype/method-cards'),
+    ForwardStepKnowledgeSearch: {
+      collectKnowledgeEntries() { return []; },
+      searchKnowledge() { return []; }
+    },
+    ForwardStepStorage: {
+      STORAGE_KEY: 'test',
+      createEmptyState() { return state; },
+      loadState() { return { state }; },
+      saveState() { return state; },
+      addPromptVersion() {},
+      confirmCase() {},
+      updateCase() {},
+      upsertKnowledgeEntry() {}
+    },
+    ForwardStepWorkspaceBackup: {
+      createBackup() { return {}; },
+      getBackupSummary() { return { scope: 'workspace', counts: {} }; },
+      replaceState() { return state; },
+      mergeState() { return { state, added: [] }; }
+    },
+    desktopApi: {
+      async getConfig() { configCalls += 1; return { model: { configured: true, name: '测试模型' }, search: { configured: false } }; },
+      async requestModel() { modelCalls += 1; return { code: 'MODEL_FAILED', message: '测试失败' }; }
+    },
+    confirm() { return false; },
+    scrollTo() {}
+  };
+  const context = {
+    window,
+    document,
+    navigator: { clipboard: { writeText: async () => {} } },
+    crypto: { randomUUID: () => 'vm-project' },
+    fetch,
+    setTimeout: () => 1,
+    clearTimeout() {},
+    Date,
+    console
+  };
+  const source = fs.readFileSync(path.join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
+  const safety = require('../prototype/send-safety');
+  window.ForwardStepSendSafety = safety;
+  vm.runInNewContext(source, context, { filename: 'prototype/app.js' });
+  return {
+    listeners,
+    checkbox,
+    confirmButton: document.getElementById('send-preview-confirm'),
+    text: document.getElementById('send-preview-text'),
+    model: document.getElementById('send-preview-model'),
+    async waitForConfig() {
+      for (let index = 0; index < 4; index += 1) {
+        await new Promise(resolve => setImmediate(resolve));
+        await Promise.resolve();
+      }
+    },
+    get modelCalls() { return modelCalls; },
+    get configCalls() { return configCalls; }
+  };
+}
 
 const {
   estimateTokenCount,
@@ -67,4 +195,28 @@ test('高风险内容要求确认，且不修改原文', () => {
   assert.equal(report.requiresConfirmation, true);
   assert.ok(report.highRiskCount >= 1);
   assert.equal(report.segments[0].text, text);
+});
+
+test('发送 handler 在 VM 中拒绝未确认高风险，确认后才调用模型', async () => {
+  const vmApp = createSendPanelVm();
+  await vmApp.waitForConfig();
+  assert.equal(vmApp.configCalls, 1);
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.listeners.get('preview-master:click')();
+  assert.equal(vmApp.model.textContent, '测试模型');
+  assert.match(vmApp.text.value, /password=secret-value/);
+  const confirm = vmApp.listeners.get('send-preview-confirm:click');
+  await confirm({});
+  assert.equal(vmApp.modelCalls, 0, '未确认高风险时不得调用模型');
+  assert.equal(vmApp.confirmButton.disabled, true);
+
+  vmApp.checkbox.checked = true;
+  vmApp.listeners.get('send-preview-confirmation:change')({ target: vmApp.checkbox });
+  await confirm({});
+  assert.equal(vmApp.modelCalls, 1, '确认高风险后允许调用模型');
+
+  vmApp.text.value = 'password=another-secret';
+  vmApp.listeners.get('send-preview-text:input')({ target: vmApp.text });
+  await confirm({});
+  assert.equal(vmApp.modelCalls, 1, '编辑文本后必须清除旧确认，不能直接再次发送');
 });
