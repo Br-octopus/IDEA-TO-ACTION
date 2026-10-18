@@ -58,12 +58,27 @@
       }
       return terms;
     };
-    const groupFor = term => groups.find(group => group.includes(term)) || [term];
+    const normalizeGroups = options => {
+      const normalizedGroups = groups.map(group => group.slice());
+      const aliases = options && (options.aliases || options.customAliases);
+      if (!aliases || typeof aliases !== "object" || Array.isArray(aliases)) return normalizedGroups;
+      for (const [canonical, values] of Object.entries(aliases)) {
+        const group = [];
+        add(group, canonical);
+        for (const value of Array.isArray(values) ? values : [values]) add(group, value);
+        if (group.length) normalizedGroups.push(group);
+      }
+      return normalizedGroups;
+    };
+    const groupFor = (term, options) => {
+      const normalizedTerm = String(term || "").trim().toLocaleLowerCase();
+      return normalizeGroups(options).find(group => group.includes(normalizedTerm)) || [normalizedTerm];
+    };
     searchDictionary = {
       splitChineseTerms: split,
-      expandSearchTerms(query) {
+      expandSearchTerms(query, options) {
         const terms = split(query);
-        for (const term of terms) for (const alias of groupFor(term)) add(terms, alias);
+        for (const term of terms) for (const alias of groupFor(term, options)) add(terms, alias);
         return terms;
       },
       getTermGroup: groupFor

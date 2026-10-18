@@ -507,6 +507,20 @@ test('正式词典和旧入口回退在无 Intl.Segmenter 时保持搜索结果�
   );
 });
 
+test('正式词典和旧入口回退对条目及选项自定义别名保持一致', () => {
+  const entries = [{ id: 'prompt', title: '提示词', customAliases: ['口令'] }];
+  const options = { aliases: { 提示词: ['外号'] } };
+  const dictionaryApi = loadBrowserKnowledgeSearch(undefined).ForwardStepKnowledgeSearch;
+  const fallbackApi = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false }).ForwardStepKnowledgeSearch;
+
+  for (const query of ['口令', '外号']) {
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(entries, query, options))),
+      JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(entries, query, options)))
+    );
+  }
+});
+
 test('浏览器 UMD 搜索在不稳定 sort 下仍保持并列结果输入顺序', () => {
   const context = loadBrowserKnowledgeSearch(undefined, { unstableSort: true });
   const api = context.ForwardStepKnowledgeSearch;
