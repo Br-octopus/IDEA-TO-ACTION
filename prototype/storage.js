@@ -172,9 +172,16 @@
     ));
   }
 
-  function hasValidCaseVersionHistory(versionHistory) {
-    return Array.isArray(versionHistory) && versionHistory.some(version => (
-      version && typeof version === "object" && positiveInteger(version.version, 0) > 0
+  function hasValidCaseVersionHistory(versionHistory, currentVersion, reviewCount, lastReviewedAt) {
+    const targetVersion = positiveInteger(currentVersion, 0);
+    if (!Array.isArray(versionHistory) || versionHistory.length === 0 || versionHistory.length !== targetVersion) {
+      return false;
+    }
+    if (positiveInteger(reviewCount, 0) <= 0 || !String(lastReviewedAt ?? "").trim()) return false;
+    return versionHistory.every((version, index) => (
+      version
+      && typeof version === "object"
+      && positiveInteger(version.version, 0) === index + 1
     ));
   }
 
@@ -184,7 +191,12 @@
     const createdAt = String(reviewedCase.createdAt ?? normalized.createdAt ?? "").trim();
     const reviewedAt = confirmedAt || createdAt || new Date().toISOString();
 
-    if (hasValidCaseVersionHistory(normalized.versionHistory)) {
+    if (hasValidCaseVersionHistory(
+      normalized.versionHistory,
+      normalized.currentVersion,
+      normalized.reviewCount,
+      normalized.lastReviewedAt
+    )) {
       return {
         ...normalized,
         confirmed: true,

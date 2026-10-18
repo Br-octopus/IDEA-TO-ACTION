@@ -178,12 +178,20 @@ test('旧的已确认案例迁移后补齐 v1 版本元数据', () => {
 });
 
 test('已有有效案例版本历史的迁移不会重复覆盖版本元数据', () => {
-  const versionHistory = [{
-    version: 1,
-    status: '失败',
-    evidence: ['初始证据'],
-    changeNote: '初始版本'
-  }];
+  const versionHistory = [
+    {
+      version: 1,
+      status: '失败',
+      evidence: ['初始证据'],
+      changeNote: '初始版本'
+    },
+    {
+      version: 2,
+      status: '成功',
+      evidence: ['补充证据'],
+      changeNote: '补充版本'
+    }
+  ];
   const state = migrateState({
     cases: [{
       id: 'versioned-case',
@@ -202,6 +210,75 @@ test('已有有效案例版本历史的迁移不会重复覆盖版本元数据',
   assert.deepEqual(migrated.versionHistory, versionHistory);
   assert.equal(migrated.reviewCount, 3);
   assert.equal(migrated.lastReviewedAt, '2026-10-12T00:00:00.000Z');
+});
+
+test('不完整或不一致的案例版本历史迁移为一致的 v1 元数据', () => {
+  const state = migrateState({
+    cases: [
+      {
+        id: 'wrong-current-version',
+        confirmed: true,
+        currentVersion: 3,
+        versionHistory: [{ version: 1, status: '失败' }],
+        reviewCount: 2,
+        lastReviewedAt: '2026-10-12T00:00:00.000Z',
+        status: '成功',
+        lessons: '保留当前经验',
+        confirmedAt: '2026-10-13T00:00:00.000Z'
+      },
+      {
+        id: 'non-contiguous-history',
+        confirmed: true,
+        currentVersion: 3,
+        versionHistory: [
+          { version: 1, status: '失败' },
+          { version: 3, status: '成功' }
+        ],
+        reviewCount: 2,
+        lastReviewedAt: '2026-10-12T00:00:00.000Z',
+        status: '成功',
+        confirmedAt: '2026-10-14T00:00:00.000Z'
+      },
+      {
+        id: 'empty-review-count',
+        confirmed: true,
+        currentVersion: 2,
+        versionHistory: [
+          { version: 1, status: '失败' },
+          { version: 2, status: '成功' }
+        ],
+        reviewCount: 0,
+        lastReviewedAt: '2026-10-12T00:00:00.000Z',
+        status: '成功',
+        createdAt: '2026-10-15T00:00:00.000Z'
+      },
+      {
+        id: 'empty-last-reviewed-at',
+        confirmed: true,
+        currentVersion: 2,
+        versionHistory: [
+          { version: 1, status: '失败' },
+          { version: 2, status: '成功' }
+        ],
+        reviewCount: 2,
+        lastReviewedAt: '',
+        status: '成功',
+        createdAt: '2026-10-16T00:00:00.000Z'
+      }
+    ]
+  });
+
+  for (const migrated of state.cases) {
+    assert.equal(migrated.currentVersion, 1, migrated.id);
+    assert.equal(migrated.versionHistory.length, 1, migrated.id);
+    assert.equal(migrated.versionHistory[0].version, 1, migrated.id);
+    assert.equal(migrated.versionHistory[0].status, migrated.status, migrated.id);
+    assert.equal(migrated.reviewCount, 1, migrated.id);
+    assert.ok(migrated.lastReviewedAt, migrated.id);
+  }
+  assert.equal(state.cases[0].lastReviewedAt, '2026-10-13T00:00:00.000Z');
+  assert.equal(state.cases[2].lastReviewedAt, '2026-10-15T00:00:00.000Z');
+  assert.equal(state.cases[3].lastReviewedAt, '2026-10-16T00:00:00.000Z');
 });
 
 test('知识条目不会保留模型凭证字段', () => {
