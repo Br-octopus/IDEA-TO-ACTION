@@ -16,6 +16,10 @@
     "lessons", "nextPrompt", "createdAt", "currentVersion", "versionHistory",
     "applicableWhen", "notApplicableWhen", "reviewCount", "lastReviewedAt", "changeNote"
   ];
+  const CASE_VERSION_FIELDS = [
+    "status", "suggestedLabel", "evidence", "lessons", "nextPrompt",
+    "applicableWhen", "notApplicableWhen"
+  ];
 
   function createEmptyState() {
     return {
@@ -160,6 +164,12 @@
       version,
       changeNote: String(changeNote || "").trim()
     };
+  }
+
+  function hasCaseVersionChange(previousCase, nextCase) {
+    return CASE_VERSION_FIELDS.some(field => (
+      JSON.stringify(previousCase[field]) !== JSON.stringify(nextCase[field])
+    ));
   }
 
   function normalizeCase(reviewedCase = {}) {
@@ -330,6 +340,18 @@
       createdAt: existing.createdAt,
       changeNote
     });
+    if (!hasCaseVersionChange(existing, merged)) {
+      next.cases[index] = {
+        ...merged,
+        currentVersion,
+        versionHistory: existing.versionHistory,
+        reviewCount: existing.reviewCount,
+        lastReviewedAt: existing.lastReviewedAt,
+        confirmed: true,
+        confirmedAt: existing.confirmedAt
+      };
+      return next;
+    }
     const versionHistory = Array.isArray(existing.versionHistory) && existing.versionHistory.length > 0
       ? existing.versionHistory.slice()
       : [createCaseVersionSnapshot(existing, currentVersion, existing.changeNote)];

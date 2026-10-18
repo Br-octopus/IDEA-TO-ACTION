@@ -159,6 +159,42 @@ test('修改案例生成新版本并保留旧版本', () => {
   assert.equal(second.cases[0].changeNote, '补充第二次测试');
 });
 
+test('仅修改 changeNote 不产生新版本', () => {
+  const first = confirmCase(createEmptyState(), {
+    id: 'case-note-only',
+    status: '失败',
+    evidence: ['原始证据'],
+    lessons: '原始经验',
+    nextPrompt: '原始下一条提示词'
+  }, true);
+  const firstCase = first.cases[0];
+  const second = updateCase(first, {
+    id: 'case-note-only',
+    changeNote: '只补充说明'
+  });
+
+  assert.equal(second.cases[0].changeNote, '只补充说明');
+  assert.equal(second.cases[0].currentVersion, firstCase.currentVersion);
+  assert.deepEqual(second.cases[0].versionHistory, firstCase.versionHistory);
+  assert.equal(second.cases[0].reviewCount, firstCase.reviewCount);
+  assert.equal(second.cases[0].lastReviewedAt, firstCase.lastReviewedAt);
+});
+
+test('空更新不产生新版本', () => {
+  const first = confirmCase(createEmptyState(), {
+    id: 'case-empty-update',
+    status: '待验证',
+    evidence: ['原始证据']
+  }, true);
+  const firstCase = first.cases[0];
+  const second = updateCase(first, { id: 'case-empty-update' });
+
+  assert.equal(second.cases[0].currentVersion, firstCase.currentVersion);
+  assert.deepEqual(second.cases[0].versionHistory, firstCase.versionHistory);
+  assert.equal(second.cases[0].reviewCount, firstCase.reviewCount);
+  assert.equal(second.cases[0].lastReviewedAt, firstCase.lastReviewedAt);
+});
+
 test('只有用户确认的成功或失败案例进入可复用案例检索', () => {
   const entries = collectKnowledgeEntries({
     prompts: [],
