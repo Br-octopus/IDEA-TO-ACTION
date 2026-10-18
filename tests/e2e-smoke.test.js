@@ -19,6 +19,12 @@ const root = path.resolve(__dirname, '..');
 
 test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () => {
   const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
+  const dictionaryScriptIndex = html.indexOf('<script src="/prototype/search-dictionary.js"></script>');
+  const knowledgeSearchScriptIndex = html.indexOf('<script src="/prototype/knowledge-search.js"></script>');
+  assert.ok(
+    dictionaryScriptIndex >= 0 && dictionaryScriptIndex < knowledgeSearchScriptIndex,
+    '正式入口必须先加载 search-dictionary.js 再加载 knowledge-search.js'
+  );
   for (const id of [
     'knowledge-query',
     'knowledge-type',

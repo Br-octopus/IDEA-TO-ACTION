@@ -302,8 +302,8 @@ test('英文别名可以命中中文资料并提供高亮字段信息', () => {
   ], 'prompt review');
 
   assert.deepEqual(result.map(item => item.id), ['prompt']);
-  assert.ok(result[0].matchedTerms.includes('prompt'));
-  assert.ok(result[0].matchedTerms.includes('review'));
+  assert.deepEqual(result[0].matchedTerms, ['提示词', '复核']);
+  assert.deepEqual(result[0].queryTerms, ['prompt', 'review']);
   assert.deepEqual(result[0].matchedFields, ['title']);
   assert.deepEqual(result[0].highlightFields.title, ['提示词', '复核']);
 });
@@ -477,6 +477,34 @@ test('浏览器旧入口未加载词典时仍可使用增强搜索', () => {
   );
 
   assert.deepEqual(Array.from(result, item => item.id), ['prompt']);
+});
+
+test('正式词典和旧入口回退在无 Intl.Segmenter 时保持搜索结果一致', () => {
+  const entries = [
+    { id: 'prompt', title: '提示词复核' },
+    { id: 'acceptance', title: '完成标准测试' }
+  ];
+  const dictionaryContext = loadBrowserKnowledgeSearch(undefined);
+  const fallbackContext = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false });
+  const dictionaryApi = dictionaryContext.ForwardStepKnowledgeSearch;
+  const fallbackApi = fallbackContext.ForwardStepKnowledgeSearch;
+
+  assert.deepEqual(
+    Array.from(dictionaryContext.ForwardStepSearchDictionary.splitChineseTerms('完成标准')),
+    ['完成标准', '完成', '成标', '标准']
+  );
+  assert.deepEqual(
+    Array.from(dictionaryContext.ForwardStepSearchDictionary.expandSearchTerms('prompt')),
+    ['prompt', '提示词']
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(entries, 'prompt'))),
+    JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(entries, 'prompt')))
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(entries, '完成标准'))),
+    JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(entries, '完成标准')))
+  );
 });
 
 test('浏览器 UMD 搜索在不稳定 sort 下仍保持并列结果输入顺序', () => {

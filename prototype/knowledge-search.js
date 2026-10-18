@@ -242,7 +242,7 @@
     const matchedTerms = [];
     const highlightFields = {};
     const scoreTerms = removeContainedTerms(expandedTerms);
-    const rawScoreTerms = removeContainedTerms(terms);
+    const originalQueryTerms = removeContainedTerms(terms);
     for (const [field, [value, weight]] of Object.entries(fields)) {
       const text = String(value || "");
       const lowerText = text.toLocaleLowerCase();
@@ -260,13 +260,9 @@
           score += weight;
         }
       }
-      const rawMatched = rawScoreTerms.filter(term => {
-        const group = searchDictionary.getTermGroup(term, options);
-        return group.some(alias => fieldTerms.includes(alias) || lowerText.includes(alias));
-      });
-      if (rawMatched.length) {
+      if (matched.length) {
         matchedFields.push(field);
-        matchedTerms.push(...rawMatched);
+        matchedTerms.push(...matched);
         highlightFields[field] = matched;
       }
     }
@@ -275,6 +271,7 @@
       score,
       matchedFields: [...new Set(matchedFields)],
       matchedTerms: [...new Set(matchedTerms)],
+      queryTerms: originalQueryTerms,
       highlightFields
     };
   }
