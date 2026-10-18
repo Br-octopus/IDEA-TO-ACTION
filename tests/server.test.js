@@ -127,5 +127,6 @@ test('用户编辑发送文本后删除资料不会用 basePrompt 覆盖实际�
   assert.match(appSource, /renderedText: appendKnowledgeContext\(\s*withSelectedReferences\(prompt\),\s*knowledgeEntries\),\s*userEdited: false/);
   assert.match(appSource, /sendDraft\.renderedText = event\.target\.value;\s*sendDraft\.userEdited = true;/);
   assert.match(appSource, /if \(!sendDraft\.userEdited\) sendDraft\.renderedText = sendDraft\.basePrompt \+ buildSelectedReferenceContext\(sendDraft\.references\);/);
-  assert.match(appSource, /const text = sendDraft\.renderedText\.trim\(\);/);
+  assert.match(appSource, /const text = sendDraft\.renderedText;\s*if \(!text\.trim\(\)\)/);
+  assert.match(appSource, /buildSendReport\(buildSendSegments\(\)\);[\s\S]*requestModel\(text\)/);
 });

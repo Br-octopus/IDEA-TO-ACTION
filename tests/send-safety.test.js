@@ -250,7 +250,7 @@ test('编辑文本作为单一用户来源分段，风险归因不回指基础�
   assert.equal(report.findings[0].source, '用户原文/当前编辑文本');
 });
 
-test('首尾空白不会让安全报告与实际发送文本分叉', async () => {
+test('发送首尾空白高风险文本时保留原文且仍执行确认门禁', async () => {
   const vmApp = createSendPanelVm();
   await vmApp.waitForConfig();
   vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
@@ -258,11 +258,15 @@ test('首尾空白不会让安全报告与实际发送文本分叉', async () =>
   const rawText = '  \npassword=spaced-secret\n  ';
   vmApp.text.value = rawText;
   vmApp.listeners.get('send-preview-text:input')({ target: vmApp.text });
+  await vmApp.listeners.get('send-preview-confirm:click')({});
+  assert.equal(vmApp.requestModelCalls, 0, '未确认高风险内容时不得调用模型');
+  assert.equal(vmApp.reports[vmApp.reports.length - 1].text, rawText);
   vmApp.checkbox.checked = true;
   vmApp.listeners.get('send-preview-confirmation:change')({ target: vmApp.checkbox });
   await vmApp.listeners.get('send-preview-confirm:click')({});
   assert.equal(vmApp.requestModelCalls, 1);
-  assert.equal(vmApp.requestModelPrompts[0], rawText.trim());
+  assert.equal(vmApp.requestModelPrompts[0], rawText);
+  assert.equal(vmApp.text.value, rawText);
   assert.equal(vmApp.reports[vmApp.reports.length - 1].text, vmApp.requestModelPrompts[0]);
 });
 
