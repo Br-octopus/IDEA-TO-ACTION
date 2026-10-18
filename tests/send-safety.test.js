@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function createSendPanelVm() {
+function createSendPanelVm({ includeSafety = true } = {}) {
   const listeners = new Map();
   const elements = new Map();
   const checkbox = {
@@ -113,14 +113,14 @@ function createSendPanelVm() {
     console
   };
   const source = fs.readFileSync(path.join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
-  const safety = require('../prototype/send-safety');
-  window.ForwardStepSendSafety = safety;
+  if (includeSafety) window.ForwardStepSendSafety = require('../prototype/send-safety');
   vm.runInNewContext(source, context, { filename: 'prototype/app.js' });
   return {
     listeners,
     checkbox,
     confirmButton: document.getElementById('send-preview-confirm'),
     text: document.getElementById('send-preview-text'),
+    findings: document.getElementById('send-preview-findings'),
     model: document.getElementById('send-preview-model'),
     async waitForConfig() {
       for (let index = 0; index < 4; index += 1) {
@@ -202,6 +202,42 @@ test('高风险内容要求确认，且不修改原文', () => {
   assert.equal(report.segments[0].text, text);
 });
 
+test('密码占位值降为一般风险，未知值保持高风险', () => {
+  const findings = detectSensitiveContent([
+    'password=true',
+    'password=false',
+    'password=example',
+    'password=test',
+    'password=<your-password>',
+    'password=changeme',
+    'password=real-unknown-value'
+  ].join('\n'), { source: '文档' });
+  const passwords = findings.filter(item => item.kind === 'password');
+  assert.equal(passwords.length, 7);
+  assert.deepEqual(passwords.slice(0, 6).map(item => item.severity), [
+    'medium', 'medium', 'medium', 'medium', 'medium', 'medium'
+  ]);
+  assert.equal(passwords[6].severity, 'high');
+});
+
+test('检测常见前缀 API Key，并覆盖超长文本尾部敏感内容', () => {
+  const text = `${'x'.repeat(200500)}\npassword=tail-secret\nsk-tail-secret-1234567890\nghp_${'a'.repeat(20)}\ngithub_pat_${'b'.repeat(20)}`;
+  const report = buildSendReport([{ source: '用户原文/当前编辑文本', text }]);
+  assert.ok(report.findings.some(item => item.kind === 'password' && item.fragment.includes('tail-secret')));
+  assert.ok(report.findings.some(item => item.kind === 'apiKey' && item.fragment.includes('sk-tail-secret')));
+  assert.ok(report.findings.some(item => item.kind === 'apiKey' && item.fragment.includes('ghp_')));
+  assert.ok(report.findings.some(item => item.kind === 'apiKey' && item.fragment.includes('github_pat_')));
+  assert.ok(report.requiresConfirmation);
+});
+
+test('编辑文本作为单一用户来源分段，风险归因不回指基础提示词', () => {
+  const text = 'password=当前编辑值';
+  const report = buildSendReport([{ source: '用户原文/当前编辑文本', text }]);
+  assert.deepEqual(report.segments.map(item => item.source), ['用户原文/当前编辑文本']);
+  assert.equal(report.segments[0].text, text);
+  assert.equal(report.findings[0].source, '用户原文/当前编辑文本');
+});
+
 test('发送 handler 在 VM 中拒绝未确认高风险，确认后才调用模型', async () => {
   const vmApp = createSendPanelVm();
   await vmApp.waitForConfig();
@@ -229,4 +265,15 @@ test('发送 handler 在 VM 中拒绝未确认高风险，确认后才调用模�
   assert.equal(vmApp.requestModelCalls, 1, '编辑文本后必须清除旧确认，不能直接再次发送');
   assert.equal(vmApp.text.value, 'password=another-secret');
   assert.equal(vmApp.checkbox.checked, false, '编辑文本后确认控件必须重置');
+});
+
+test('缺失安全模块时 fail-closed，脚本直接触发也不得调用模型', async () => {
+  const vmApp = createSendPanelVm({ includeSafety: false });
+  await vmApp.waitForConfig();
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.listeners.get('preview-master:click')();
+  await vmApp.listeners.get('send-preview-confirm:click')({});
+  assert.equal(vmApp.requestModelCalls, 0);
+  assert.equal(vmApp.confirmButton.disabled, true);
+  assert.match(vmApp.findings.innerHTML, /安全检查不可用，已阻止发送/);
 });

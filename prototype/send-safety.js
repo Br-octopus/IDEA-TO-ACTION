@@ -5,7 +5,10 @@
 })(typeof globalThis === "undefined" ? this : globalThis, function () {
   const HIGH_RISK = "high";
   const MEDIUM_RISK = "medium";
-  const MAX_TEXT_LENGTH = 200000;
+  const PASSWORD_PLACEHOLDERS = new Set([
+    "true", "false", "example", "test", "changeme", "change-me",
+    "your-password", "your_password", "your password", "password"
+  ]);
 
   function asText(value) {
     return String(value == null ? "" : value);
@@ -39,16 +42,40 @@
     }
   }
 
+  function isPasswordPlaceholder(value) {
+    const normalized = asText(value).trim().toLocaleLowerCase();
+    return PASSWORD_PLACEHOLDERS.has(normalized)
+      || /^<[^>]+>$/.test(normalized)
+      || /^your[-_ ]?password$/.test(normalized);
+  }
+
+  function addPasswordFindings(findings, text, source) {
+    const matcher = /\b(?:password|passwd|pwd)\s*[:=]\s*["']?([^\s"'`,;]{4,})["']?/gi;
+    let match;
+    while ((match = matcher.exec(text))) {
+      const fragment = match[0];
+      findings.push({
+        kind: "password",
+        severity: isPasswordPlaceholder(match[1]) ? MEDIUM_RISK : HIGH_RISK,
+        source,
+        start: match.index,
+        end: match.index + fragment.length,
+        fragment
+      });
+      if (!fragment) matcher.lastIndex += 1;
+    }
+  }
+
   function detectSensitiveContent(value, options = {}) {
-    const text = asText(value).slice(0, MAX_TEXT_LENGTH);
+    const text = asText(value);
     const source = asText(options && options.source) || "未标注来源";
     if (!text) return [];
     const findings = [];
     addFindings(findings, text, source, "privateKey", HIGH_RISK, /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g);
     addFindings(findings, text, source, "databaseConnection", HIGH_RISK, /(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis):\/\/[^\s"'<>]+/gi);
     addFindings(findings, text, source, "authorization", HIGH_RISK, /\bAuthorization\s*:[ \t]*[^\r\n]+/gi);
-    addFindings(findings, text, source, "apiKey", HIGH_RISK, /\b(?:api[_ -]?key|x-api-key)\s*[:=]\s*["']?([A-Za-z0-9_\-]{8,})["']?/gi);
-    addFindings(findings, text, source, "password", HIGH_RISK, /\b(?:password|passwd|pwd)\s*[:=]\s*["']?([^\s"'`,;]{4,})["']?/gi);
+    addFindings(findings, text, source, "apiKey", HIGH_RISK, /\b(?:api[_ -]?key|x-api-key)\s*[:=]\s*["']?[A-Za-z0-9_\-]{8,}["']?|\b(?:sk-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi);
+    addPasswordFindings(findings, text, source);
     addFindings(findings, text, source, "idCard", MEDIUM_RISK, /(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)/g);
     addFindings(findings, text, source, "phone", MEDIUM_RISK, /(?<!\d)1[3-9]\d{9}(?!\d)/g);
     addFindings(findings, text, source, "email", MEDIUM_RISK, /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi);
@@ -83,7 +110,9 @@
       tokenCount: estimateTokenCount(text),
       findings,
       highRiskCount,
-      requiresConfirmation: highRiskCount > 0
+      requiresConfirmation: highRiskCount > 0,
+      blocked: false,
+      safetyUnavailable: false
     };
   }
 
