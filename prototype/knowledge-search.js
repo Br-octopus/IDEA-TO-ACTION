@@ -26,12 +26,14 @@
     ];
     const cjkPattern = /[\u3400-\u9fff]/u;
     const cjkRunPattern = /[\u3400-\u9fff]+/g;
+    const maxQueryLength = 240;
+    const maxTerms = 128;
     const add = (target, value) => {
       const term = String(value || "").trim().toLocaleLowerCase();
       if (term && !target.includes(term)) target.push(term);
     };
     const split = value => {
-      const source = String(value || "").trim().toLocaleLowerCase();
+      const source = String(value == null ? "" : value).trim().toLocaleLowerCase().slice(0, maxQueryLength);
       const terms = [];
       if (!source) return terms;
       const addChinese = (word, includePhrase = true) => {
@@ -52,7 +54,7 @@
           for (const run of source.match(cjkRunPattern) || []) {
             if ([...run].length <= 4) addChinese(run);
           }
-          return terms;
+          return terms.slice(0, maxTerms);
         } catch {
           // 回退到正则拆分。
         }
@@ -61,7 +63,7 @@
         if (cjkPattern.test(word)) addChinese(word, [...word].length <= 4);
         else add(terms, word);
       }
-      return terms;
+      return terms.slice(0, maxTerms);
     };
     const normalizeGroups = options => {
       const normalizedGroups = groups.map(group => group.slice());
@@ -80,13 +82,17 @@
       return normalizeGroups(options).find(group => group.includes(normalizedTerm)) || [normalizedTerm];
     };
     searchDictionary = {
+      mode: "fallback",
       splitChineseTerms: split,
       expandSearchTerms(query, options) {
         const terms = split(query);
         for (const term of terms) for (const alias of groupFor(term, options)) add(terms, alias);
-        return terms;
+        return terms.slice(0, maxTerms);
       },
-      getTermGroup: groupFor
+      getTermGroup: groupFor,
+      suggestSearchTerms() {
+        return [];
+      }
     };
   }
 
@@ -204,15 +210,30 @@
     "在", "有", "与", "及", "或", "也", "都", "就", "而", "但", "对", "为",
     "从", "到", "中", "上", "下", "里", "很", "更", "想", "找", "请", "要"
   ]);
+  const MAX_SEARCH_QUERY_LENGTH = 240;
+  const MAX_QUERY_TERMS = 64;
+  const MAX_EXPANDED_TERMS = 128;
+
+  function normalizeQueryInput(query) {
+    return String(query == null ? "" : query).trim().slice(0, MAX_SEARCH_QUERY_LENGTH);
+  }
 
   function normalizeSearchTerms(query, options = {}) {
     return searchDictionary.expandSearchTerms(query, options)
-      .filter(term => !SEARCH_STOP_WORDS.has(term));
+      .filter(term => !SEARCH_STOP_WORDS.has(term))
+      .slice(0, MAX_EXPANDED_TERMS);
   }
 
   function queryTerms(query) {
     return searchDictionary.splitChineseTerms(query)
-      .filter(term => !SEARCH_STOP_WORDS.has(term));
+      .filter(term => !SEARCH_STOP_WORDS.has(term))
+      .slice(0, MAX_QUERY_TERMS);
+  }
+
+  function normalizeSearchOptions(options) {
+    return options && typeof options === "object" && !Array.isArray(options)
+      ? options
+      : {};
   }
 
   function removeContainedTerms(terms) {
@@ -262,9 +283,11 @@
     let score = 0;
     const matchedFields = [];
     const matchedTerms = [];
+    const expandedMatchedTerms = [];
     const highlightFields = {};
     const scoreTerms = removeContainedTerms(expandedTerms);
     const originalQueryTerms = removeContainedTerms(terms);
+    const originalTermSet = new Set(originalQueryTerms);
     for (const [field, [value, weight]] of Object.entries(fields)) {
       const text = String(value || "");
       const lowerText = text.toLocaleLowerCase();
@@ -277,6 +300,7 @@
         const termMatched = fieldTerms.includes(term) || lowerText.includes(term);
         if (!termMatched) continue;
         if (!matched.includes(term)) matched.push(term);
+        if (!originalTermSet.has(term)) expandedMatchedTerms.push(term);
         if (!matchedGroups.has(groupKey)) {
           matchedGroups.add(groupKey);
           score += weight;
@@ -288,11 +312,13 @@
         highlightFields[field] = matched;
       }
     }
+    // highlightFields 记录字段实际命中的词；扩展来源由 expandedMatchedTerms 标记。
     return {
       ...item,
       score,
       matchedFields: [...new Set(matchedFields)],
       matchedTerms: [...new Set(matchedTerms)],
+      expandedMatchedTerms: [...new Set(expandedMatchedTerms)],
       queryTerms: originalQueryTerms,
       highlightFields
     };
@@ -311,20 +337,22 @@
   }
 
   function searchKnowledge(entries = [], query, options = {}) {
-    const rawQuery = String(query || "").trim();
-    const terms = queryTerms(query);
+    const normalizedQuery = normalizeQueryInput(query);
+    const normalizedOptions = normalizeSearchOptions(options);
+    const rawQuery = normalizedQuery;
+    const terms = queryTerms(normalizedQuery);
     if (rawQuery && !terms.length) return [];
-    const numericLimit = Number(options.limit);
+    const numericLimit = Number(normalizedOptions.limit);
     const limit = Number.isNaN(numericLimit)
       ? 10
       : Math.min(20, Math.max(1, numericLimit));
     const filtered = (Array.isArray(entries) ? entries : [])
       .map((item, inputIndex) => ({ item, inputIndex }))
-      .filter(({ item }) => matchesFilters(item, options));
+      .filter(({ item }) => matchesFilters(item, normalizedOptions));
     const scored = filtered.map(({ item, inputIndex }) => {
-      const itemOptions = optionsForEntry(item, options);
+      const itemOptions = optionsForEntry(item, normalizedOptions);
       return {
-        ...scoreEntry(item, terms, normalizeSearchTerms(query, itemOptions), itemOptions),
+        ...scoreEntry(item, terms, normalizeSearchTerms(normalizedQuery, itemOptions), itemOptions),
         __knowledgeSearchInputIndex: inputIndex
       };
     });
@@ -367,5 +395,19 @@
     return blocks.length ? `${header}${trustNotice}\n${blocks.join("\n")}\n${footer}` : "";
   }
 
-  return { collectKnowledgeEntries, searchKnowledge, buildKnowledgeContext };
+  const api = {
+    collectKnowledgeEntries,
+    searchKnowledge,
+    buildKnowledgeContext,
+    suggestSearchTerms: typeof searchDictionary.suggestSearchTerms === "function"
+      ? (...args) => searchDictionary.suggestSearchTerms(...args)
+      : () => []
+  };
+  Object.defineProperty(api, "searchDictionaryMode", {
+    value: searchDictionary.mode === "dictionary" ? "dictionary" : "fallback",
+    enumerable: true,
+    writable: false,
+    configurable: false
+  });
+  return api;
 });

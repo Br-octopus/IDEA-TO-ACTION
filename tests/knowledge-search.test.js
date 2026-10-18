@@ -303,6 +303,7 @@ test('英文别名可以命中中文资料并提供高亮字段信息', () => {
 
   assert.deepEqual(result.map(item => item.id), ['prompt']);
   assert.deepEqual(result[0].matchedTerms, ['提示词', '复核']);
+  assert.deepEqual(result[0].expandedMatchedTerms, ['提示词', '复核']);
   assert.deepEqual(result[0].queryTerms, ['prompt', 'review']);
   assert.deepEqual(result[0].matchedFields, ['title']);
   assert.deepEqual(result[0].highlightFields.title, ['提示词', '复核']);
@@ -482,6 +483,26 @@ test('搜索限制将 NaN 和未提供值设为 10，并将数值夹在 1 到 20
   assert.equal(searchKnowledge(entries, '目标查询词', { limit: 21 }).length, 20);
 });
 
+test('搜索输入统一处理 null、非字符串 query 和 null options', () => {
+  const emptyWithNullOptions = searchKnowledge(searchableEntries, null, null);
+  const emptyWithObjectOptions = searchKnowledge(searchableEntries, '', {});
+  assert.deepEqual(emptyWithNullOptions, emptyWithObjectOptions);
+
+  const numericEntries = [{ id: 'numeric', title: '123' }];
+  assert.deepEqual(searchKnowledge(numericEntries, 123), searchKnowledge(numericEntries, '123'));
+});
+
+test('超长查询的结果字段保持有界且重复搜索稳定', () => {
+  const query = '中文'.repeat(200);
+  const entries = [{ id: 'long', title: query }];
+  const first = searchKnowledge(entries, query);
+  const second = searchKnowledge(entries, query);
+
+  assert.deepEqual(first, second);
+  assert.ok(first[0].queryTerms.length <= 64);
+  assert.ok(first[0].expandedMatchedTerms.length <= 128);
+});
+
 test('浏览器 UMD 入口使用依赖脚本导出统一搜索全局', () => {
   const context = loadBrowserKnowledgeSearch();
   const api = context.ForwardStepKnowledgeSearch;
@@ -499,6 +520,18 @@ test('浏览器旧入口未加载词典时仍可使用增强搜索', () => {
   );
 
   assert.deepEqual(Array.from(result, item => item.id), ['prompt']);
+});
+
+test('正式词典和 fallback 暴露明确且只读的词典模式', () => {
+  const dictionaryApi = loadBrowserKnowledgeSearch().ForwardStepKnowledgeSearch;
+  const fallbackApi = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false }).ForwardStepKnowledgeSearch;
+
+  assert.equal(dictionaryApi.searchDictionaryMode, 'dictionary');
+  assert.equal(fallbackApi.searchDictionaryMode, 'fallback');
+  assert.equal(Object.getOwnPropertyDescriptor(fallbackApi, 'searchDictionaryMode').writable, false);
+  assert.equal(typeof dictionaryApi.suggestSearchTerms, 'function');
+  assert.equal(typeof fallbackApi.suggestSearchTerms, 'function');
+  assert.deepEqual(Array.from(fallbackApi.suggestSearchTerms('案', [{ title: '案例' }])), []);
 });
 
 test('正式词典和旧入口回退在无 Intl.Segmenter 时保持搜索结果一致', () => {

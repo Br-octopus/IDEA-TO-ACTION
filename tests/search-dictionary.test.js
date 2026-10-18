@@ -52,3 +52,10 @@ test('搜索建议最多三条且排序稳定', () => {
   assert.deepEqual(first.slice(0, 2), ['案例', '示例']);
 });
 
+test('超长输入的拆词和扩展词数量保持有界', () => {
+  const query = '中文'.repeat(200);
+
+  assert.ok(splitChineseTerms(query).length <= 128);
+  assert.ok(expandSearchTerms(query).length <= 128);
+});
+

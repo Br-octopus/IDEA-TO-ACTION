@@ -14,9 +14,15 @@
   const CJK_PATTERN = /[\u3400-\u9fff]/u;
   const CJK_RUN_PATTERN = /[\u3400-\u9fff]+/g;
   const WORD_PATTERN = /[a-z0-9]+|[\u3400-\u9fff]+/gi;
+  const MAX_SEARCH_QUERY_LENGTH = 240;
+  const MAX_SEARCH_TERMS = 128;
 
   function normalize(value) {
-    return String(value || "").trim().toLocaleLowerCase();
+    return String(value == null ? "" : value).trim().toLocaleLowerCase();
+  }
+
+  function normalizeQuery(value) {
+    return normalize(value).slice(0, MAX_SEARCH_QUERY_LENGTH);
   }
 
   function addUnique(target, value) {
@@ -37,7 +43,7 @@
   }
 
   function splitChineseTerms(value) {
-    const source = normalize(value);
+    const source = normalizeQuery(value);
     if (!source) return [];
     const terms = [];
 
@@ -52,7 +58,7 @@
         for (const run of source.match(CJK_RUN_PATTERN) || []) {
           if ([...run].length <= 4) addChineseSplits(terms, run);
         }
-        return terms;
+        return terms.slice(0, MAX_SEARCH_TERMS);
       } catch {
         // 兼容暴露 Segmenter 但不支持中文分词配置的运行环境。
       }
@@ -64,7 +70,7 @@
       }
       else addUnique(terms, word);
     }
-    return terms;
+    return terms.slice(0, MAX_SEARCH_TERMS);
   }
 
   function normalizeGroups(options = {}) {
@@ -95,7 +101,7 @@
       if (!group) continue;
       for (const alias of group) addUnique(terms, alias);
     }
-    return terms;
+    return terms.slice(0, MAX_SEARCH_TERMS);
   }
 
   function suggestionCandidates(entries) {
@@ -149,5 +155,11 @@
       .map(item => item.term);
   }
 
-  return { expandSearchTerms, splitChineseTerms, suggestSearchTerms, getTermGroup };
+  return {
+    mode: "dictionary",
+    expandSearchTerms,
+    splitChineseTerms,
+    suggestSearchTerms,
+    getTermGroup
+  };
 });
