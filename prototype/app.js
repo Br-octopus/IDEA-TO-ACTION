@@ -161,10 +161,10 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
   function renderKnowledgeReference(item) {
     return `<div class="send-reference"><span>本地资料 ${referenceInfoLine(item)}</span><button type="button" data-remove-knowledge-reference="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.title)}">删除</button></div>`;
   }
-  function buildSendSegments() {
+  function buildSendSegments(finalText) {
     if (!sendDraft) return [];
     // 用户编辑后整段文本作为单一来源，避免把当前内容误归因到基础提示词或资料。
-    if (sendDraft.userEdited) return [{ source: "用户原文/当前编辑文本", text: sendDraft.renderedText }];
+    if (sendDraft.userEdited) return [{ source: "用户原文/当前编辑文本", text: finalText == null ? sendDraft.renderedText : finalText }];
     const referenceText = buildSelectedReferenceContext(sendDraft.references);
     const promptWithReferences = sendDraft.basePrompt + referenceText;
     const fullText = appendKnowledgeContext(promptWithReferences, sendDraft.knowledgeEntries);
@@ -172,6 +172,12 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     const segments = [{ source: "基础提示词", text: sendDraft.basePrompt }];
     if (referenceText) segments.push({ source: "公开资料", text: referenceText });
     if (localText) segments.push({ source: "本地资料", text: localText });
+    if (finalText != null) {
+      const firstText = segments.findIndex(segment => /\S/.test(segment.text));
+      const lastText = segments.findLastIndex ? segments.findLastIndex(segment => /\S/.test(segment.text)) : segments.map(segment => /\S/.test(segment.text)).lastIndexOf(true);
+      if (firstText >= 0) segments[firstText].text = segments[firstText].text.replace(/^\s+/, "");
+      if (lastText >= 0) segments[lastText].text = segments[lastText].text.replace(/\s+$/, "");
+    }
     return segments;
   }
   function renderSendSafety(report) {
@@ -465,8 +471,9 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
   document.getElementById("send-preview-confirm").addEventListener("click", async () => {
     if (!sendDraft || !serviceConfig.model?.configured) return;
     const text = sendDraft.renderedText.trim();
+    const finalText = text;
     if (!text) { toast("发送内容不能为空"); return; }
-    const report = buildSendReport(buildSendSegments());
+    const report = buildSendReport(buildSendSegments(finalText));
     if (report.blocked || report.safetyUnavailable) {
       toast("安全检查不可用，已阻止发送");
       renderSendSafety(report);

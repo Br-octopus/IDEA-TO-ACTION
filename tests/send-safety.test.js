@@ -113,7 +113,18 @@ function createSendPanelVm({ includeSafety = true } = {}) {
     console
   };
   const source = fs.readFileSync(path.join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
-  if (includeSafety) window.ForwardStepSendSafety = require('../prototype/send-safety');
+  const reports = [];
+  if (includeSafety) {
+    const safety = require('../prototype/send-safety');
+    window.ForwardStepSendSafety = {
+      ...safety,
+      buildSendReport(segments) {
+        const report = safety.buildSendReport(segments);
+        reports.push(report);
+        return report;
+      }
+    };
+  }
   vm.runInNewContext(source, context, { filename: 'prototype/app.js' });
   return {
     listeners,
@@ -122,6 +133,7 @@ function createSendPanelVm({ includeSafety = true } = {}) {
     text: document.getElementById('send-preview-text'),
     findings: document.getElementById('send-preview-findings'),
     model: document.getElementById('send-preview-model'),
+    reports,
     async waitForConfig() {
       for (let index = 0; index < 4; index += 1) {
         await new Promise(resolve => setImmediate(resolve));
@@ -236,6 +248,22 @@ test('编辑文本作为单一用户来源分段，风险归因不回指基础�
   assert.deepEqual(report.segments.map(item => item.source), ['用户原文/当前编辑文本']);
   assert.equal(report.segments[0].text, text);
   assert.equal(report.findings[0].source, '用户原文/当前编辑文本');
+});
+
+test('首尾空白不会让安全报告与实际发送文本分叉', async () => {
+  const vmApp = createSendPanelVm();
+  await vmApp.waitForConfig();
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.listeners.get('preview-master:click')();
+  const rawText = '  \npassword=spaced-secret\n  ';
+  vmApp.text.value = rawText;
+  vmApp.listeners.get('send-preview-text:input')({ target: vmApp.text });
+  vmApp.checkbox.checked = true;
+  vmApp.listeners.get('send-preview-confirmation:change')({ target: vmApp.checkbox });
+  await vmApp.listeners.get('send-preview-confirm:click')({});
+  assert.equal(vmApp.requestModelCalls, 1);
+  assert.equal(vmApp.requestModelPrompts[0], rawText.trim());
+  assert.equal(vmApp.reports[vmApp.reports.length - 1].text, vmApp.requestModelPrompts[0]);
 });
 
 test('发送 handler 在 VM 中拒绝未确认高风险，确认后才调用模型', async () => {
