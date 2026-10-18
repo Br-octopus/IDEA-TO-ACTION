@@ -38,7 +38,10 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
   assert.ok(html.includes('资料库'), '应包含资料库入口');
   assert.ok(html.includes('从资料库移除'), '必须区分移除资料库与删除原始数据');
   assert.ok(html.includes('删除手动资料'), '批量删除必须明确限于手动资料');
-  assert.ok(html.includes('最近备份'), '应显示最近备份提示');
+  assert.ok(html.includes('最近备份'), '应显示最近备份提示');  assert.ok(html.includes('<option value="pinned">置顶</option>'), '应提供置顶筛选');
+  const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
+  assert.ok(app.includes('data-knowledge-edit'), '手动资料应提供编辑入口');
+  assert.ok(app.includes('data-knowledge-source'), '派生资料应提供编辑原始来源入口');
   assert.ok(html.includes('不要粘贴完整仓库'), '应提示不要粘贴完整仓库');
   for (const copy of [
     '本地资料库',

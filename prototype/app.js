@@ -890,8 +890,11 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       const insightButton = caseItem && caseItem.confirmed === true
         ? `<button class="button-secondary" data-case-insight="${escapeHtml(caseItem.id)}" type="button">${hasInsight ? "更新资料卡" : "生成资料卡"}</button>`
         : "";
-      return `<article class="reference"><div class="library-item-head"><h3>${escapeHtml(item.title)}</h3><span class="status">${escapeHtml(knowledgeTypeLabel(item.type))}</span></div><p>${escapeHtml(item.summary || "暂无摘要")}</p>${knowledgeDetail(item)}<div class="library-meta">${escapeHtml((item.domains || []).join("、") || "未标注领域")} · 验证状态：${escapeHtml(item.verificationStatus || "unverified")} · ${escapeHtml(item.updatedAt || "")}</div><div class="button-row" style="margin-top:8px">${insightButton}<button class="button-secondary" data-knowledge-select="${escapeHtml(item.id)}" type="button">选择摘要用于当前提示词</button><button class="button-secondary" data-knowledge-open="${escapeHtml(item.id)}" type="button">查看来源</button></div></article>`;
-    }).join("") || '<p class="library-meta">没有匹配的资料；换个搜索词或清空筛选。</p>';
+      const selected = state.knowledgeSelection.includes(item.id);
+      const derived = item.source !== "knowledge-entry" && (item.sourceKind || "") !== "manual";
+      const sourceAction = derived ? `<button class="button-secondary" data-knowledge-source="${escapeHtml(item.id)}" type="button">编辑原始来源</button>` : `<button class="button-secondary" data-knowledge-edit="${escapeHtml(item.id)}" type="button">编辑资料</button>`;
+      return `<article class="reference"><div class="library-item-head"><label><input type="checkbox" data-knowledge-check="${escapeHtml(item.id)}" ${selected ? "checked" : ""}> 选择</label><h3>${escapeHtml(item.title)}</h3><span class="status">${escapeHtml(knowledgeTypeLabel(item.type))}</span></div><p>${escapeHtml(item.summary || "暂无摘要")}</p>${knowledgeDetail(item)}<div class="library-meta">${escapeHtml((item.domains || []).join("、") || "未标注领域")} · 验证状态：${escapeHtml(item.verificationStatus || "unverified")} · ${item.favorite ? "已收藏 · " : ""}${item.pinned ? "已置顶 · " : ""}${escapeHtml(item.updatedAt || "")}</div><div class="button-row" style="margin-top:8px"><button class="button-secondary" data-knowledge-favorite="${escapeHtml(item.id)}" type="button">${item.favorite ? "取消收藏" : "收藏"}</button><button class="button-secondary" data-knowledge-pin="${escapeHtml(item.id)}" type="button">${item.pinned ? "取消置顶" : "置顶"}</button>${insightButton}${sourceAction}<button class="button-secondary" data-knowledge-select="${escapeHtml(item.id)}" type="button">${selected ? "取消选择" : "选择摘要用于当前提示词"}</button><button class="button-secondary" data-knowledge-open="${escapeHtml(item.id)}" type="button">查看来源</button><button class="button-secondary" data-knowledge-hide="${escapeHtml(item.id)}" type="button">从资料库移除</button></div></article>`;
+     }).join("") || '<p class="library-meta">没有匹配的资料；换个搜索词或清空筛选。</p>';
     root.querySelectorAll("[data-knowledge-favorite]").forEach(button => button.addEventListener("click", () => { state = toggleKnowledgeFavorite(state, button.dataset.knowledgeFavorite); persist(); refreshKnowledgeView(); }));
     root.querySelectorAll("[data-knowledge-pin]").forEach(button => button.addEventListener("click", () => { state = toggleKnowledgePinned(state, button.dataset.knowledgePin); persist(); refreshKnowledgeView(); }));
     root.querySelectorAll("[data-knowledge-check]").forEach(input => input.addEventListener("change", () => { state = selectKnowledgeEntries(state, [...root.querySelectorAll("[data-knowledge-check]:checked")].map(item => item.dataset.knowledgeCheck)); persist(); refreshKnowledgeView(); }));
@@ -957,6 +960,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
   document.getElementById("knowledge-add-open").addEventListener("click", () => { knowledgeForm.hidden = !knowledgeForm.hidden; });
   document.getElementById("knowledge-entry-cancel").addEventListener("click", () => { knowledgeForm.hidden = true; });
   function saveKnowledgeEntry(event) {
+    const editingId = knowledgeForm.dataset.editId || "";
     event.preventDefault();
     const value = id => document.getElementById(id).value.trim();
     // 来源链接可能不是必填，所以空值合法；但填写时必须可安全打开，只允许 http/https，
@@ -968,7 +972,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     }
     const entry = knowledgeSchemaApi.normalizeKnowledgeEntry({
       // 手动添加的条目复用现有随机 id 模式，避免同毫秒批量添加时 Date.now() 撞 id。
-      id: `manual-${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
+      id: editingId || `manual-${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
       type: value("knowledge-entry-type"),
       title: value("knowledge-entry-title"),
       sourceUrl: rawSourceUrl,
@@ -983,9 +987,10 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       verificationStatus: "unverified"
     });
     if (!entry.title || !entry.summary) { toast("标题和短摘要必填"); return; }
-    state.knowledgeEntries.unshift(entry);
+    state = editingId ? { ...state, knowledgeEntries: state.knowledgeEntries.map(item => item.id === editingId ? entry : item) } : { ...state, knowledgeEntries: [entry, ...state.knowledgeEntries] };
     if (!persist()) return;
     knowledgeForm.reset();
+    delete knowledgeForm.dataset.editId;
     knowledgeForm.hidden = true;
     refreshKnowledgeView();
     toast("已保存资料摘要");
@@ -1004,26 +1009,39 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       toast("备份已导出");
     } catch (error) { toast(`导出失败：${error.message || "备份无效"}`); }
   }
+  async function createSafetyBackup() {
+    const backup = workspaceBackup.createBackup(state, { scope: "workspace", now: new Date().toISOString() });
+    const content = JSON.stringify(backup, null, 2);
+    if (desktopApi?.exportBackup) {
+      const result = await desktopApi.exportBackup(content);
+      if (result && result.canceled) throw new Error("安全备份已取消");
+      return result;
+    }
+    const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+    const link = document.createElement("a"); link.href = url; link.download = "forward-step-safety-backup.json"; link.click(); URL.revokeObjectURL(url);
+    return { browser: true };
+  }
+  async function importBackupContent(raw) {
+    const backup = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const summary = workspaceBackup.getBackupSummary(backup);
+    const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
+    await createSafetyBackup();
+    const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, backup) } : workspaceBackup.mergeState(state, backup);
+    const previousState = state;
+    state = result.state;
+    if (!persist()) { state = previousState; throw new Error("导入结果保存失败"); }
+    renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
+    toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}`);
+  }
   async function importKnowledgeBackup() {
     if (!workspaceBackup) { toast("备份功能暂不可用"); return; }
     try {
       const raw = desktopApi?.importBackup ? await desktopApi.importBackup() : null;
-      if (!raw) { toast("浏览器模式请通过文件选择导入"); return; }
-      const backup = typeof raw === "string" ? JSON.parse(raw) : raw;
-      const summary = workspaceBackup.getBackupSummary(backup);
-      const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
-      const safetyBackup = workspaceBackup.createBackup(state, { scope: "workspace" });
-      if (desktopApi?.exportBackup) await desktopApi.exportBackup(JSON.stringify(safetyBackup, null, 2));
-      const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, backup) } : workspaceBackup.mergeState(state, backup);
-      state = result.state;
-      if (!persist()) throw new Error("导入结果保存失败");
-      renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
-      toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}`);
+      if (!raw) { document.getElementById("knowledge-import-file").click(); return; }
+      await importBackupContent(raw);
     } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); }
   }
-  document.getElementById("knowledge-export-open").addEventListener("click", () => exportKnowledgeBackup(window.prompt("导出范围：workspace 或 knowledge-base", "knowledge-base") || "knowledge-base"));
-  document.getElementById("knowledge-import-open").addEventListener("click", importKnowledgeBackup);
-  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; const text = await file.text(); const original = window.desktopApi; window.desktopApi = null; try { const backup = JSON.parse(text); const summary = workspaceBackup.getBackupSummary(backup); if (!window.confirm(`已校验备份，共 ${summary.counts.knowledgeEntries || 0} 条资料。确定替换，取消合并。`)) { state = workspaceBackup.mergeState(state, backup).state; } else { state = workspaceBackup.replaceState(state, backup); } if (!persist()) throw new Error("导入结果保存失败"); refreshKnowledgeView(); renderPlans(); renderSendPanel(); toast("导入成功"); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { window.desktopApi = original; event.target.value = ""; } });
+  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; try { await importBackupContent(await file.text()); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { event.target.value = ""; } });
   document.getElementById("knowledge-bulk-hide").addEventListener("click", () => { state.knowledgeSelection.forEach(id => { state = hideKnowledgeEntry(state, id); }); persist(); refreshKnowledgeView(); });
   document.getElementById("knowledge-bulk-delete").addEventListener("click", () => { state = deleteKnowledgeEntries(state, state.knowledgeSelection); persist(); refreshKnowledgeView(); });
   renderCaseProjectOptions();
