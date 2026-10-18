@@ -101,6 +101,11 @@ test('置顶资料范围只返回置顶且排除非置顶条目', () => {
     ['pinned-entry']
   );
 });
+test('资料范围筛选变更会绑定资料视图刷新', () => {
+  const listenerBinding = appSource.match(/\["knowledge-scope"[^\]]*\]\.forEach\(id => document\.getElementById\(id\)\.addEventListener\("change", refreshKnowledgeView\)\)/);
+  assert.ok(listenerBinding, 'knowledge-scope 必须绑定 change 事件并刷新资料视图');
+});
+
 test('浏览器安全备份必须由用户确认后才能继续导入', () => {
   let message = '';
   assert.equal(management.confirmBrowserSafetyBackup(text => { message = text; return true; }), true);

@@ -40,6 +40,7 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
   assert.ok(html.includes('删除手动资料'), '批量删除必须明确限于手动资料');
   assert.ok(html.includes('最近备份'), '应显示最近备份提示');  assert.ok(html.includes('<option value="pinned">置顶</option>'), '应提供置顶筛选');
   const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
+  assert.match(app, /\["knowledge-scope", "knowledge-type", "knowledge-domain", "knowledge-stage", "knowledge-verification", "case-filter", "case-domain", "case-project"\]\.forEach\(id => document\.getElementById\(id\)\.addEventListener\("change", refreshKnowledgeView\)\)/, '资料范围筛选变更必须立即刷新资料视图');
   assert.ok(app.includes('data-knowledge-edit'), '手动资料应提供编辑入口');
   assert.ok(app.includes('data-knowledge-source'), '派生资料应提供编辑原始来源入口');
   assert.ok(app.includes('data-knowledge-edit'), '手动资料编辑按钮必须存在');

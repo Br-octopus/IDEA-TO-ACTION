@@ -998,7 +998,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     renderKnowledgeResults(results);
   }
   document.getElementById("knowledge-search").addEventListener("click", refreshKnowledgeView);
-  ["knowledge-type", "knowledge-domain", "knowledge-stage", "knowledge-verification", "case-filter", "case-domain", "case-project"].forEach(id => document.getElementById(id).addEventListener("change", refreshKnowledgeView));
+  ["knowledge-scope", "knowledge-type", "knowledge-domain", "knowledge-stage", "knowledge-verification", "case-filter", "case-domain", "case-project"].forEach(id => document.getElementById(id).addEventListener("change", refreshKnowledgeView));
   const knowledgeForm = document.getElementById("knowledge-entry-form");
   document.getElementById("knowledge-add-open").addEventListener("click", () => { knowledgeForm.hidden = !knowledgeForm.hidden; });
   document.getElementById("knowledge-entry-cancel").addEventListener("click", () => { knowledgeForm.hidden = true; });
