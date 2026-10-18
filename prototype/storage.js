@@ -60,18 +60,22 @@
   }
 
   function stripModelKeys(value) {
-    if (Array.isArray(value)) return value.map(stripModelKeys);
+    const options = arguments[1] || {};
+    const hasExplicitFields = Array.isArray(options.fields);
+    const credentialFields = new Set((hasExplicitFields
+      ? options.fields
+      : ["authorization", "password", "credentials", "credential", "token", "secret"])
+      .map(key => String(key).toLowerCase().replace(/[^a-z0-9]/g, "")));
+    if (Array.isArray(value)) return value.map(item => stripModelKeys(item, options));
     if (!value || typeof value !== "object") return value;
-    const credentialFields = new Set([
-      "authorization", "password", "credentials", "credential", "token", "secret"
-    ]);
     return Object.fromEntries(Object.entries(value)
       .filter(([key]) => {
         const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-        return !credentialFields.has(normalized)
-          && !/(?:api|model|access|refresh|client|auth|bearer|private|secret)(?:key|token|secret|credential)$/.test(normalized);
+        const matchesLegacyPattern = !hasExplicitFields
+          && /(?:api|model|access|refresh|client|auth|bearer|private|secret)(?:key|token|secret|credential)$/.test(normalized);
+        return !credentialFields.has(normalized) && !matchesLegacyPattern;
       })
-      .map(([key, item]) => [key, stripModelKeys(item)]));
+      .map(([key, item]) => [key, stripModelKeys(item, options)]));
   }
 
   function withProjectDefaults(project) {

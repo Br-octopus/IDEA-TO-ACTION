@@ -13,11 +13,16 @@
   const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
   const WORKSPACE_DATA_FIELDS = [
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
-    "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters"
+    "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeSelection", "knowledgeFilters",
     "knowledgeMetadata", "caseFilters", "filterState"
+  ];
+  const BACKUP_CREDENTIAL_FIELDS = [
+    "authorization", "password", "credentials", "accessToken", "refresh_token",
+    "clientSecret", "modelKey", "modelApiKey", "searchApiKey", "modelCredential",
+    "searchCredential", "authToken", "bearerToken", "privateKey", "secretKey"
   ];
 
   function isObject(value) {
@@ -35,8 +40,10 @@
     }
     const source = clone(isObject(state) ? state : {});
     const sanitized = clone(source);
-    for (const field of ["knowledgeEntries", "knowledgeMetadata"]) {
-      if (Object.hasOwn(source, field)) sanitized[field] = storage.stripModelKeys(source[field]);
+    for (const field of ["projects", "prompts", "cases", "knowledgeEntries", "knowledgeMetadata"]) {
+      if (Object.hasOwn(source, field)) {
+        sanitized[field] = storage.stripModelKeys(source[field], { fields: BACKUP_CREDENTIAL_FIELDS });
+      }
     }
     return sanitized;
   }

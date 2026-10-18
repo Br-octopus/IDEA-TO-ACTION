@@ -18,12 +18,30 @@ function createState() {
       title: '项目',
       token: '项目业务 token',
       secret: '项目业务 secret',
-      apiKey: '项目业务 apiKey'
+      apiKey: '项目业务 apiKey',
+      accessToken: 'project-access-token',
+      refresh_token: 'project-refresh-token',
+      authorization: 'project-authorization',
+      clientSecret: 'project-client-secret',
+      modelKey: 'project-model-key',
+      password: 'project-password',
+      credentials: { accessToken: 'nested-project-access-token' }
     }],
     prompts: [{
       id: 'prompt-1',
       text: '提示词正文包含 token、secret 和 apiKey',
-      metadata: { token: '提示词业务 token', secret: '提示词业务 secret', apiKey: '提示词业务 apiKey' }
+      metadata: {
+        token: '提示词业务 token',
+        secret: '提示词业务 secret',
+        apiKey: '提示词业务 apiKey',
+        accessToken: 'prompt-access-token',
+        refresh_token: 'prompt-refresh-token',
+        authorization: 'prompt-authorization',
+        clientSecret: 'prompt-client-secret',
+        modelKey: 'prompt-model-key',
+        password: 'prompt-password',
+        credentials: { accessToken: 'nested-prompt-access-token' }
+      }
     }],
     references: [{ id: 'reference-1', title: '公开资料' }],
     researchSelection: ['reference-1'],
@@ -31,7 +49,15 @@ function createState() {
       id: 'entry-1',
       title: '资料',
       favorite: true,
-      metadata: { accessToken: 'model-config-secret' }
+      metadata: {
+        accessToken: 'knowledge-access-token',
+        refresh_token: 'knowledge-refresh-token',
+        authorization: 'knowledge-authorization',
+        clientSecret: 'knowledge-client-secret',
+        modelKey: 'knowledge-model-key',
+        password: 'knowledge-password',
+        credentials: { accessToken: 'nested-knowledge-access-token' }
+      }
     }],
     knowledgeSelection: ['entry-1'],
     knowledgeFilters: { query: '资料', verificationStatus: 'user-confirmed' },
@@ -41,8 +67,19 @@ function createState() {
       result: '案例结果',
       token: '案例业务 token',
       secret: '案例业务 secret',
-      apiKey: '案例业务 apiKey'
-    }]
+      apiKey: '案例业务 apiKey',
+      accessToken: 'case-access-token',
+      refresh_token: 'case-refresh-token',
+      authorization: 'case-authorization',
+      clientSecret: 'case-client-secret',
+      modelKey: 'case-model-key',
+      password: 'case-password',
+      credentials: { accessToken: 'nested-case-access-token' }
+    }],
+    knowledgeMetadata: {
+      authorization: 'metadata-authorization',
+      nested: { refresh_token: 'nested-metadata-refresh-token' }
+    }
   };
 }
 
@@ -60,7 +97,18 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   assert.deepEqual(backup.data.knowledgeSelection, ['entry-1']);
   assert.deepEqual(backup.data.knowledgeFilters, state.knowledgeFilters);
   const serialized = JSON.stringify(backup);
-  assert.equal(serialized.includes('model-config-secret'), false);
+  for (const credential of [
+    'project-access-token', 'project-refresh-token', 'project-authorization', 'project-client-secret',
+    'project-model-key', 'project-password', 'nested-project-access-token',
+    'prompt-access-token', 'prompt-refresh-token', 'prompt-authorization', 'prompt-client-secret',
+    'prompt-model-key', 'prompt-password', 'nested-prompt-access-token',
+    'case-access-token', 'case-refresh-token', 'case-authorization', 'case-client-secret',
+    'case-model-key', 'case-password', 'nested-case-access-token',
+    'knowledge-access-token', 'knowledge-refresh-token', 'knowledge-authorization',
+    'knowledge-client-secret', 'knowledge-model-key', 'knowledge-password',
+    'nested-knowledge-access-token', 'metadata-authorization', 'nested-metadata-refresh-token'
+  ]) assert.equal(serialized.includes(credential), false, `不应导出 ${credential}`);
+  assert.equal(Object.hasOwn(backup.data, 'knowledgeMetadata'), true);
   assert.match(serialized, /项目业务 token/);
   assert.match(serialized, /项目业务 secret/);
   assert.match(serialized, /项目业务 apiKey/);
