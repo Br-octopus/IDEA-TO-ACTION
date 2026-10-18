@@ -68,6 +68,30 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
   }
 });
 
+test('发送面板接入安全预览并保留编辑与失败状态契约', () => {
+  const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
+  const safetyScriptIndex = html.indexOf('<script src="/prototype/send-safety.js"></script>');
+  const appScriptIndex = html.indexOf('<script src="/prototype/app.js"></script>');
+  assert.ok(safetyScriptIndex >= 0 && safetyScriptIndex < appScriptIndex, 'send-safety.js 必须在 app.js 前加载');
+  for (const id of [
+    'send-preview-stats',
+    'send-preview-segments',
+    'send-preview-findings',
+    'send-preview-confirmation'
+  ]) {
+    assert.ok(html.includes('id="' + id + '"'), '发送面板缺少安全预览控件: ' + id);
+  }
+  const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
+  assert.ok(app.includes('window.ForwardStepSendSafety'), 'app.js 必须读取正式安全预览模块');
+  assert.ok(app.includes('buildSendReport'), '发送面板必须生成安全报告');
+  assert.ok(app.includes('sendDraft.renderedText = event.target.value'), '编辑文本必须保留为实际发送文本');
+  assert.ok(app.includes('renderSendPanel()'), '编辑和删除资料后必须重新渲染安全统计');
+  assert.match(app, /sendDraft\.renderedText = appendKnowledgeContext\(sendDraft\.renderedText, sendDraft\.knowledgeEntries\)/, '删除公开资料后必须保留本地资料上下文');
+  assert.match(app, /send-preview-confirm"\)\.disabled\s*=\s*!serviceConfig\.model\?\.configured/);
+  assert.match(app, /sendDraft\.confirmedRisk/);
+  assert.match(app, /if \(succeeded\) closeSendPanel\(\);/);
+});
+
 test('MVP 主流程可在静态边界串联，不等同于真实 Electron UI 验收', () => {
   const project = {
     idea: '把团队周报整理成可复用的工作流程',

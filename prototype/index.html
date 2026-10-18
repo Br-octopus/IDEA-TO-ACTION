@@ -613,6 +613,8 @@
       <div class="block-top"><div><div class="step-tag">发送前确认</div><h2 id="send-preview-title">检查实际发送内容</h2></div><div class="library-meta">目标模型：<strong id="send-preview-model">未配置模型</strong></div></div>
       <p class="block-desc">可以直接编辑文本，也可以删除某条资料摘要。确认发送后只会让模型诊断、建议或生成提示词，不会执行现实任务。</p>
       <div class="field"><label class="field-label" for="send-preview-text">实际发送文本</label><textarea id="send-preview-text"></textarea></div>
+      <div class="field"><div class="field-label">发送安全统计</div><div id="send-preview-stats"></div><div id="send-preview-segments"></div></div>
+      <div class="field"><div class="field-label">风险提醒</div><div id="send-preview-findings"></div><label id="send-preview-confirmation" class="check-row" hidden><input type="checkbox"> 我已确认这些风险内容会随本次请求发送</label></div>
       <div class="field"><div class="field-label">已选资料摘要 <span id="send-preview-reference-total"></span></div><div id="send-preview-references"></div></div>
       <div class="prompt-bottom"><small>未配置模型时只提供复制按钮；模型请求超时或失败会保留当前草稿。</small><div class="button-row"><button class="button-secondary" id="send-preview-cancel" type="button">取消</button><button class="button-secondary" id="send-preview-copy" type="button">仅复制文本</button><button class="button-primary" id="send-preview-confirm" type="button">确认发送</button></div></div>
     </section>
@@ -625,6 +627,7 @@
   <script src="/prototype/storage.js"></script>
   <script src="/prototype/workspace-backup.js"></script>
   <script src="/prototype/prompt-engine.js"></script>
+  <script src="/prototype/send-safety.js"></script>
   <script src="/prototype/app.js"></script>
 </body>
 </html>
