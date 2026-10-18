@@ -280,5 +280,40 @@
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase };
+  function upsertKnowledgeEntry(state, entry) {
+    const next = migrateState(state);
+    if (!knowledgeSchema || typeof knowledgeSchema.normalizeKnowledgeEntry !== "function") {
+      throw new KnowledgeSchemaUnavailableError();
+    }
+    const normalized = knowledgeSchema.normalizeKnowledgeEntry(entry);
+    if (!normalized.id) throw new TypeError("知识条目必须提供非空 id");
+
+    const linkedCaseId = normalized.linkedCaseId;
+    const existingIndex = linkedCaseId
+      ? next.knowledgeEntries.findIndex(item => item.linkedCaseId === linkedCaseId)
+      : next.knowledgeEntries.findIndex(item => item.id === normalized.id);
+    const now = new Date().toISOString();
+
+    if (existingIndex < 0) {
+      const saved = { ...normalized, updatedAt: now };
+      next.knowledgeEntries.unshift(saved);
+      return { state: next, entry: saved, updated: false };
+    }
+
+    const existing = next.knowledgeEntries[existingIndex];
+    const saved = {
+      ...existing,
+      ...normalized,
+      id: existing.id || normalized.id,
+      createdAt: existing.createdAt || normalized.createdAt,
+      updatedAt: now
+    };
+    next.knowledgeEntries[existingIndex] = saved;
+    next.knowledgeEntries = next.knowledgeEntries.filter((item, index) => (
+      index === existingIndex || !linkedCaseId || item.linkedCaseId !== linkedCaseId
+    ));
+    return { state: next, entry: saved, updated: true };
+  }
+
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry };
 });

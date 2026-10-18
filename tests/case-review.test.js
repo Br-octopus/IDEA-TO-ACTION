@@ -7,8 +7,10 @@ const {
 const {
   createEmptyState,
   confirmCase,
-  updateCase
+  updateCase,
+  upsertKnowledgeEntry
 } = require('../prototype/storage.js');
+const { collectKnowledgeEntries } = require('../prototype/knowledge-search.js');
 
 const project = {
   id: 'project-writing',
@@ -114,6 +116,72 @@ test('修改判断更新已有案例结论但不产生重复 id', () => {
   assert.equal(updated.cases[0].suggestedLabel, '失败：保留项丢失');
   assert.deepEqual(updated.cases[0].evidence, ['第二个步骤被删除']);
   assert.equal(repeated.cases.length, 1);
+});
+
+test('只有用户确认的成功或失败案例进入可复用案例检索', () => {
+  const entries = collectKnowledgeEntries({
+    prompts: [],
+    cases: [
+      { id: 'success', confirmed: true, status: '成功', lessons: '先定义验收标准' },
+      { id: 'pending', confirmed: true, status: '待验证', lessons: '证据不足' },
+      { id: 'draft', confirmed: false, status: '失败', lessons: '未确认' }
+    ]
+  });
+  assert.equal(entries.some(item => item.id === 'case-success' && item.type === 'success-case'), true);
+  assert.equal(entries.some(item => item.id === 'case-pending' && item.type === 'review-insight'), true);
+  assert.equal(entries.some(item => item.id === 'case-draft'), false);
+});
+
+test('案例资料卡按 linkedCaseId 更新并经统一 schema 规范化', () => {
+  const first = upsertKnowledgeEntry(createEmptyState(), {
+    id: 'case-insight-case-1',
+    type: 'success-case',
+    title: '文章改写复盘经验',
+    domains: ['写作'],
+    summary: '保留目标并改善表达',
+    reusablePatterns: '先定义验收标准',
+    limitations: '仅适用于该案例',
+    linkedCaseId: 'case-1',
+    verificationStatus: 'user-confirmed',
+    sourceType: '用户确认案例'
+  });
+  const second = upsertKnowledgeEntry(first.state, {
+    id: 'case-insight-case-1',
+    type: 'success-case',
+    title: '文章改写复盘经验（更新）',
+    domains: ['写作'],
+    summary: '更新后的摘要',
+    reusablePatterns: '先定义验收标准，再用证据复核',
+    limitations: '仍需相似任务验证',
+    linkedCaseId: 'case-1',
+    verificationStatus: 'user-confirmed',
+    sourceType: '用户确认案例'
+  });
+
+  assert.equal(first.updated, false);
+  assert.equal(second.updated, true);
+  assert.equal(second.state.knowledgeEntries.length, 1);
+  assert.equal(second.entry.title, '文章改写复盘经验（更新）');
+  assert.equal(second.entry.linkedCaseId, 'case-1');
+  assert.equal(second.entry.before, undefined);
+  assert.equal(second.entry.externalResult, undefined);
+});
+
+test('案例库界面提供案例组合筛选、摘要字段和安全的资料卡操作', () => {
+  const html = fs.readFileSync(require.resolve('../prototype/index.html'), 'utf8');
+  const app = fs.readFileSync(require.resolve('../prototype/app.js'), 'utf8');
+
+  for (const phrase of ['全部案例', '成功案例', '失败案例', '待验证复盘', '当前领域', '当前项目']) {
+    assert.match(html, new RegExp(phrase));
+  }
+  for (const phrase of ['目标', '复盘维度', '证据摘要', '用户意见', '经验教训', '下一条提示词摘要', '确认时间']) {
+    assert.match(app, new RegExp(phrase));
+  }
+  assert.match(app, /caseItem\.confirmed === true/);
+  assert.match(app, /case-insight-\$\{caseItem\.id\}/);
+  assert.match(app, /upsertKnowledgeEntry/);
+  assert.match(app, /if \(!persist\(\)\) return/);
+  assert.doesNotMatch(app, /before[\s\S]{0,160}externalResult[\s\S]{0,160}buildKnowledgeContext/);
 });
 
 test('软件方案过度复杂案例可生成复盘并确认保存', () => {
