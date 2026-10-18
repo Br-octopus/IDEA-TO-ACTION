@@ -127,7 +127,8 @@
         ? maybeOptions
         : {};
     } else if (entriesOrOptions && typeof entriesOrOptions === "object") {
-      entries = Array.isArray(entriesOrOptions.entries) ? entriesOrOptions.entries : [];
+      if (!Array.isArray(entriesOrOptions.entries)) return [];
+      entries = entriesOrOptions.entries;
       options = entriesOrOptions;
     } else {
       return [];

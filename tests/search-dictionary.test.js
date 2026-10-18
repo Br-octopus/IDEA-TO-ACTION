@@ -58,6 +58,16 @@ test('搜索建议对 null、undefined 和非对象参数安全返回空数组',
   }
 });
 
+test('对象调用形式缺少合法 entries 时返回空建议', () => {
+  assert.deepEqual(suggestSearchTerms('案', {
+    aliases: { 案例: ['样例'] }
+  }), []);
+  assert.deepEqual(suggestSearchTerms('案', {
+    entries: 'invalid',
+    aliases: { 案例: ['样例'] }
+  }), []);
+});
+
 test('超长输入的拆词和扩展词数量保持有界', () => {
   const query = '中文'.repeat(200);
 
