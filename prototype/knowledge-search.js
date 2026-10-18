@@ -34,9 +34,9 @@
       const source = String(value || "").trim().toLocaleLowerCase();
       const terms = [];
       if (!source) return terms;
-      const addChinese = word => {
+      const addChinese = (word, includePhrase = true) => {
         const characters = [...word];
-        if (characters.length <= 4) add(terms, word);
+        if (includePhrase) add(terms, word);
         for (let index = 0; index < characters.length - 1; index += 1) {
           add(terms, characters.slice(index, index + 2).join(""));
         }
@@ -45,8 +45,9 @@
         try {
           const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
           for (const item of segmenter.segment(source)) {
-            if (cjkPattern.test(item.segment)) addChinese(item.segment);
-            else if (/[a-z0-9]/i.test(item.segment)) add(terms, item.segment);
+            const segment = String(item.segment || "").trim().toLocaleLowerCase();
+            if (cjkPattern.test(segment)) addChinese(segment);
+            else if (/[a-z0-9]/i.test(segment)) add(terms, segment);
           }
           for (const run of source.match(cjkRunPattern) || []) {
             if ([...run].length <= 4) addChinese(run);
@@ -57,7 +58,7 @@
         }
       }
       for (const word of source.match(/[a-z0-9]+|[\u3400-\u9fff]+/gi) || []) {
-        if (cjkPattern.test(word)) addChinese(word);
+        if (cjkPattern.test(word)) addChinese(word, [...word].length <= 4);
         else add(terms, word);
       }
       return terms;

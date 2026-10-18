@@ -505,6 +505,21 @@ test('正式词典和旧入口回退在无 Intl.Segmenter 时保持搜索结果�
     JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(entries, '完成标准'))),
     JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(entries, '完成标准')))
   );
+
+  const longPhrase = '中文搜索案例资料';
+  const longTerms = Array.from(
+    dictionaryContext.ForwardStepSearchDictionary.splitChineseTerms(longPhrase)
+  );
+  assert.deepEqual(longTerms, ['中文', '文搜', '搜索', '索案', '案例', '例资', '资料']);
+  assert.equal(longTerms.includes(longPhrase), false);
+  const longEntries = [
+    { id: 'long', title: longPhrase },
+    { id: 'partial', title: '文搜索案例资料' }
+  ];
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(longEntries, longPhrase))),
+    JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(longEntries, longPhrase)))
+  );
 });
 
 test('正式词典和旧入口回退对条目及选项自定义别名保持一致', () => {
