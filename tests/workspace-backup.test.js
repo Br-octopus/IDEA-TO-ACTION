@@ -13,19 +13,36 @@ const exportedAt = '2026-10-19T08:00:00.000Z';
 function createState() {
   return {
     schemaVersion: 3,
-    projects: [{ id: 'p1', title: '项目', apiKey: 'project-secret' }],
-    prompts: [{ id: 'prompt-1', text: '提示词', token: 'prompt-secret' }],
+    projects: [{
+      id: 'p1',
+      title: '项目',
+      token: '项目业务 token',
+      secret: '项目业务 secret',
+      apiKey: '项目业务 apiKey'
+    }],
+    prompts: [{
+      id: 'prompt-1',
+      text: '提示词正文包含 token、secret 和 apiKey',
+      metadata: { token: '提示词业务 token', secret: '提示词业务 secret', apiKey: '提示词业务 apiKey' }
+    }],
     references: [{ id: 'reference-1', title: '公开资料' }],
     researchSelection: ['reference-1'],
     knowledgeEntries: [{
       id: 'entry-1',
       title: '资料',
       favorite: true,
-      metadata: { accessToken: 'entry-secret' }
+      metadata: { accessToken: 'model-config-secret' }
     }],
     knowledgeSelection: ['entry-1'],
     knowledgeFilters: { query: '资料', verificationStatus: 'user-confirmed' },
-    cases: [{ id: 'case-1', confirmed: true, result: '案例结果', password: 'case-secret' }]
+    cases: [{
+      id: 'case-1',
+      confirmed: true,
+      result: '案例结果',
+      token: '案例业务 token',
+      secret: '案例业务 secret',
+      apiKey: '案例业务 apiKey'
+    }]
   };
 }
 
@@ -42,8 +59,14 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   assert.equal(backup.data.prompts.length, 1);
   assert.deepEqual(backup.data.knowledgeSelection, ['entry-1']);
   assert.deepEqual(backup.data.knowledgeFilters, state.knowledgeFilters);
-  assert.equal(JSON.stringify(backup).includes('secret'), false);
-  assert.deepEqual(state.projects[0].apiKey, 'project-secret');
+  const serialized = JSON.stringify(backup);
+  assert.equal(serialized.includes('model-config-secret'), false);
+  assert.match(serialized, /项目业务 token/);
+  assert.match(serialized, /项目业务 secret/);
+  assert.match(serialized, /项目业务 apiKey/);
+  assert.match(serialized, /提示词业务 token/);
+  assert.match(serialized, /案例业务 apiKey/);
+  assert.deepEqual(state.projects[0].apiKey, '项目业务 apiKey');
 });
 
 test('资料库备份只包含资料、案例和资料相关状态', () => {
@@ -169,6 +192,15 @@ test('替换只保留备份状态且不修改入参', () => {
   assert.notEqual(result, backup.data);
 });
 
+test('workspace 备份替换后同时保留 researchSelection 和 knowledgeSelection', () => {
+  const state = createState();
+  const backup = createBackup(state, { scope: 'workspace', now: exportedAt });
+  const restored = replaceState({}, backup);
+
+  assert.deepEqual(restored.researchSelection, ['reference-1']);
+  assert.deepEqual(restored.knowledgeSelection, ['entry-1']);
+});
+
 test('合并按 id 去重，保留当前数据并报告新增、跳过和冲突', () => {
   const currentState = {
     projects: [{ id: 'p1', title: '当前项目' }],
@@ -270,11 +302,13 @@ test('合并外部备份时报告非法 id 的原始值', () => {
 
 test('合并报告按集合和 id 去重，不丢失跨集合相同 id', () => {
   const incoming = createBackup({
-    projects: [{ id: 'same', title: '项目' }, { id: 'same', title: '项目重复' }],
+    projects: [{ id: 'same', title: '项目' }],
     prompts: [{ id: 'same', text: '提示词' }],
     cases: [],
     knowledgeEntries: []
   }, { scope: 'workspace', now: exportedAt });
+  incoming.data.projects.push({ ...incoming.data.projects[0], title: '项目重复' });
+  incoming.counts.projects = 2;
   const added = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, incoming);
 
   assert.deepEqual(added.added, ['same', 'same']);
@@ -288,4 +322,24 @@ test('合并报告按集合和 id 去重，不丢失跨集合相同 id', () => {
   }, incoming);
   assert.deepEqual(conflict.added, []);
   assert.deepEqual(conflict.conflicts, ['same', 'same']);
+});
+
+test('严格校验和替换拒绝集合内重复 id，合并则报告重复条目', () => {
+  const duplicate = createBackup({
+    projects: [{ id: 'same', title: '项目' }],
+    prompts: [],
+    cases: [],
+    knowledgeEntries: []
+  }, { scope: 'workspace', now: exportedAt });
+  duplicate.data.projects.push({ ...duplicate.data.projects[0] });
+  duplicate.counts.projects = 2;
+
+  assert.throws(() => validateBackup(duplicate), /重复/);
+  assert.throws(() => replaceState({}, duplicate), /重复/);
+
+  const result = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, duplicate);
+
+  assert.equal(result.state.projects.length, 1);
+  assert.deepEqual(result.added, ['same']);
+  assert.deepEqual(result.skipped, ['same']);
 });

@@ -30,11 +30,15 @@
   }
 
   function sanitizeState(state) {
-    if (!storage || typeof storage.migrateState !== "function") {
-      throw new Error("备份依赖的状态迁移模块未加载");
+    if (!storage || typeof storage.stripModelKeys !== "function") {
+      throw new Error("备份依赖的凭证过滤模块未加载");
     }
-    // 统一复用现有迁移入口，其中包含递归凭证剔除规则，避免备份层维护第二套规则。
-    return clone(storage.migrateState(isObject(state) ? state : {}));
+    const source = clone(isObject(state) ? state : {});
+    const sanitized = clone(source);
+    for (const field of ["knowledgeEntries", "knowledgeMetadata"]) {
+      if (Object.hasOwn(source, field)) sanitized[field] = storage.stripModelKeys(source[field]);
+    }
+    return sanitized;
   }
 
   function selectKnowledgeData(state) {
@@ -95,10 +99,14 @@
 
   function validateCollection(data, field) {
     if (!Array.isArray(data[field])) throw new TypeError(`备份核心数据无效：${field}`);
+    const ids = new Set();
     data[field].forEach((item, index) => {
       if (!isObject(item) || typeof item.id !== "string" || !item.id.trim()) {
         throw new TypeError(`备份集合条目稳定 id 无效：${field}[${index}]`);
       }
+      const id = item.id.trim();
+      if (ids.has(id)) throw new TypeError(`备份集合 id 重复：${field}[${index}]`);
+      ids.add(id);
     });
   }
 
@@ -180,6 +188,10 @@
         addReport(report, "skipped", collection, `current-invalid:${index}`, {
           collection, index, id: getOriginalId(item), reason: "current-invalid-id"
         });
+        return;
+      }
+      if (knownIds.has(id)) {
+        addReport(report, "skipped", collection, `current-duplicate:${index}:${id}`, id);
         return;
       }
       knownIds.add(id);
