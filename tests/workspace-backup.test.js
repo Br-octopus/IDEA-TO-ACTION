@@ -270,21 +270,46 @@ test('资料库备份只包含资料、案例和资料相关状态', () => {
   assert.equal(backup.scope, 'knowledge-base');
   assert.equal(backup.data.knowledgeEntries.length, 1);
   assert.equal(backup.data.cases.length, 1);
-  assert.deepEqual(backup.data.knowledgeSelection, ['entry-1']);
-  assert.deepEqual(backup.data.knowledgeFilters.query, '资料');
+  assert.deepEqual(backup.data.knowledgeMetadata, { nested: {} });
+  assert.equal(Object.hasOwn(backup.data, 'knowledgeSelection'), false);
+  assert.equal(Object.hasOwn(backup.data, 'knowledgeFilters'), false);
+  assert.equal(Object.hasOwn(backup.data, 'caseFilters'), false);
+  assert.equal(Object.hasOwn(backup.data, 'filterState'), false);
   assert.equal(Object.hasOwn(backup.data, 'projects'), false);
   assert.equal(Object.hasOwn(backup.data, 'prompts'), false);
   assert.equal(Object.hasOwn(backup.data, 'references'), false);
 });
 
-test('空 workspace 和 knowledge-base 备份包含合法的选择和筛选状态', () => {
-  for (const scope of ['workspace', 'knowledge-base']) {
-    const backup = createBackup({}, { scope, now: exportedAt });
+test('空 workspace 备份包含合法的选择和筛选状态，knowledge-base 只保留资料字段', () => {
+  const workspaceBackup = createBackup({}, { scope: 'workspace', now: exportedAt });
+  assert.equal(validateBackup(workspaceBackup), true);
+  assert.deepEqual(workspaceBackup.data.knowledgeSelection, []);
+  assert.deepEqual(workspaceBackup.data.knowledgeFilters, {});
 
-    assert.equal(validateBackup(backup), true);
-    assert.deepEqual(backup.data.knowledgeSelection, []);
-    assert.deepEqual(backup.data.knowledgeFilters, {});
+  const knowledgeBackup = createBackup({}, { scope: 'knowledge-base', now: exportedAt });
+  assert.equal(validateBackup(knowledgeBackup), true);
+  assert.deepEqual(Object.keys(knowledgeBackup.data).sort(), [
+    'cases', 'knowledgeEntries', 'knowledgeMetadata'
+  ]);
+  assert.deepEqual(knowledgeBackup.data.knowledgeMetadata, {});
+});
+
+test('knowledge-base 拒绝 workspace 选择筛选状态和未知字段', () => {
+  for (const field of [
+    'knowledgeSelection', 'knowledgeFilters', 'caseFilters', 'filterState',
+    'projects', 'prompts', 'references'
+  ]) {
+    const backup = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+    backup.data[field] = field.endsWith('Filters') || field === 'filterState' ? {} : [];
+    assert.throws(() => validateBackup(backup), /字段/);
   }
+});
+
+test('knowledge-base 缺少资料元数据会被拒绝', () => {
+  const backup = createBackup({}, { scope: 'knowledge-base', now: exportedAt });
+  delete backup.data.knowledgeMetadata;
+
+  assert.throws(() => validateBackup(backup), /元数据/);
 });
 
 test('非法备份会被拒绝', () => {
@@ -300,16 +325,14 @@ test('非法备份会被拒绝', () => {
   }), /核心数据/);
 });
 
-test('缺少 workspace 或 knowledge-base 的选择和筛选状态会被拒绝', () => {
-  for (const scope of ['workspace', 'knowledge-base']) {
-    const backup = createBackup(createState(), { scope, now: exportedAt });
-    delete backup.data.knowledgeSelection;
-    assert.throws(() => validateBackup(backup), /选择/);
+test('workspace 缺少选择或筛选状态会被拒绝', () => {
+  const backup = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  delete backup.data.knowledgeSelection;
+  assert.throws(() => validateBackup(backup), /选择/);
 
-    const backupWithoutFilters = createBackup(createState(), { scope, now: exportedAt });
-    delete backupWithoutFilters.data.knowledgeFilters;
-    assert.throws(() => validateBackup(backupWithoutFilters), /筛选/);
-  }
+  const backupWithoutFilters = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  delete backupWithoutFilters.data.knowledgeFilters;
+  assert.throws(() => validateBackup(backupWithoutFilters), /筛选/);
 });
 
 test('核心集合类型错误或 counts 与实际长度不一致会被拒绝', () => {
@@ -317,9 +340,9 @@ test('核心集合类型错误或 counts 与实际长度不一致会被拒绝', 
   wrongArrayType.data.projects = {};
   assert.throws(() => validateBackup(wrongArrayType), /核心数据/);
 
-  const wrongFilterType = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
-  wrongFilterType.data.knowledgeFilters = [];
-  assert.throws(() => validateBackup(wrongFilterType), /筛选/);
+  const wrongMetadataType = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+  wrongMetadataType.data.knowledgeMetadata = [];
+  assert.throws(() => validateBackup(wrongMetadataType), /元数据/);
 
   const wrongCounts = createBackup(createState(), { scope: 'workspace', now: exportedAt });
   wrongCounts.counts.projects = 99;

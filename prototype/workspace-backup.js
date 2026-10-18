@@ -16,8 +16,7 @@
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
-    "knowledgeEntries", "cases", "knowledgeSelection", "knowledgeFilters",
-    "knowledgeMetadata", "caseFilters", "filterState"
+    "knowledgeEntries", "cases", "knowledgeMetadata"
   ];
   const BACKUP_CREDENTIAL_FIELDS = [
     "authorization", "password", "credentials", "accessToken", "refresh_token",
@@ -56,8 +55,7 @@
     const data = {
       knowledgeEntries: Array.isArray(state.knowledgeEntries) ? clone(state.knowledgeEntries) : [],
       cases: Array.isArray(state.cases) ? clone(state.cases) : [],
-      knowledgeSelection: Array.isArray(state.knowledgeSelection) ? clone(state.knowledgeSelection) : [],
-      knowledgeFilters: isObject(state.knowledgeFilters) ? clone(state.knowledgeFilters) : {}
+      knowledgeMetadata: isObject(state.knowledgeMetadata) ? clone(state.knowledgeMetadata) : {}
     };
     return KNOWLEDGE_DATA_FIELDS.reduce((result, field) => {
       if (Object.hasOwn(state, field)) data[field] = clone(state[field]);
@@ -154,9 +152,13 @@
       if (!Array.isArray(value.data[field])) throw new TypeError(`备份核心数据无效：${field}`);
     });
     validateCounts(value.data, value.counts, collections);
-    validateSelection(value.data, "knowledgeSelection");
-    if (value.scope === "workspace") validateSelection(value.data, "researchSelection");
-    if (!isObject(value.data.knowledgeFilters)) throw new TypeError("备份筛选状态无效：knowledgeFilters");
+    if (value.scope === "workspace") {
+      validateSelection(value.data, "knowledgeSelection");
+      validateSelection(value.data, "researchSelection");
+      if (!isObject(value.data.knowledgeFilters)) throw new TypeError("备份筛选状态无效：knowledgeFilters");
+    } else if (!isObject(value.data.knowledgeMetadata)) {
+      throw new TypeError("备份资料元数据无效：knowledgeMetadata");
+    }
     return collections;
   }
 
