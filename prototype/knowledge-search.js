@@ -255,7 +255,9 @@
       summary: [item.summary, 3],
       lessons: [item.lessons, 4],
       limitations: [item.limitations, 1],
-      contentExcerpt: [item.contentExcerpt, 1]
+      contentExcerpt: [item.contentExcerpt, 1],
+      domains: [(item.domains || []).join(" "), 2],
+      stages: [(item.stages || []).join(" "), 2]
     };
     let score = 0;
     const matchedFields = [];

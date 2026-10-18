@@ -355,6 +355,28 @@ test('搜索可以按领域、阶段和类型过滤', () => {
   assert.deepEqual(result.map(item => item.id), ['software']);
 });
 
+test('领域和阶段筛选字段也参与搜索但不会压过标题命中', () => {
+  const entries = [
+    { id: 'domain-only', title: '通用资料', domains: ['写作'], stages: ['review'] },
+    { id: 'title-hit', title: '写作方法', domains: ['写作'], stages: ['review'] }
+  ];
+
+  const domainResult = searchKnowledge(entries, '写作', { domain: '写作', limit: 5 });
+  assert.deepEqual(domainResult.map(item => item.id), ['title-hit', 'domain-only']);
+  assert.deepEqual(domainResult.map(item => item.score), [10, 2]);
+
+  const result = searchKnowledge(entries, '写作 review', {
+    domain: '写作', stage: 'review', limit: 5
+  });
+
+  assert.deepEqual(result.map(item => item.id), ['title-hit', 'domain-only']);
+  assert.deepEqual(result.map(item => item.score), [12, 4]);
+  assert.deepEqual(result.map(item => item.matchedFields), [
+    ['title', 'domains', 'stages'],
+    ['domains', 'stages']
+  ]);
+});
+
 test('空查询保留全部资料且无结果查询返回空列表', () => {
   const emptyQueryResult = searchKnowledge(searchableEntries, '   ');
   assert.equal(emptyQueryResult.length, searchableEntries.length);
