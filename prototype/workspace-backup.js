@@ -21,8 +21,9 @@
   ];
   const BACKUP_CREDENTIAL_FIELDS = [
     "authorization", "password", "credentials", "accessToken", "refresh_token",
-    "clientSecret", "modelKey", "modelApiKey", "searchApiKey", "modelCredential",
-    "searchCredential", "authToken", "bearerToken", "privateKey", "secretKey"
+    "clientSecret", "client_secret", "modelKey", "modelApiKey", "model_api_key",
+    "searchApiKey", "modelCredential", "searchCredential", "authToken", "bearerToken",
+    "privateKey", "secretKey", "apiKey", "api_key", "refreshToken"
   ];
 
   function isObject(value) {
@@ -42,7 +43,10 @@
     const sanitized = clone(source);
     for (const field of ["projects", "prompts", "cases", "knowledgeEntries", "knowledgeMetadata"]) {
       if (Object.hasOwn(source, field)) {
-        sanitized[field] = storage.stripModelKeys(source[field], { fields: BACKUP_CREDENTIAL_FIELDS });
+        sanitized[field] = storage.stripModelKeys(source[field], {
+          fields: BACKUP_CREDENTIAL_FIELDS,
+          preserveBusinessFields: true
+        });
       }
     }
     return sanitized;
@@ -198,7 +202,9 @@
         return;
       }
       if (knownIds.has(id)) {
-        addReport(report, "skipped", collection, `current-duplicate:${index}:${id}`, id);
+        addReport(report, "skipped", collection, `current-duplicate:${id}`, {
+          collection, index, id, reason: "current-duplicate-id"
+        });
         return;
       }
       knownIds.add(id);
@@ -214,17 +220,19 @@
         continue;
       }
       if (importedIds.has(id)) {
-        addReport(report, "skipped", collection, `duplicate:${id}`, id);
+        addReport(report, "skipped", collection, `duplicate:${id}`, {
+          collection, index, id, reason: "duplicate-id"
+        });
         continue;
       }
       importedIds.add(id);
       if (knownIds.has(id)) {
-        addReport(report, "conflicts", collection, `conflict:${id}`, id);
+        addReport(report, "conflicts", collection, `conflict:${id}`, { collection, id });
         continue;
       }
       current.push(clone(item));
       knownIds.add(id);
-      addReport(report, "added", collection, `added:${id}`, id);
+      addReport(report, "added", collection, `added:${id}`, { collection, id });
     }
     return current;
   }

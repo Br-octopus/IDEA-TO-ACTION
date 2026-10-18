@@ -59,23 +59,37 @@
     }
   }
 
-  function stripModelKeys(value) {
-    const options = arguments[1] || {};
+  function stripModelKeys(value, options = {}, path = []) {
     const hasExplicitFields = Array.isArray(options.fields);
     const credentialFields = new Set((hasExplicitFields
       ? options.fields
       : ["authorization", "password", "credentials", "credential", "token", "secret"])
       .map(key => String(key).toLowerCase().replace(/[^a-z0-9]/g, "")));
-    if (Array.isArray(value)) return value.map(item => stripModelKeys(item, options));
+    const credentialContexts = new Set([
+      "auth", "authentication", "client", "config", "configuration", "connection",
+      "credential", "credentials", "model", "provider", "search", "settings"
+    ]);
+    if (Array.isArray(value)) return value.map(item => stripModelKeys(item, options, path));
     if (!value || typeof value !== "object") return value;
     return Object.fromEntries(Object.entries(value)
       .filter(([key]) => {
         const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const matchesLegacyPattern = !hasExplicitFields
-          && /(?:api|model|access|refresh|client|auth|bearer|private|secret)(?:key|token|secret|credential)$/.test(normalized);
-        return !credentialFields.has(normalized) && !matchesLegacyPattern;
+        const currentPath = [...path, key];
+        const currentNormalizedPath = currentPath.map(item => String(item).toLowerCase().replace(/[^a-z0-9]/g, ""));
+        const currentInCredentialContext = currentNormalizedPath
+          .slice(0, -1)
+          .some(item => credentialContexts.has(item));
+        const currentIsBusinessField = options.preserveBusinessFields === true
+          && ["token", "secret"].includes(normalized)
+          && !currentInCredentialContext
+          || options.preserveBusinessFields === true
+          && key === "apiKey"
+          && !currentInCredentialContext;
+        const currentMatchesPattern = /^(?:api|model|search|access|refresh|client|auth|bearer|private)(?:api)?(?:key|token|secret|credential)$/.test(normalized);
+        return currentIsBusinessField
+          || (!credentialFields.has(normalized) && !currentMatchesPattern);
       })
-      .map(([key, item]) => [key, stripModelKeys(item, options)]));
+      .map(([key, item]) => [key, stripModelKeys(item, options, [...path, key])]));
   }
 
   function withProjectDefaults(project) {

@@ -25,7 +25,17 @@ function createState() {
       clientSecret: 'project-client-secret',
       modelKey: 'project-model-key',
       password: 'project-password',
-      credentials: { accessToken: 'nested-project-access-token' }
+      credentials: { accessToken: 'nested-project-access-token' },
+      config: {
+        apiKey: 'project-config-api-key',
+        api_key: 'project-config-api-key-snake',
+        refreshToken: 'project-refresh-token-camel',
+        refresh_token: 'project-refresh-token-snake',
+        clientSecret: 'project-client-secret-camel',
+        client_secret: 'project-client-secret-snake',
+        modelApiKey: 'project-model-api-key-camel',
+        model_api_key: 'project-model-api-key-snake'
+      }
     }],
     prompts: [{
       id: 'prompt-1',
@@ -40,7 +50,17 @@ function createState() {
         clientSecret: 'prompt-client-secret',
         modelKey: 'prompt-model-key',
         password: 'prompt-password',
-        credentials: { accessToken: 'nested-prompt-access-token' }
+        credentials: { accessToken: 'nested-prompt-access-token' },
+        settings: {
+          apiKey: 'prompt-settings-api-key',
+          api_key: 'prompt-settings-api-key-snake',
+          refreshToken: 'prompt-refresh-token-camel',
+          refresh_token: 'prompt-refresh-token-snake',
+          clientSecret: 'prompt-client-secret-camel',
+          client_secret: 'prompt-client-secret-snake',
+          modelApiKey: 'prompt-model-api-key-camel',
+          model_api_key: 'prompt-model-api-key-snake'
+        }
       }
     }],
     references: [{ id: 'reference-1', title: '公开资料' }],
@@ -56,7 +76,17 @@ function createState() {
         clientSecret: 'knowledge-client-secret',
         modelKey: 'knowledge-model-key',
         password: 'knowledge-password',
-        credentials: { accessToken: 'nested-knowledge-access-token' }
+        credentials: { accessToken: 'nested-knowledge-access-token' },
+        configuration: {
+          apiKey: 'knowledge-config-api-key',
+          api_key: 'knowledge-config-api-key-snake',
+          refreshToken: 'knowledge-refresh-token-camel',
+          refresh_token: 'knowledge-refresh-token-snake',
+          clientSecret: 'knowledge-client-secret-camel',
+          client_secret: 'knowledge-client-secret-snake',
+          modelApiKey: 'knowledge-model-api-key-camel',
+          model_api_key: 'knowledge-model-api-key-snake'
+        }
       }
     }],
     knowledgeSelection: ['entry-1'],
@@ -74,11 +104,27 @@ function createState() {
       clientSecret: 'case-client-secret',
       modelKey: 'case-model-key',
       password: 'case-password',
-      credentials: { accessToken: 'nested-case-access-token' }
+      credentials: { accessToken: 'nested-case-access-token' },
+      provider: {
+        apiKey: 'case-provider-api-key',
+        api_key: 'case-provider-api-key-snake',
+        refreshToken: 'case-refresh-token-camel',
+        refresh_token: 'case-refresh-token-snake',
+        clientSecret: 'case-client-secret-camel',
+        client_secret: 'case-client-secret-snake',
+        modelApiKey: 'case-model-api-key-camel',
+        model_api_key: 'case-model-api-key-snake'
+      }
     }],
     knowledgeMetadata: {
       authorization: 'metadata-authorization',
-      nested: { refresh_token: 'nested-metadata-refresh-token' }
+      nested: {
+        refresh_token: 'nested-metadata-refresh-token',
+        refreshToken: 'nested-metadata-refresh-token-camel',
+        client_secret: 'nested-metadata-client-secret-snake',
+        model_api_key: 'nested-metadata-model-api-key-snake',
+        api_key: 'nested-metadata-api-key-snake'
+      }
     }
   };
 }
@@ -97,7 +143,7 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   assert.deepEqual(backup.data.knowledgeSelection, ['entry-1']);
   assert.deepEqual(backup.data.knowledgeFilters, state.knowledgeFilters);
   const serialized = JSON.stringify(backup);
-  for (const credential of [
+  const credentials = [
     'project-access-token', 'project-refresh-token', 'project-authorization', 'project-client-secret',
     'project-model-key', 'project-password', 'nested-project-access-token',
     'prompt-access-token', 'prompt-refresh-token', 'prompt-authorization', 'prompt-client-secret',
@@ -106,8 +152,22 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
     'case-model-key', 'case-password', 'nested-case-access-token',
     'knowledge-access-token', 'knowledge-refresh-token', 'knowledge-authorization',
     'knowledge-client-secret', 'knowledge-model-key', 'knowledge-password',
-    'nested-knowledge-access-token', 'metadata-authorization', 'nested-metadata-refresh-token'
-  ]) assert.equal(serialized.includes(credential), false, `不应导出 ${credential}`);
+    'nested-knowledge-access-token', 'metadata-authorization', 'nested-metadata-refresh-token',
+    'project-config-api-key', 'project-config-api-key-snake', 'project-refresh-token-camel',
+    'project-refresh-token-snake', 'project-client-secret-camel', 'project-client-secret-snake',
+    'project-model-api-key-camel', 'project-model-api-key-snake', 'prompt-settings-api-key',
+    'prompt-settings-api-key-snake', 'prompt-refresh-token-camel', 'prompt-refresh-token-snake',
+    'prompt-client-secret-camel', 'prompt-client-secret-snake', 'prompt-model-api-key-camel',
+    'prompt-model-api-key-snake', 'knowledge-config-api-key', 'knowledge-config-api-key-snake',
+    'knowledge-refresh-token-camel', 'knowledge-refresh-token-snake', 'knowledge-client-secret-camel',
+    'knowledge-client-secret-snake', 'knowledge-model-api-key-camel', 'knowledge-model-api-key-snake',
+    'case-provider-api-key', 'case-provider-api-key-snake', 'case-refresh-token-camel',
+    'case-refresh-token-snake', 'case-client-secret-camel', 'case-client-secret-snake',
+    'case-model-api-key-camel', 'case-model-api-key-snake', 'nested-metadata-refresh-token-camel',
+    'nested-metadata-client-secret-snake', 'nested-metadata-model-api-key-snake',
+    'nested-metadata-api-key-snake'
+  ];
+  for (const credential of credentials) assert.equal(serialized.includes(credential), false, `不应导出 ${credential}`);
   assert.equal(Object.hasOwn(backup.data, 'knowledgeMetadata'), true);
   assert.match(serialized, /项目业务 token/);
   assert.match(serialized, /项目业务 secret/);
@@ -115,6 +175,12 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   assert.match(serialized, /提示词业务 token/);
   assert.match(serialized, /案例业务 apiKey/);
   assert.deepEqual(state.projects[0].apiKey, '项目业务 apiKey');
+
+  const knowledgeBackup = createBackup(state, { scope: 'knowledge-base', now: exportedAt });
+  const knowledgeSerialized = JSON.stringify(knowledgeBackup);
+  for (const credential of credentials) {
+    assert.equal(knowledgeSerialized.includes(credential), false, `资料库不应导出 ${credential}`);
+  }
 });
 
 test('资料库备份只包含资料、案例和资料相关状态', () => {
@@ -270,9 +336,15 @@ test('合并按 id 去重，保留当前数据并报告新增、跳过和冲突'
   assert.equal(result.state.projects[0].title, '当前项目');
   assert.equal(result.state.projects[1].id, 'p2');
   assert.equal(result.state.prompts.length, 2);
-  assert.deepEqual(result.added, ['p2', 'prompt-2']);
+  assert.deepEqual(result.added, [
+    { collection: 'projects', id: 'p2' },
+    { collection: 'prompts', id: 'prompt-2' }
+  ]);
   assert.deepEqual(result.skipped, []);
-  assert.deepEqual(result.conflicts, ['p1', 'prompt-1']);
+  assert.deepEqual(result.conflicts, [
+    { collection: 'projects', id: 'p1' },
+    { collection: 'prompts', id: 'prompt-1' }
+  ]);
   assert.deepEqual(currentState, JSON.parse(currentBefore));
 });
 
@@ -300,7 +372,7 @@ test('合并兼容旧状态时保留无效当前条目并报告可追踪的 skip
     id: null,
     reason: 'current-invalid-id'
   }]);
-  assert.deepEqual(result.added, ['p2']);
+  assert.deepEqual(result.added, [{ collection: 'projects', id: 'p2' }]);
 });
 
 test('合并外部备份时跳过非法 id 并继续处理合法条目，严格校验仍然拒绝', () => {
@@ -319,7 +391,7 @@ test('合并外部备份时跳过非法 id 并继续处理合法条目，严格�
   assert.equal(result.state.projects.length, 1);
   assert.equal(result.state.projects[0].id, 'p2');
   assert.equal(result.state.projects[0].title, '合法项目');
-  assert.deepEqual(result.added, ['p2']);
+  assert.deepEqual(result.added, [{ collection: 'projects', id: 'p2' }]);
   assert.deepEqual(result.skipped, [{
     collection: 'projects',
     index: 0,
@@ -359,8 +431,16 @@ test('合并报告按集合和 id 去重，不丢失跨集合相同 id', () => {
   incoming.counts.projects = 2;
   const added = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, incoming);
 
-  assert.deepEqual(added.added, ['same', 'same']);
-  assert.deepEqual(added.skipped, ['same']);
+  assert.deepEqual(added.added, [
+    { collection: 'projects', id: 'same' },
+    { collection: 'prompts', id: 'same' }
+  ]);
+  assert.deepEqual(added.skipped, [{
+    collection: 'projects',
+    index: 1,
+    id: 'same',
+    reason: 'duplicate-id'
+  }]);
 
   const conflict = mergeState({
     projects: [{ id: 'same', title: '当前项目' }],
@@ -369,7 +449,10 @@ test('合并报告按集合和 id 去重，不丢失跨集合相同 id', () => {
     knowledgeEntries: []
   }, incoming);
   assert.deepEqual(conflict.added, []);
-  assert.deepEqual(conflict.conflicts, ['same', 'same']);
+  assert.deepEqual(conflict.conflicts, [
+    { collection: 'projects', id: 'same' },
+    { collection: 'prompts', id: 'same' }
+  ]);
 });
 
 test('严格校验和替换拒绝集合内重复 id，合并则报告重复条目', () => {
@@ -388,6 +471,11 @@ test('严格校验和替换拒绝集合内重复 id，合并则报告重复条�
   const result = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, duplicate);
 
   assert.equal(result.state.projects.length, 1);
-  assert.deepEqual(result.added, ['same']);
-  assert.deepEqual(result.skipped, ['same']);
+  assert.deepEqual(result.added, [{ collection: 'projects', id: 'same' }]);
+  assert.deepEqual(result.skipped, [{
+    collection: 'projects',
+    index: 1,
+    id: 'same',
+    reason: 'duplicate-id'
+  }]);
 });
