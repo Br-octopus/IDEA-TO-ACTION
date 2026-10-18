@@ -186,6 +186,8 @@ test('浏览器导入入口先确认安全备份，再打开文件选择并导�
   assert.ok(importBlock.includes('document.getElementById("knowledge-import-file").click();'), '确认后才打开文件选择器');
   assert.ok(importBlock.indexOf('if (!desktopApi)') < importBlock.indexOf('await createSafetyBackup();'), '桌面模式不应走浏览器安全门禁');
   assert.ok(app.includes('consumeBrowserImportGate(importGate);'), 'change 和导入函数必须保留令牌防御检查');
+  assert.match(app, /下载已触发，请确认你已看到并保存安全备份文件/);
+  assert.match(app, /未确认已保存安全备份/);
   assert.ok(app.includes('browserImportGate = null;'), '令牌必须在 change 前后清理，防止重复导入');
   assert.ok(app.indexOf('consumeBrowserImportGate(importGate);') < app.indexOf('await importBackupContent(await file.text(), importGate);'), '未通过令牌检查不能调用导入');
 });

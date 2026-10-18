@@ -42,7 +42,7 @@ function buildManualKnowledgeEntry(previousEntry, fields, normalizeKnowledgeEntr
 }
 const SAFETY_BACKUP_NOT_CONFIRMED = 'SAFETY_BACKUP_NOT_CONFIRMED';
 function confirmBrowserSafetyBackup(confirmFn) {
-  const confirmed = typeof confirmFn === 'function' && confirmFn('安全备份文件已下载，请确认已保存安全备份。确认后才会继续导入。') === true;
+  const confirmed = typeof confirmFn === 'function' && confirmFn('下载已触发，请确认你已看到并保存安全备份文件。确认后才会继续导入。') === true;
   if (!confirmed) {
     const error = new Error('未确认已保存安全备份');
     error.code = SAFETY_BACKUP_NOT_CONFIRMED;
@@ -59,7 +59,20 @@ function consumeBrowserImportGate(gate) {
   gate.used = true;
   return true;
 }
-const knowledgeManagementApi = { toggleKnowledgeFavorite, toggleKnowledgePinned, markKnowledgeUsed, hideKnowledgeEntry, restoreKnowledgeEntry, deleteKnowledgeEntries, selectKnowledgeEntries, buildManualKnowledgeEntry, confirmBrowserSafetyBackup, consumeBrowserImportGate, SAFETY_BACKUP_NOT_CONFIRMED };
+function filterKnowledgeEntriesByScope(entries, scope) {
+  return (Array.isArray(entries) ? entries : []).filter(item => {
+    if (item && item.hiddenAt) return false;
+    if (scope === "favorite") return item.favorite === true;
+    if (scope === "recent") return Boolean(item.lastUsedAt);
+    if (scope === "public") return item.source === "reference" || item.sourceKind === "reference";
+    if (scope === "case") return Boolean(item.linkedCaseId) || item.source === "case";
+    if (scope === "manual") return (item.sourceKind || "manual") === "manual";
+    if (scope === "pinned") return item.pinned === true;
+    if (scope === "unverified") return item.verificationStatus === "unverified";
+    return true;
+  });
+}
+const knowledgeManagementApi = { toggleKnowledgeFavorite, toggleKnowledgePinned, markKnowledgeUsed, hideKnowledgeEntry, restoreKnowledgeEntry, deleteKnowledgeEntries, selectKnowledgeEntries, buildManualKnowledgeEntry, confirmBrowserSafetyBackup, consumeBrowserImportGate, filterKnowledgeEntriesByScope, SAFETY_BACKUP_NOT_CONFIRMED };
 if (typeof module === "object" && module.exports) module.exports = knowledgeManagementApi;
 if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement = knowledgeManagementApi;
 
@@ -972,16 +985,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       methodCards: []
     });
     const filters = getKnowledgeFilters();
-    const caseEntries = filterCaseEntries(entries, filters).filter(item => {
-      if (item.hiddenAt) return false;
-      if (filters.scope === "favorite") return item.favorite === true;
-      if (filters.scope === "recent") return Boolean(item.lastUsedAt);
-      if (filters.scope === "public") return item.source === "reference" || item.sourceKind === "reference";
-      if (filters.scope === "case") return Boolean(item.linkedCaseId) || item.source === "case";
-      if (filters.scope === "manual") return (item.sourceKind || "manual") === "manual";
-      if (filters.scope === "unverified") return item.verificationStatus === "unverified";
-      return true;
-    });
+    const caseEntries = filterKnowledgeEntriesByScope(filterCaseEntries(entries, filters), filters.scope);
     const results = knowledgeSearchApi.searchKnowledge(caseEntries, filters.query, {
       limit: 12,
       types: filters.type ? [filters.type] : [],

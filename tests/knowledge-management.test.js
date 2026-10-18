@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const appSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
 const managementContext = { Date };
 vm.runInNewContext(appSource.slice(0, appSource.indexOf('(() => {')), managementContext);
-const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'consumeBrowserImportGate', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
+const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'consumeBrowserImportGate', 'filterKnowledgeEntriesByScope', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
 const { normalizeKnowledgeEntry } = require('../prototype/knowledge-schema.js');const { createBackup, validateBackup, replaceState } = require('../prototype/workspace-backup.js');
 
 function state() {
@@ -90,10 +90,22 @@ test('资料选择过滤隐藏项并最多选择五条', () => {
   assert.equal(next.knowledgeSelection.includes('manual-6'), false);
 });
 
+test('置顶资料范围只返回置顶且排除非置顶条目', () => {
+  const entries = [
+    { id: 'pinned-entry', pinned: true },
+    { id: 'regular-entry', pinned: false },
+    { id: 'missing-pinned-entry' }
+  ];
+  assert.deepEqual(
+    management.filterKnowledgeEntriesByScope(entries, 'pinned').map(item => item.id),
+    ['pinned-entry']
+  );
+});
 test('浏览器安全备份必须由用户确认后才能继续导入', () => {
   let message = '';
   assert.equal(management.confirmBrowserSafetyBackup(text => { message = text; return true; }), true);
-  assert.match(message, /安全备份/);
+  assert.match(message, /下载已触发/);
+  assert.match(message, /已看到并保存安全备份文件/);
   assert.throws(() => management.confirmBrowserSafetyBackup(() => false), error => String(error).includes('未确认已保存安全备份'));
 });
 
