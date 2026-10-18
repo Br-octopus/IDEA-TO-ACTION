@@ -223,7 +223,9 @@ ipcMain.handle('backup:import', async () => {
   const filePath = result.filePaths?.[0];
   if (result.canceled || !filePath) return { canceled: true };
   if (path.extname(filePath).toLowerCase() !== '.json') {
-    throw new TypeError('只能导入 JSON 备份文件');
+    const error = new TypeError('只能导入 JSON 备份文件');
+    error.code = 'BACKUP_IMPORT_INVALID_EXTENSION';
+    throw error;
   }
   return {
     canceled: false,

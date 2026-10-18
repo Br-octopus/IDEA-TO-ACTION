@@ -228,6 +228,7 @@ test('backup:import 非 JSON 扩展名保持明确错误', async () => {
 
   await assert.rejects(() => handler(), error => {
     assert.equal(error.name, 'TypeError');
+    assert.equal(error.code, 'BACKUP_IMPORT_INVALID_EXTENSION');
     assert.match(error.message, /JSON/);
     return true;
   });
