@@ -171,6 +171,7 @@ test('案例库界面提供案例组合筛选、摘要字段和安全的资料�
   const html = fs.readFileSync(require.resolve('../prototype/index.html'), 'utf8');
   const app = fs.readFileSync(require.resolve('../prototype/app.js'), 'utf8');
 
+  assert.match(html, /<option value="">全部资料<\/option><option value="case">全部案例<\/option>/);
   for (const phrase of ['全部案例', '成功案例', '失败案例', '待验证复盘', '当前领域', '当前项目']) {
     assert.match(html, new RegExp(phrase));
   }
@@ -181,6 +182,9 @@ test('案例库界面提供案例组合筛选、摘要字段和安全的资料�
   assert.match(app, /case-insight-\$\{caseItem\.id\}/);
   assert.match(app, /upsertKnowledgeEntry/);
   assert.match(app, /if \(!persist\(\)\) return/);
+  const caseFilter = app.match(/function filterCaseEntries\(entries, filters\) \{([\s\S]*?)\n  \}/)?.[1] || '';
+  assert.match(caseFilter, /filters\.caseType === "case"/);
+  assert.match(caseFilter, /if \(!caseItem\) return false/);
   assert.doesNotMatch(app, /before[\s\S]{0,160}externalResult[\s\S]{0,160}buildKnowledgeContext/);
 });
 

@@ -92,21 +92,24 @@
   }
 
   function collectKnowledgeEntries(state = {}, { references = [], methodCards = [] } = {}) {
+    const knowledgeEntries = Array.isArray(state.knowledgeEntries) ? state.knowledgeEntries : [];
+    const linkedCaseIds = new Set(knowledgeEntries
+      .map(entry => String(entry?.linkedCaseId || "").trim())
+      .filter(Boolean));
     const entries = [
       ...references.map(reference => ({ source: "reference", entry: fromReference(reference) })),
       ...methodCards.map(card => ({ source: "method-card", entry: fromMethodCard(card) })),
-      ...(Array.isArray(state.knowledgeEntries)
-        ? state.knowledgeEntries.map(entry => ({
-          source: "knowledge-entry",
-          entry: knowledgeSchema.normalizeKnowledgeEntry(entry)
-        }))
-        : []),
+      ...knowledgeEntries.map(entry => ({
+        source: "knowledge-entry",
+        entry: knowledgeSchema.normalizeKnowledgeEntry(entry)
+      })),
       ...(Array.isArray(state.prompts)
         ? state.prompts.map(prompt => ({ source: "prompt", entry: fromPrompt(prompt) }))
         : []),
       ...(Array.isArray(state.cases)
         ? state.cases
-          .filter(item => item && item.confirmed === true)
+          .filter(item => item && item.confirmed === true
+            && !linkedCaseIds.has(String(item.id || "").trim()))
           .map(reviewedCase => ({ source: "case", entry: fromCase(reviewedCase) }))
         : [])
     ].filter(item => item.entry.id);

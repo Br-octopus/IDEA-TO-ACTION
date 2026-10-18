@@ -72,6 +72,27 @@ test('统一索引包含公开资料、提示词、方法卡和已确认案例',
   assert.ok(entries.some(item => item.id === 'm1' && item.type === 'article-summary'));
 });
 
+test('存在提炼资料卡时复用该卡索引案例，否则保留案例自动索引', () => {
+  const entries = collectKnowledgeEntries({
+    cases: [
+      { id: 'with-insight', confirmed: true, status: '成功', goal: '已有提炼卡' },
+      { id: 'without-insight', confirmed: true, status: '失败', goal: '仍用自动索引' }
+    ],
+    knowledgeEntries: [{
+      id: 'case-insight-with-insight',
+      type: 'success-case',
+      title: '已提炼案例经验',
+      summary: '提炼后的摘要',
+      linkedCaseId: 'with-insight'
+    }]
+  });
+
+  assert.equal(entries.filter(item => item.linkedCaseId === 'with-insight').length, 1);
+  assert.ok(entries.some(item => item.id === 'case-insight-with-insight'));
+  assert.equal(entries.some(item => item.id === 'case-with-insight'), false);
+  assert.ok(entries.some(item => item.id === 'case-without-insight' && item.type === 'failure-case'));
+});
+
 test('同一来源重复 id 只保留一个条目且公开资料保持未验证', () => {
   const entries = collectKnowledgeEntries(
     {},

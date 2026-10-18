@@ -893,13 +893,14 @@
       methodCards: []
     });
     const filters = getKnowledgeFilters();
-    const results = filterCaseEntries(knowledgeSearchApi.searchKnowledge(entries, filters.query, {
+    const caseEntries = filterCaseEntries(entries, filters);
+    const results = knowledgeSearchApi.searchKnowledge(caseEntries, filters.query, {
       limit: 12,
       types: filters.type ? [filters.type] : [],
       domain: filters.domain,
       stage: filters.stage,
       verificationStatus: filters.verificationStatus
-    }), filters);
+    });
     renderKnowledgeResults(results);
   }
   document.getElementById("knowledge-search").addEventListener("click", refreshKnowledgeView);
