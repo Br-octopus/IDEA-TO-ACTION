@@ -172,6 +172,37 @@
     ));
   }
 
+  function hasValidCaseVersionHistory(versionHistory) {
+    return Array.isArray(versionHistory) && versionHistory.some(version => (
+      version && typeof version === "object" && positiveInteger(version.version, 0) > 0
+    ));
+  }
+
+  function migrateConfirmedCase(reviewedCase) {
+    const normalized = normalizeCase(reviewedCase);
+    const confirmedAt = String(reviewedCase.confirmedAt ?? "").trim();
+    const createdAt = String(reviewedCase.createdAt ?? normalized.createdAt ?? "").trim();
+    const reviewedAt = confirmedAt || createdAt || new Date().toISOString();
+
+    if (hasValidCaseVersionHistory(normalized.versionHistory)) {
+      return {
+        ...normalized,
+        confirmed: true,
+        confirmedAt: reviewedAt
+      };
+    }
+
+    return {
+      ...normalized,
+      currentVersion: 1,
+      versionHistory: [createCaseVersionSnapshot(normalized, 1, normalized.changeNote)],
+      reviewCount: 1,
+      lastReviewedAt: reviewedAt,
+      confirmed: true,
+      confirmedAt: reviewedAt
+    };
+  }
+
   function normalizeCase(reviewedCase = {}) {
     const source = stripModelKeys(reviewedCase);
     const after = source.after ?? source.externalResult ?? "";
@@ -244,7 +275,7 @@
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)
-          .map(item => ({ ...normalizeCase(item), confirmed: true, confirmedAt: item.confirmedAt || item.createdAt || new Date().toISOString() }))
+          .map(migrateConfirmedCase)
         : []
     };
     return state;

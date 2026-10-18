@@ -134,6 +134,76 @@ test('旧版状态迁移后拥有知识条目集合', () => {
   assert.deepEqual(state.knowledgeEntries, []);
 });
 
+test('旧的已确认案例迁移后补齐 v1 版本元数据', () => {
+  const before = Date.now();
+  const state = migrateState({
+    cases: [
+      {
+        id: 'legacy-case',
+        confirmed: true,
+        status: '失败',
+        evidence: ['旧证据'],
+        lessons: '旧经验',
+        createdAt: '2026-10-10T00:00:00.000Z',
+        confirmedAt: '2026-10-11T00:00:00.000Z'
+      },
+      {
+        id: 'created-at-case',
+        confirmed: true,
+        status: '成功',
+        createdAt: '2026-10-12T00:00:00.000Z'
+      },
+      {
+        id: 'current-time-case',
+        confirmed: true,
+        status: '待验证'
+      }
+    ]
+  });
+  const after = Date.now();
+  const migrated = state.cases[0];
+
+  assert.equal(migrated.currentVersion, 1);
+  assert.equal(migrated.versionHistory.length, 1);
+  assert.equal(migrated.versionHistory[0].version, 1);
+  assert.equal(migrated.versionHistory[0].status, '失败');
+  assert.deepEqual(migrated.versionHistory[0].evidence, ['旧证据']);
+  assert.equal(migrated.reviewCount, 1);
+  assert.equal(migrated.lastReviewedAt, '2026-10-11T00:00:00.000Z');
+
+  assert.equal(state.cases[1].lastReviewedAt, '2026-10-12T00:00:00.000Z');
+  const currentTime = Date.parse(state.cases[2].lastReviewedAt);
+  assert.equal(Number.isNaN(currentTime), false);
+  assert.ok(currentTime >= before && currentTime <= after);
+});
+
+test('已有有效案例版本历史的迁移不会重复覆盖版本元数据', () => {
+  const versionHistory = [{
+    version: 1,
+    status: '失败',
+    evidence: ['初始证据'],
+    changeNote: '初始版本'
+  }];
+  const state = migrateState({
+    cases: [{
+      id: 'versioned-case',
+      confirmed: true,
+      status: '成功',
+      currentVersion: 2,
+      versionHistory,
+      reviewCount: 3,
+      lastReviewedAt: '2026-10-12T00:00:00.000Z',
+      createdAt: '2026-10-10T00:00:00.000Z'
+    }]
+  });
+  const migrated = state.cases[0];
+
+  assert.equal(migrated.currentVersion, 2);
+  assert.deepEqual(migrated.versionHistory, versionHistory);
+  assert.equal(migrated.reviewCount, 3);
+  assert.equal(migrated.lastReviewedAt, '2026-10-12T00:00:00.000Z');
+});
+
 test('知识条目不会保留模型凭证字段', () => {
   const state = migrateState({
     knowledgeEntries: [{ id: 'x', title: '资料', apiKey: 'secret', token: 'secret' }]
