@@ -50,7 +50,8 @@ function createSendPanelVm() {
     knowledgeSelection: [],
     researchSelection: []
   };
-  let modelCalls = 0;
+  let requestModelCalls = 0;
+  const requestModelPrompts = [];
   let configCalls = 0;
   const promptEngine = {
     buildGoalPrompt() { return 'password=secret-value'; },
@@ -63,7 +64,6 @@ function createSendPanelVm() {
   };
   const fetch = async url => {
     if (url === '/api/config') return { json: async () => ({ model: { configured: true, name: '测试模型' }, search: { configured: false } }) };
-    modelCalls += 1;
     return { ok: true, json: async () => ({ text: '模型结果' }) };
   };
   const window = {
@@ -92,7 +92,11 @@ function createSendPanelVm() {
     },
     desktopApi: {
       async getConfig() { configCalls += 1; return { model: { configured: true, name: '测试模型' }, search: { configured: false } }; },
-      async requestModel() { modelCalls += 1; return { code: 'MODEL_FAILED', message: '测试失败' }; }
+      async requestModel({ messages }) {
+        requestModelCalls += 1;
+        requestModelPrompts.push(messages[0].content);
+        return { code: 'MODEL_FAILED', message: '测试失败' };
+      }
     },
     confirm() { return false; },
     scrollTo() {}
@@ -124,8 +128,9 @@ function createSendPanelVm() {
         await Promise.resolve();
       }
     },
-    get modelCalls() { return modelCalls; },
-    get configCalls() { return configCalls; }
+    get configCalls() { return configCalls; },
+    get requestModelCalls() { return requestModelCalls; },
+    get requestModelPrompts() { return requestModelPrompts; }
   };
 }
 
@@ -207,16 +212,21 @@ test('发送 handler 在 VM 中拒绝未确认高风险，确认后才调用模�
   assert.match(vmApp.text.value, /password=secret-value/);
   const confirm = vmApp.listeners.get('send-preview-confirm:click');
   await confirm({});
-  assert.equal(vmApp.modelCalls, 0, '未确认高风险时不得调用模型');
+  assert.equal(vmApp.requestModelCalls, 0, '未确认高风险时不得调用模型');
   assert.equal(vmApp.confirmButton.disabled, true);
 
+  vmApp.text.value = 'password=secret-value';
+  vmApp.listeners.get('send-preview-text:input')({ target: vmApp.text });
   vmApp.checkbox.checked = true;
   vmApp.listeners.get('send-preview-confirmation:change')({ target: vmApp.checkbox });
   await confirm({});
-  assert.equal(vmApp.modelCalls, 1, '确认高风险后允许调用模型');
+  assert.equal(vmApp.requestModelCalls, 1, '确认高风险后允许调用模型');
+  assert.deepEqual(vmApp.requestModelPrompts, ['password=secret-value'], '模型必须收到当前编辑后的发送文本');
 
   vmApp.text.value = 'password=another-secret';
   vmApp.listeners.get('send-preview-text:input')({ target: vmApp.text });
   await confirm({});
-  assert.equal(vmApp.modelCalls, 1, '编辑文本后必须清除旧确认，不能直接再次发送');
+  assert.equal(vmApp.requestModelCalls, 1, '编辑文本后必须清除旧确认，不能直接再次发送');
+  assert.equal(vmApp.text.value, 'password=another-secret');
+  assert.equal(vmApp.checkbox.checked, false, '编辑文本后确认控件必须重置');
 });
