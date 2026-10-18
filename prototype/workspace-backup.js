@@ -11,6 +11,10 @@
   const SCOPES = new Set(["workspace", "knowledge-base"]);
   const WORKSPACE_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
   const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
+  const WORKSPACE_DATA_FIELDS = [
+    "schemaVersion", "projects", "prompts", "references", "researchSelection",
+    "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters"
+  ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeSelection", "knowledgeFilters",
     "knowledgeMetadata", "caseFilters", "filterState"
@@ -46,6 +50,22 @@
     }, data);
   }
 
+  function selectWorkspaceData(state) {
+    const data = WORKSPACE_DATA_FIELDS.reduce((result, field) => {
+      if (Object.hasOwn(state, field)) result[field] = clone(state[field]);
+      return result;
+    }, {});
+    data.projects = Array.isArray(state.projects) ? clone(state.projects) : [];
+    data.prompts = Array.isArray(state.prompts) ? clone(state.prompts) : [];
+    data.references = Array.isArray(state.references) ? clone(state.references) : [];
+    data.researchSelection = Array.isArray(state.researchSelection) ? clone(state.researchSelection) : [];
+    data.knowledgeEntries = Array.isArray(state.knowledgeEntries) ? clone(state.knowledgeEntries) : [];
+    data.knowledgeSelection = Array.isArray(state.knowledgeSelection) ? clone(state.knowledgeSelection) : [];
+    data.cases = Array.isArray(state.cases) ? clone(state.cases) : [];
+    data.knowledgeFilters = isObject(state.knowledgeFilters) ? clone(state.knowledgeFilters) : {};
+    return data;
+  }
+
   function countData(data) {
     return ["projects", "prompts", "cases", "knowledgeEntries", "references"]
       .filter(field => Array.isArray(data[field]))
@@ -58,14 +78,7 @@
   function createBackup(state, { scope = "workspace", appVersion = "", now } = {}) {
     if (!SCOPES.has(scope)) throw new TypeError("备份范围无效");
     const sanitized = sanitizeState(state);
-    const data = scope === "workspace"
-      ? {
-        ...sanitized,
-        researchSelection: Array.isArray(sanitized.researchSelection) ? clone(sanitized.researchSelection) : [],
-        knowledgeSelection: Array.isArray(sanitized.knowledgeSelection) ? clone(sanitized.knowledgeSelection) : [],
-        knowledgeFilters: isObject(sanitized.knowledgeFilters) ? clone(sanitized.knowledgeFilters) : {}
-      }
-      : selectKnowledgeData(sanitized);
+    const data = scope === "workspace" ? selectWorkspaceData(sanitized) : selectKnowledgeData(sanitized);
     const exportedAt = new Date(now === undefined ? Date.now() : now).toISOString();
     const backup = {
       format: FORMAT,
@@ -115,6 +128,9 @@
     if (!isObject(value.counts) || !isObject(value.data)) throw new TypeError("备份统计或数据无效");
 
     const collections = value.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
+    const allowedDataFields = value.scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
+    validateAllowedKeys(value.data, allowedDataFields, "数据");
+    validateAllowedKeys(value.counts, collections, "统计");
     collections.forEach(field => {
       if (!Array.isArray(value.data[field])) throw new TypeError(`备份核心数据无效：${field}`);
     });
@@ -123,6 +139,13 @@
     if (value.scope === "workspace") validateSelection(value.data, "researchSelection");
     if (!isObject(value.data.knowledgeFilters)) throw new TypeError("备份筛选状态无效：knowledgeFilters");
     return collections;
+  }
+
+  function validateAllowedKeys(value, allowedFields, label) {
+    const allowed = new Set(allowedFields);
+    for (const field of Object.keys(value)) {
+      if (!allowed.has(field)) throw new TypeError(`备份${label}字段无效：${field}`);
+    }
   }
 
   function validateBackup(value) {
@@ -154,7 +177,9 @@
     current.forEach((item, index) => {
       const id = item && typeof item.id === "string" ? item.id.trim() : "";
       if (!id) {
-        report.skipped.push({ collection, index, id: getOriginalId(item), reason: "current-invalid-id" });
+        addReport(report, "skipped", collection, `current-invalid:${index}`, {
+          collection, index, id: getOriginalId(item), reason: "current-invalid-id"
+        });
         return;
       }
       knownIds.add(id);
@@ -164,21 +189,23 @@
     for (const [index, item] of incoming.entries()) {
       const id = item && typeof item.id === "string" ? item.id.trim() : "";
       if (!id) {
-        report.skipped.push({ collection, index, id: getOriginalId(item), reason: "incoming-invalid-id" });
+        addReport(report, "skipped", collection, `incoming-invalid:${index}`, {
+          collection, index, id: getOriginalId(item), reason: "incoming-invalid-id"
+        });
         continue;
       }
       if (importedIds.has(id)) {
-        report.skipped.push(id);
+        addReport(report, "skipped", collection, `duplicate:${id}`, id);
         continue;
       }
       importedIds.add(id);
       if (knownIds.has(id)) {
-        report.conflicts.push(id);
+        addReport(report, "conflicts", collection, `conflict:${id}`, id);
         continue;
       }
       current.push(clone(item));
       knownIds.add(id);
-      report.added.push(id);
+      addReport(report, "added", collection, `added:${id}`, id);
     }
     return current;
   }
@@ -187,15 +214,27 @@
     return isObject(item) && Object.hasOwn(item, "id") ? item.id : null;
   }
 
-  function unique(values) {
-    return [...new Set(values)];
+  function addReport(report, category, collection, key, value) {
+    const reportKey = `${collection}:${key}`;
+    if (report.seen[category].has(reportKey)) return;
+    report.seen[category].add(reportKey);
+    report[category].push(value);
   }
 
   function mergeState(currentState, backup) {
     const collections = validateBackupStructure(backup);
     const state = isObject(currentState) ? clone(currentState) : {};
     const data = backup.data;
-    const report = { added: [], skipped: [], conflicts: [] };
+    const report = {
+      added: [],
+      skipped: [],
+      conflicts: [],
+      seen: {
+        added: new Set(),
+        skipped: new Set(),
+        conflicts: new Set()
+      }
+    };
 
     for (const field of collections) {
       if (Array.isArray(data[field])) {
@@ -205,9 +244,9 @@
 
     return {
       state,
-      added: unique(report.added),
-      skipped: unique(report.skipped),
-      conflicts: unique(report.conflicts)
+      added: report.added,
+      skipped: report.skipped,
+      conflicts: report.conflicts
     };
   }
 

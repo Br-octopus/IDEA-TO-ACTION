@@ -109,6 +109,24 @@ test('核心集合类型错误或 counts 与实际长度不一致会被拒绝', 
   assert.throws(() => validateBackup(wrongCounts), /统计/);
 });
 
+test('备份按 scope 严格限制 data 和 counts 字段白名单', () => {
+  const knowledgeBackup = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+  knowledgeBackup.data.projects = [];
+  assert.throws(() => validateBackup(knowledgeBackup), /字段/);
+
+  const extraKnowledgeField = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+  extraKnowledgeField.data.extra = true;
+  assert.throws(() => validateBackup(extraKnowledgeField), /字段/);
+
+  const workspaceBackup = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  workspaceBackup.data.extra = true;
+  assert.throws(() => validateBackup(workspaceBackup), /字段/);
+
+  const extraCount = createBackup(createState(), { scope: 'workspace', now: exportedAt });
+  extraCount.counts.extra = 0;
+  assert.throws(() => validateBackup(extraCount), /统计字段/);
+});
+
 test('集合条目缺少或包含非法稳定 id 会被拒绝', () => {
   const missingId = createBackup(createState(), { scope: 'workspace', now: exportedAt });
   missingId.data.prompts[0].id = '';
@@ -248,4 +266,26 @@ test('合并外部备份时报告非法 id 的原始值', () => {
     id: 42,
     reason: 'incoming-invalid-id'
   }]);
+});
+
+test('合并报告按集合和 id 去重，不丢失跨集合相同 id', () => {
+  const incoming = createBackup({
+    projects: [{ id: 'same', title: '项目' }, { id: 'same', title: '项目重复' }],
+    prompts: [{ id: 'same', text: '提示词' }],
+    cases: [],
+    knowledgeEntries: []
+  }, { scope: 'workspace', now: exportedAt });
+  const added = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, incoming);
+
+  assert.deepEqual(added.added, ['same', 'same']);
+  assert.deepEqual(added.skipped, ['same']);
+
+  const conflict = mergeState({
+    projects: [{ id: 'same', title: '当前项目' }],
+    prompts: [{ id: 'same', text: '当前提示词' }],
+    cases: [],
+    knowledgeEntries: []
+  }, incoming);
+  assert.deepEqual(conflict.added, []);
+  assert.deepEqual(conflict.conflicts, ['same', 'same']);
 });
