@@ -110,6 +110,10 @@ test('Reddit User-Agent 必须由配置提供且拒绝原始值中的首尾和�
     `linux:app:v1\r (by /u/contact)`,
     `linux:app:v1 (by /u/contact)\r\nX-Injected: yes`
   ];
+  for (let codePoint = 0x00; codePoint <= 0x1f; codePoint += 1) {
+    invalidValues.push(`linux:app:v1${String.fromCharCode(codePoint)} (by /u/contact)`);
+  }
+  invalidValues.push(`linux:app:v1${String.fromCharCode(0x7f)} (by /u/contact)`);
   for (const userAgent of invalidValues) {
     let called = false;
     const client = createSocialApiClient({
