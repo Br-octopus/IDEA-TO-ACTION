@@ -16,8 +16,12 @@ test('brief 保留目标、材料用途、受众和约束，并提供稳定默�
   });
 
   assert.equal(brief.idea, '向团队说明新客服流程');
+  assert.equal(brief.audience, '一线客服');
+  assert.equal(brief.durationMinutes, 10);
+  assert.equal(brief.constraints.minSlides, 6);
   assert.equal(brief.materials[0].role, 'both');
   assert.equal(brief.constraints.maxSlides, 10);
+  assert.equal(brief.constraints.maxWordsPerSlide, 35);
   assert.equal(brief.route, 'undecided');
 });
 
