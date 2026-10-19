@@ -368,6 +368,30 @@
     return sorted.slice(0, limit).map(({ __knowledgeSearchInputIndex, ...item }) => item);
   }
 
+  // Prompt Agent 的排序是显式入口，避免改变资料库页面既有的搜索顺序。
+  function selectPromptAgentEntries(entries = [], query, { domain = "", stage = "", limit = 20 } = {}) {
+    const ranked = searchKnowledge(entries, query, { limit: 20 }).map((entry, index) => {
+      const domains = Array.isArray(entry.domains) ? entry.domains : [entry.domains].filter(Boolean);
+      const stages = Array.isArray(entry.stages) ? entry.stages : [entry.stages].filter(Boolean);
+      const typeWeight = {
+        "user-prompt": 5,
+        "success-case": 5,
+        "failure-case": 5,
+        "method-card": 4,
+        "github-summary": 2
+      }[entry.type] || 1;
+      const verificationWeight = entry.verificationStatus === "user-confirmed" ? 3
+        : entry.verificationStatus === "source-reviewed" ? 2 : 0;
+      const domainWeight = domain && domains.some(value => String(value).includes(domain) || domain.includes(String(value))) ? 8 : 0;
+      const stageWeight = stage && stages.includes(stage) ? 5 : 0;
+      const unverifiedPenalty = entry.verificationStatus === "unverified" ? 2 : 0;
+      return { ...entry, promptAgentScore: (entry.score || 0) + typeWeight + verificationWeight + domainWeight + stageWeight - unverifiedPenalty, __order: index };
+    });
+    return ranked.sort((left, right) => right.promptAgentScore - left.promptAgentScore || left.__order - right.__order)
+      .slice(0, Math.max(0, Math.min(20, Number(limit) || 20)))
+      .map(({ __order, ...entry }) => entry);
+  }
+
   function buildKnowledgeContext(entries = [], { limit = 5, maxChars = 6000 } = {}) {
     const count = Number(limit);
     const maximum = Number(maxChars);
@@ -400,6 +424,7 @@
   const api = {
     collectKnowledgeEntries,
     searchKnowledge,
+    selectPromptAgentEntries,
     buildKnowledgeContext,
     suggestSearchTerms: typeof searchDictionary.suggestSearchTerms === "function"
       ? (...args) => searchDictionary.suggestSearchTerms(...args)
