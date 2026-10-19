@@ -19,6 +19,53 @@ test('简报阶段区分事实、假设和未知，并给可编辑初稿且最�
   assert.match(prompt, /不要.*(?:执行|制作|生成最终).*(?:PPT|成品)|只负责.*提示词/);
 });
 
+test('简报提示词仅输出白名单字段，不泄露原始约束和材料中的未知字段', () => {
+  const prompt = buildPptBriefPrompt({ brief: {
+    idea: '介绍社区共享菜园',
+    audience: '社区居民',
+    audienceAction: '报名参加',
+    durationMinutes: 12,
+    constraints: { minSlides: 5, maxSlides: 8, maxWordsPerSlide: 40, apiKey: 'constraint-secret' },
+    hardRequirements: ['保留预算说明'],
+    preferences: ['使用真实案例'],
+    preserveItems: ['已有场地数据'],
+    excludeItems: ['未经证实的收益'],
+    facts: ['有 20 个种植箱'],
+    assumptions: ['居民可共同维护'],
+    materials: [{ id: 'material-1', role: 'content', kind: 'report', body: 'attachment-body-secret', token: 'material-token-secret' }]
+  } });
+
+  for (const secret of ['constraint-secret', 'attachment-body-secret', 'material-token-secret', 'apiKey', 'body', 'token']) {
+    assert.ok(!prompt.includes(secret), `提示词不应包含未知字段或敏感值 ${secret}`);
+  }
+  for (const expected of [
+    '介绍社区共享菜园', '社区居民', '报名参加', '12', 'minSlides', '5', 'maxSlides', '8',
+    'maxWordsPerSlide', '40', '保留预算说明', '使用真实案例', '已有场地数据',
+    '未经证实的收益', '有 20 个种植箱', '居民可共同维护', 'material-1', 'content', 'report'
+  ]) {
+    assert.ok(prompt.includes(expected), `提示词应保留有效简报字段 ${expected}`);
+  }
+});
+
+test('简报提示词接受 task.pptScene.brief 的原始和归一化场景', () => {
+  const rawSceneTask = { pptScene: { brief: {
+    idea: '社区菜园介绍', audience: '居民', constraints: { minSlides: 4, apiKey: 'wrapped-secret' },
+    materials: [{ id: 'wrapped-material', role: 'both', kind: 'pptx', body: 'wrapped-body-secret' }]
+  } } };
+  const normalizedSceneTask = { pptScene: {
+    brief: require('../prototype/ppt-scene-schema.js').createPptBrief(rawSceneTask.pptScene.brief)
+  } };
+
+  for (const task of [rawSceneTask, normalizedSceneTask]) {
+    const prompt = buildPptBriefPrompt(task);
+    assert.ok(prompt.includes('社区菜园介绍'));
+    assert.ok(prompt.includes('居民'));
+    assert.ok(prompt.includes('wrapped-material'));
+    assert.ok(!prompt.includes('wrapped-secret'));
+    assert.ok(!prompt.includes('wrapped-body-secret'));
+  }
+});
+
 test('大纲阶段审查目标受众、叙事、证据、遗漏重复、页数依据和硬约束', () => {
   const prompt = buildPptOutlinePrompt({
     idea: '介绍共享菜园', audience: '社区居民', facts: ['场地有 20 个种植箱'],

@@ -5,10 +5,13 @@
   const workflow = typeof module === 'object' && module.exports
     ? require('./ppt-scene-workflow.js')
     : root.ForwardStepPptSceneWorkflow;
-  const api = factory(promptEngine, workflow);
+  const schema = typeof module === 'object' && module.exports
+    ? require('./ppt-scene-schema.js')
+    : root.ForwardStepPptSceneSchema;
+  const api = factory(promptEngine, workflow, schema);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.ForwardStepPptScenePrompts = api;
-})(typeof globalThis === 'undefined' ? this : globalThis, function (promptEngine, workflow) {
+})(typeof globalThis === 'undefined' ? this : globalThis, function (promptEngine, workflow, schema) {
   function object(value) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
@@ -24,11 +27,13 @@
 
   function briefOf(task) {
     const source = object(task);
+    const sceneBrief = object(source.pptScene).brief;
+    if (sceneBrief && typeof sceneBrief === 'object' && !Array.isArray(sceneBrief)) return sceneBrief;
     return source.brief && typeof source.brief === 'object' && !Array.isArray(source.brief) ? source.brief : source;
   }
 
   function taskContext(task) {
-    const brief = briefOf(task);
+    const brief = schema.createPptBrief(briefOf(task));
     return `【任务目标】${value(brief.idea)}\n【目标受众】${value(brief.audience)}\n【受众行动】${value(brief.audienceAction)}\n【演讲时长】${value(brief.durationMinutes, '未提供，需标记页数估算假设')}\n【硬性页数与字数约束】${JSON.stringify(object(brief.constraints))}\n【其他硬性要求】${value(list(brief.hardRequirements), '未提供')}\n【偏好（未确认前仅作为偏好）】${value(list(brief.preferences), '未提供')}\n【必须保留】${value(list(brief.preserveItems), '未指定')}\n【明确排除】${value(list(brief.excludeItems), '未指定')}\n【已知事实】${value(list(brief.facts), '尚未确认；勿把推断写成事实')}\n【当前假设】${value(list(brief.assumptions), '尚未确认；请显式标记')}\n【现有材料】${JSON.stringify(Array.isArray(brief.materials) ? brief.materials : [])}`;
   }
 
