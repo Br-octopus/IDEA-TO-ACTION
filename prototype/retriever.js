@@ -25,5 +25,15 @@
     };
   }
 
-  return { createRetriever };
+  function dedupeResearchResults(results) {
+    const seen = new Set();
+    return (Array.isArray(results) ? results : []).filter(result => {
+      const key = String(result?.url || result?.id || "").trim().toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  return { createRetriever, dedupeResearchResults };
 });

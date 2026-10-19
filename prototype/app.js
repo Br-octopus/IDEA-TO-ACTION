@@ -1,3 +1,146 @@
+(function exposeSocialResearchCoordinator(root) {
+  if (typeof module === "object" && module.exports) {
+    const schema = require("./social-research-schema.js");
+    const workflow = require("./social-research-workflow.js");
+    const prompts = require("./social-research-prompts.js");
+    const storage = require("./storage.js");
+    const retriever = require("./retriever.js");
+    module.exports = { createSocialResearchCoordinator: createCoordinator({ schema, workflow, prompts, storage, retriever }) };
+  } else {
+    root.ForwardStepSocialResearchCoordinator = { createSocialResearchCoordinator: createCoordinator({
+      schema: root.ForwardStepSocialResearchSchema,
+      workflow: root.ForwardStepSocialResearchWorkflow,
+      prompts: root.ForwardStepSocialResearchPrompts,
+      storage: root.ForwardStepStorage,
+      retriever: root.ForwardStepRetriever
+    }) };
+  }
+
+  function createCoordinator({ schema, workflow, prompts, storage, retriever }) {
+    return function createSocialResearchCoordinator({ desktopApi, initialState, persistState } = {}) {
+      if (!desktopApi || typeof desktopApi.requestModel !== "function" || !desktopApi.social) {
+        throw new TypeError("研究协调器需要 desktopApi.requestModel 和 desktopApi.social");
+      }
+      let state = storage.migrateState(initialState || storage.createEmptyState());
+      const persist = () => {
+        state = typeof persistState === "function" ? persistState(state) || state
+          : typeof localStorage !== "undefined" ? storage.saveState(localStorage, state)
+            : storage.migrateState(state);
+        return state;
+      };
+      const findTask = taskId => state.researchTasks.find(task => task.id === taskId);
+      const updateTask = task => {
+        state = { ...state, researchTasks: state.researchTasks.map(item => item.id === task.id ? schema.createResearchTask(task) : item) };
+        persist();
+        return findTask(task.id);
+      };
+      const parseModel = (value, fallback) => {
+        if (value && typeof value === "object") return typeof value.text === "string" ? parseModel(value.text, fallback) : value;
+        const text = typeof value === "string" ? value.trim() : "";
+        if (!text) return fallback;
+        try { return JSON.parse(text); } catch { return fallback; }
+      };
+      const requestModel = (purpose, prompt) => desktopApi.requestModel({
+        messages: [{ role: "user", content: `${purpose ? `任务用途：${purpose}\n` : ""}${prompt}` }],
+        options: { purpose }
+      });
+      const createPlan = async input => {
+        const taskInput = { ...input };
+        const generated = parseModel(await requestModel("plan", prompts.buildResearchPlanPrompt(taskInput)), {});
+        const task = workflow.createResearchPlan({ ...taskInput, ...generated, topic: taskInput.topic, template: taskInput.template, platforms: taskInput.platforms || generated.platforms, budget: generated.budget || taskInput.budget, queries: generated.queries || taskInput.queries });
+        state = { ...state, researchTasks: [...state.researchTasks, task] };
+        persist();
+        return task;
+      };
+      const confirmPlan = async taskId => {
+        const task = findTask(taskId);
+        if (!task) throw new Error("研究任务不存在");
+        return updateTask(workflow.approveResearchPlan(task));
+      };
+      const cancel = taskId => {
+        const task = findTask(taskId);
+        if (!task) throw new Error("研究任务不存在");
+        return updateTask(workflow.rejectResearchPlan(task, "用户取消"));
+      };
+      const run = async taskId => {
+        const current = findTask(taskId);
+        if (!current) throw new Error("研究任务不存在");
+        if (current.status === "cancelled") throw new Error("任务已取消或终止，不能继续推进");
+        let task = current;
+        const prepared = [];
+        const platformErrors = {};
+        const capabilities = {};
+        for (const platform of task.platforms) {
+          try {
+            const capability = await desktopApi.social.check(platform, task.profileId || task.id);
+            if (capability && (capability.status === "failed" || capability.status === "restricted" || capability.status === "not-ready")) throw new Error(`${platform} 平台未准备完成`);
+            capabilities[platform] = capability || {};
+            prepared.push(platform);
+          } catch (error) {
+            platformErrors[platform] = { message: error.message || "平台检查失败" };
+          }
+        }
+        task = workflow.transitionResearchTask(task, { type: "prepared", platforms: prepared });
+        if (prepared.length !== task.platforms.length) {
+          task = { ...task, status: "searching", platformErrors };
+          updateTask(task);
+        } else {
+          task = workflow.startResearchTask(task);
+          updateTask(task);
+        }
+        const results = [];
+        for (const platform of prepared) {
+          const preference = task.connectionModes?.[platform] || "auto";
+          const capability = capabilities[platform] || (task.capabilities || []).find(item => item.platform === platform) || {};
+          let mode;
+          try {
+            mode = workflow.decideConnectionMode(platform, capability, preference);
+            const query = task.plan.platformRoles.find(item => item.platform === platform)?.queries?.[0] || task.queries[0] || task.plan.queries[0];
+            let response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
+            if (preference === "auto" && mode === "api" && workflow.shouldFallbackToBrowser(response, { preference, minimumResults: 1 })) {
+              mode = "browser";
+              response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
+            }
+            if (response?.status === "error") throw Object.assign(new Error(response.message || "平台搜索失败"), { code: response.code });
+            const items = Array.isArray(response) ? response : response?.results || [];
+            const retrievalMethod = response?.retrievalMethod || (mode === "browser" ? "browser" : mode === "api" ? "api" : "browser");
+            const normalized = retriever.dedupeResearchResults(items).map(item => schema.normalizeSocialResult({ ...item, platform, retrievalMethod }));
+            results.push(...normalized);
+            task = workflow.consumeResearchBudget(task, { platform, queries: 1, pages: 1, details: normalized.length });
+            updateTask({ ...task, results, resultIds: results.map(item => item.id) });
+          } catch (error) {
+            platformErrors[platform] = { message: error.message || "平台执行失败" };
+          }
+        }
+        const reportRaw = await requestModel("report", prompts.buildResearchReportPrompt({ ...task, results }, results));
+        const generatedReport = parseModel(reportRaw, { summary: "", resultIds: results.map(item => item.id) });
+        const errorNotes = Object.entries(platformErrors).map(([platform, error]) => `${platform} 平台执行失败，需核验：${error.message}`);
+        const verificationItems = Array.isArray(generatedReport.needsVerification)
+          ? generatedReport.needsVerification
+          : generatedReport.needsVerification ? [generatedReport.needsVerification] : [];
+        const normalizedReport = schema.createResearchTask({
+          ...task,
+          results,
+          report: { ...generatedReport, needsVerification: [...verificationItems, ...errorNotes] }
+        }).report;
+        task = { ...task, results, resultIds: results.map(item => item.id), report: normalizedReport, reportId: `${task.id}-report`, platformErrors, status: "awaiting-save" };
+        return { ...updateTask(task), platformErrors };
+      };
+      const saveSelected = (taskId, selectedResultIds) => {
+        const task = findTask(taskId);
+        if (!task || task.status !== "awaiting-save") throw new Error("研究任务尚未进入保存阶段");
+        const selected = new Set(Array.isArray(selectedResultIds) ? selectedResultIds : []);
+        const entries = task.results.filter(result => selected.has(result.id)).map(result => storage.buildResearchKnowledgeEntry(result, task));
+        let next = task;
+        state = { ...state, knowledgeEntries: [...state.knowledgeEntries, ...entries], researchTasks: state.researchTasks.map(item => item.id === taskId ? { ...item, selectedResultIds: entries.map(entry => entry.sourceId), savedResultIds: entries.map(entry => entry.sourceId), status: "saved" } : item) };
+        persist();
+        next = findTask(taskId);
+        return next;
+      };
+      return { createPlan, confirmPlan, cancel, run, saveSelected, getState: () => state };
+    };
+  }
+})(typeof globalThis === "undefined" ? this : globalThis);
 function cloneKnowledgeState(state) {
   return JSON.parse(JSON.stringify(state && typeof state === "object" ? state : {}));
 }
@@ -73,11 +216,11 @@ function filterKnowledgeEntriesByScope(entries, scope) {
   });
 }
 const knowledgeManagementApi = { toggleKnowledgeFavorite, toggleKnowledgePinned, markKnowledgeUsed, hideKnowledgeEntry, restoreKnowledgeEntry, deleteKnowledgeEntries, selectKnowledgeEntries, buildManualKnowledgeEntry, confirmBrowserSafetyBackup, consumeBrowserImportGate, filterKnowledgeEntriesByScope, SAFETY_BACKUP_NOT_CONFIRMED };
-if (typeof module === "object" && module.exports) module.exports = knowledgeManagementApi;
+if (typeof module === "object" && module.exports) Object.assign(module.exports, knowledgeManagementApi);
 if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement = knowledgeManagementApi;
 
 
-
+if (typeof window !== "undefined" && typeof document !== "undefined") {
 (() => {
   const { STORAGE_KEY, createEmptyState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse: deferCaseReuseState } = window.ForwardStepStorage;
   const research = window.ForwardStepResearchCatalog;
@@ -1358,9 +1501,9 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     document.getElementById("settings-search-credential").value = "";
     if (!result.saved) { toast(result.message || "配置未保存"); return; }
     serviceConfig = result;
-    document.getElementById("service-status").textContent = result.model.configured ? `模型已连接 · ${result.model.name}` : "本地服务在线 · 未配置模型";
     document.getElementById("service-status").classList.toggle("ready", result.model.configured);
     document.getElementById("service-status").classList.toggle("offline", !result.model.configured);
     toast("设置已安全保存");
   });
 })();
+}

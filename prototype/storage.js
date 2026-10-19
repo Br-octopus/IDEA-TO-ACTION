@@ -490,6 +490,30 @@
     return { state: next, entry: saved, updated: true };
   }
 
+  function buildResearchKnowledgeEntry(result, task = {}) {
+    if (!knowledgeSchema || typeof knowledgeSchema.normalizeKnowledgeEntry !== "function") {
+      throw new KnowledgeSchemaUnavailableError();
+    }
+    const source = result && typeof result === "object" ? result : {};
+    const id = String(source.id || "").trim();
+    if (!id) throw new TypeError("研究结果必须提供非空 id");
+    return knowledgeSchema.normalizeKnowledgeEntry({
+      id: `research-${id}`,
+      type: "manual-note",
+      title: source.title || `${source.platform || "社媒"} 研究结果`,
+      sourceUrl: source.url,
+      sourceType: "社媒研究",
+      sourceKind: "manual",
+      sourceId: id,
+      domains: [source.platform].filter(Boolean),
+      keywords: task.plan?.queries || task.queries || [],
+      summary: source.summary,
+      contentExcerpt: source.discussionSummary,
+      limitations: source.evidenceStatus === "unverified" ? "来源尚未由用户逐条核验" : "",
+      verificationStatus: source.evidenceStatus || "unverified"
+    });
+  }
+
   function listCaseVersions(caseItem) {
     if (!caseItem || typeof caseItem !== "object") return [];
     if (Array.isArray(caseItem.versionHistory) && caseItem.versionHistory.length) {
@@ -543,5 +567,5 @@
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });
