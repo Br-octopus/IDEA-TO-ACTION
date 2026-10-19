@@ -80,7 +80,7 @@
     addFindings(findings, text, source, "privateKey", HIGH_RISK, /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g);
     addFindings(findings, text, source, "databaseConnection", HIGH_RISK, /(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis):\/\/[^\s"'<>]+/gi);
     addFindings(findings, text, source, "authorization", HIGH_RISK, /\bAuthorization\s*:[ \t]*(?:\r?\n[ \t]+)?[^\r\n]+(?:\r?\n[ \t]+[^\r\n]+)*/gi);
-    addFindings(findings, text, source, "apiKey", HIGH_RISK, /\b(?:api[_ -]?key|x-api-key)\s*[:=]\s*["']?[A-Za-z0-9_\-]{8,}["']?|\b(?:sk-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi);
+    addFindings(findings, text, source, "apiKey", HIGH_RISK, /\b(?:api[_ -]?key|x-api-key|client[_ -]?secret|access[_ -]?token|aws[_ -]?secret[_ -]?access[_ -]?key)\s*[:=]\s*["']?[A-Za-z0-9_\-.\/+={}]{8,}["']?|\b(?:AKIA[A-Z0-9]{16}|sk_live_[A-Za-z0-9]{8,}|sk-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gi);
     addPasswordFindings(findings, text, source);
     addFindings(findings, text, source, "idCard", MEDIUM_RISK, /(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)/g);
     addFindings(findings, text, source, "phone", MEDIUM_RISK, /(?<!\d)1[3-9]\d{9}(?!\d)/g);

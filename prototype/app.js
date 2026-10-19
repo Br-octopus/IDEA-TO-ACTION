@@ -197,7 +197,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     confirmation.hidden = !report.highRiskCount;
     checkbox.checked = Boolean(sendDraft.confirmedRisk);
     checkbox.disabled = !report.highRiskCount;
-    document.getElementById("send-preview-confirm").disabled = !serviceConfig.model?.configured || report.blocked || (report.requiresConfirmation && !sendDraft.confirmedRisk);
+    document.getElementById("send-preview-confirm").disabled = !serviceConfig.model?.configured || sendDraft.sending || report.blocked || (report.requiresConfirmation && !sendDraft.confirmedRisk);
   }
   function selectedKnowledgeEntries() {
     const api = window.ForwardStepKnowledgeSearch;
@@ -444,7 +444,8 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       knowledgeEntries,
       renderedText: appendKnowledgeContext(withSelectedReferences(prompt), knowledgeEntries),
       userEdited: false,
-      confirmedRisk: false
+      confirmedRisk: false,
+      sending: false
     };
     renderSendPanel();
     document.getElementById("send-preview").hidden = false;
@@ -471,9 +472,10 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     if (sendDraft) copyText(sendDraft.renderedText);
   });
   document.getElementById("send-preview-confirm").addEventListener("click", async () => {
-    if (!sendDraft || !serviceConfig.model?.configured) return;
+    if (!sendDraft || !serviceConfig.model?.configured || sendDraft.sending) return;
+    const draft = sendDraft;
     const { text, segments } = buildSendContent();
-    if (!sendDraft.userEdited) sendDraft.renderedText = text;
+    if (!draft.userEdited) draft.renderedText = text;
     if (!text.trim()) { toast("发送内容不能为空"); return; }
     const report = buildSendReport(segments);
     if (report.blocked || report.safetyUnavailable) {
@@ -486,8 +488,13 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       renderSendSafety(report);
       return;
     }
+    draft.sending = true;
+    renderSendSafety(report);
     const succeeded = await requestModel(text);
+    draft.sending = false;
+    if (sendDraft !== draft) return;
     if (succeeded) closeSendPanel();
+    else renderSendSafety(buildSendReport(buildSendContent().segments));
   });
   document.getElementById("preview-master").addEventListener("click", () => { const p = getActiveProject(); if (p) openSendPanel(p.masterPrompt); });
   document.getElementById("back-home").addEventListener("click", () => go("home"));

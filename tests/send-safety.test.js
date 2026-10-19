@@ -8,7 +8,8 @@ function createSendPanelVm({
   includeSafety = true,
   initialPrompt = 'password=secret-value',
   selectedReferenceIds = [],
-  knowledgeEntries = []
+  knowledgeEntries = [],
+  deferModel = false
 } = {}) {
   const listeners = new Map();
   const elements = new Map();
@@ -57,6 +58,7 @@ function createSendPanelVm({
   };
   let requestModelCalls = 0;
   const requestModelPrompts = [];
+  const pendingModelResolvers = [];
   let configCalls = 0;
   const promptEngine = {
     buildGoalPrompt() { return initialPrompt; },
@@ -103,6 +105,7 @@ function createSendPanelVm({
       async requestModel({ messages }) {
         requestModelCalls += 1;
         requestModelPrompts.push(messages[0].content);
+        if (deferModel) return new Promise(resolve => pendingModelResolvers.push(resolve));
         return { code: 'MODEL_FAILED', message: '测试失败' };
       }
     },
@@ -139,6 +142,7 @@ function createSendPanelVm({
     state,
     checkbox,
     confirmButton: document.getElementById('send-preview-confirm'),
+    panel: document.getElementById('send-preview'),
     text: document.getElementById('send-preview-text'),
     findings: document.getElementById('send-preview-findings'),
     model: document.getElementById('send-preview-model'),
@@ -151,7 +155,11 @@ function createSendPanelVm({
     },
     get configCalls() { return configCalls; },
     get requestModelCalls() { return requestModelCalls; },
-    get requestModelPrompts() { return requestModelPrompts; }
+    get requestModelPrompts() { return requestModelPrompts; },
+    resolveModel(response = { text: '模型成功' }) {
+      const resolve = pendingModelResolvers.shift();
+      if (resolve) resolve(response);
+    }
   };
 }
 
@@ -267,6 +275,22 @@ test('检测常见前缀 API Key，并覆盖超长文本尾部敏感内容', () 
   assert.ok(report.requiresConfirmation);
 });
 
+test('检测常见凭证字段和前缀，但不误报孤立 secret/token', () => {
+  const text = [
+    'client_secret=client-secret-value',
+    'access_token=access-token-value',
+    'AWS_SECRET_ACCESS_KEY=aws-secret-value',
+    'AKIA1234567890ABCDEF',
+    'sk_live_1234567890abcdef',
+    'secret token'
+  ].join('\n');
+  const findings = detectSensitiveContent(text, { source: '用户原文' });
+  const credentialFindings = findings.filter(item => item.kind === 'apiKey');
+  assert.equal(credentialFindings.length, 5);
+  assert.ok(credentialFindings.every(item => item.severity === 'high'));
+  assert.equal(findings.some(item => item.kind === 'secret' || item.kind === 'token'), false);
+});
+
 test('编辑文本作为单一用户来源分段，风险归因不回指基础提示词', () => {
   const text = 'password=当前编辑值';
   const report = buildSendReport([{ source: '用户原文/当前编辑文本', text }]);
@@ -362,6 +386,44 @@ test('发送 handler 在 VM 中拒绝未确认高风险，确认后才调用模�
   assert.equal(vmApp.requestModelCalls, 1, '编辑文本后必须清除旧确认，不能直接再次发送');
   assert.equal(vmApp.text.value, 'password=another-secret');
   assert.equal(vmApp.checkbox.checked, false, '编辑文本后确认控件必须重置');
+});
+
+test('发送中重复点击只调用一次模型，并在成功后关闭当前草稿', async () => {
+  const vmApp = createSendPanelVm({ deferModel: true });
+  await vmApp.waitForConfig();
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.listeners.get('preview-master:click')();
+  vmApp.checkbox.checked = true;
+  vmApp.listeners.get('send-preview-confirmation:change')({ target: vmApp.checkbox });
+  const confirm = vmApp.listeners.get('send-preview-confirm:click');
+  const first = confirm({});
+  const second = confirm({});
+  await Promise.resolve();
+  assert.equal(vmApp.requestModelCalls, 1);
+  assert.equal(vmApp.confirmButton.disabled, true);
+  vmApp.resolveModel();
+  await Promise.all([first, second]);
+  assert.equal(vmApp.panel.hidden, true);
+});
+
+test('取消并重开草稿后，旧请求成功不会关闭新发送面板', async () => {
+  const vmApp = createSendPanelVm({ deferModel: true, initialPrompt: 'password=first-secret' });
+  await vmApp.waitForConfig();
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.listeners.get('preview-master:click')();
+  vmApp.checkbox.checked = true;
+  vmApp.listeners.get('send-preview-confirmation:change')({ target: vmApp.checkbox });
+  const pending = vmApp.listeners.get('send-preview-confirm:click')({});
+  await Promise.resolve();
+  vmApp.listeners.get('send-preview-cancel:click')();
+  assert.equal(vmApp.panel.hidden, true);
+  vmApp.listeners.get('preview-master:click')();
+  assert.equal(vmApp.panel.hidden, false);
+  const newText = vmApp.text.value;
+  vmApp.resolveModel();
+  await pending;
+  assert.equal(vmApp.panel.hidden, false);
+  assert.equal(vmApp.text.value, newText);
 });
 
 test('缺失安全模块时 fail-closed，脚本直接触发也不得调用模型', async () => {
