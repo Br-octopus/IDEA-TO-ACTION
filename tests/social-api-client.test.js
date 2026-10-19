@@ -96,8 +96,17 @@ test('未配置、非 JSON、认证、限流、上游、超时和空结果均返
   assert.equal((await timeout.search('test')).code, SOCIAL_API_CODES.TIMEOUT);
 });
 
-test('Reddit User-Agent 必须由配置提供且拒绝换行注入', async () => {
-  const invalidValues = [undefined, '', '   ', 'linux:app:v1 (by /u/contact)\r\nX-Injected: yes'];
+test('Reddit User-Agent 必须由配置提供且拒绝原始值中的首尾和中间换行', async () => {
+  const validUserAgent = 'linux:app:v1 (by /u/contact)';
+  const invalidValues = [
+    undefined,
+    '',
+    '   ',
+    `\r${validUserAgent}`,
+    `${validUserAgent}\n`,
+    `linux:app:v1\r (by /u/contact)`,
+    `linux:app:v1 (by /u/contact)\r\nX-Injected: yes`
+  ];
   for (const userAgent of invalidValues) {
     let called = false;
     const client = createSocialApiClient({
