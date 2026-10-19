@@ -114,6 +114,20 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
   assert.equal(task.usage.platforms, 0);
 });
 
+test('查询计量必须带平台或使用逐平台 map，并对重复调用累计', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
+    budget: { maxQueriesPerPlatform: 2 }
+  })));
+  assert.throws(() => workflow.consumeResearchBudget(task, { queries: 1 }), TypeError);
+  assert.throws(() => workflow.consumeResearchBudget(task, { queriesPerPlatform: 1 }), TypeError);
+  let used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 1 });
+  used = workflow.consumeResearchBudget(used, { platform: 'reddit', queriesPerPlatform: 1 });
+  assert.equal(used.usage.queriesByPlatform.reddit, 2);
+  expectBudgetExceeded(used, { platform: 'reddit', queries: 1 });
+  used = workflow.consumeResearchBudget(task, { queriesByPlatform: { reddit: 2, youtube: 1 } });
+  assert.deepEqual(used.usage.queriesByPlatform, { reddit: 2, youtube: 1 });
+});
+
 test('预算计量拒绝非有限、负数和非整数值，且无效输入不修改旧任务', () => {
   const task = startPreparedTask(workflow.approveResearchPlan(makePlan()));
   const invalidInputs = [];
@@ -143,6 +157,55 @@ test('补搜只允许在已批准预算剩余额度内进行', () => {
   assert.equal(workflow.canRequestSupplementarySearch(analysisUsed, { analysisTokens: 1001 }).allowed, false);
   assert.equal(workflow.canRequestSupplementarySearch(analysisUsed, { analysisTokens: 1000 }).allowed, true);
   assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'tiktok', platforms: ['tiktok'] }).allowed, false);
+});
+
+test('补搜规范化单平台数组、累计平台预算并要求多平台逐平台查询 map', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
+    budget: { maxPlatforms: 3, maxQueriesPerPlatform: 2 }
+  })));
+  const single = workflow.canRequestSupplementarySearch(task, { platforms: [' REDDIT '], queries: 1 });
+  assert.equal(single.allowed, true);
+  assert.equal(single.usage.platform, 'reddit');
+  let used = single.task;
+  const second = workflow.canRequestSupplementarySearch(used, { platforms: ['youtube'], queries: 1 });
+  assert.equal(second.allowed, true);
+  used = second.task;
+  assert.deepEqual(used.usage.usedPlatforms, ['reddit', 'youtube']);
+  const third = workflow.canRequestSupplementarySearch(used, { platforms: ['xiaohongshu'], queries: 1 });
+  assert.equal(third.allowed, true);
+  used = third.task;
+  assert.equal(used.usage.platforms, 3);
+  const limitedTask = { ...task, budget: { ...task.budget, maxPlatforms: 2 } };
+  const firstLimited = workflow.canRequestSupplementarySearch(limitedTask, { platforms: ['reddit'], queries: 1 });
+  const secondLimited = workflow.canRequestSupplementarySearch(firstLimited.task, { platforms: ['youtube'], queries: 1 });
+  assert.equal(secondLimited.allowed, true);
+  const thirdLimited = workflow.canRequestSupplementarySearch(secondLimited.task, { platforms: ['xiaohongshu'], queries: 1 });
+  assert.equal(thirdLimited.allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, { platforms: ['unknown'] }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, {
+    platform: 'unknown',
+    platforms: ['reddit', 'youtube'],
+    queriesByPlatform: { reddit: 1, youtube: 1 }
+  }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, { platforms: ['reddit', 'youtube'], queries: 1 }).allowed, false);
+  const multi = workflow.canRequestSupplementarySearch(task, {
+    platforms: ['reddit', 'youtube'],
+    queriesByPlatform: { reddit: 1, youtube: 2 }
+  });
+  assert.equal(multi.allowed, true);
+  assert.deepEqual(multi.usage.queriesByPlatform, { reddit: 1, youtube: 2 });
+});
+
+test('补搜仅在 searching 状态开放', () => {
+  const draft = makePlan();
+  const awaitingPreparation = workflow.approveResearchPlan(draft);
+  const searching = startPreparedTask(awaitingPreparation);
+  const reportReady = workflow.transitionResearchTask(searching, { type: 'finish' });
+  const awaitingSave = workflow.transitionResearchTask(reportReady, { type: 'request_save' });
+  for (const task of [draft, awaitingPreparation, awaitingSave]) {
+    assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, false);
+  }
+  assert.equal(workflow.canRequestSupplementarySearch(searching, { platform: 'reddit', queries: 1 }).allowed, true);
 });
 
 test('连接偏好尊重能力和明确选择，并在 auto 下检查 API 结果质量', () => {

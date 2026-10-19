@@ -8,6 +8,7 @@
 })(typeof globalThis === 'undefined' ? this : globalThis, function (schema) {
   const EMPTY_USAGE = () => ({
     platforms: 0,
+    usedPlatforms: [],
     queriesByPlatform: {},
     pages: 0,
     details: 0,
@@ -162,11 +163,33 @@
     if (usage.queries !== undefined && usage.queriesPerPlatform !== undefined && usage.queries !== usage.queriesPerPlatform) {
       throw new TypeError('queries 与 queriesPerPlatform 必须一致');
     }
+    const queryMap = usage.queriesByPlatform ?? {};
+    if (!queryMap || typeof queryMap !== 'object' || Array.isArray(queryMap)) {
+      throw new TypeError('queriesByPlatform 必须是平台到查询数量的对象');
+    }
+    for (const [name, count] of Object.entries(queryMap)) {
+      if (!name.trim() || typeof count !== 'number' || !Number.isFinite(count) || count < 0 || !Number.isInteger(count)) {
+        throw new TypeError('queriesByPlatform 的平台和查询数量无效');
+      }
+    }
     const platform = String(usage.platform || '').trim().toLowerCase();
     const queryCount = usage.queries ?? usage.queriesPerPlatform ?? 0;
+    const queryMapEntries = Object.entries(queryMap).map(([name, count]) => [name.trim().toLowerCase(), count]);
+    if (queryCount > 0 && !platform) {
+      throw new TypeError('非零 queries 或 queriesPerPlatform 必须指定 platform；多平台查询请使用 queriesByPlatform');
+    }
+    if (usage.usedPlatforms !== undefined && !Array.isArray(usage.usedPlatforms)) {
+      throw new TypeError('usedPlatforms 必须是平台数组');
+    }
+    const usedPlatforms = normalizePlatformList([
+      ...(current.usedPlatforms || Object.keys(current.queriesByPlatform || {})),
+      ...(usage.usedPlatforms || []),
+      ...(platform ? [platform] : []),
+      ...queryMapEntries.map(([name]) => name)
+    ]);
     const nextUsage = {
-      platforms: Math.max(Number(current.platforms || 0), usage.platforms || 0,
-        platform && !(current.queriesByPlatform || {})[platform] ? Number(current.platforms || 0) + 1 : 0),
+      platforms: Math.max(Number(current.platforms || 0), usage.platforms || 0, usedPlatforms.length),
+      usedPlatforms,
       queriesByPlatform: { ...(current.queriesByPlatform || {}) },
       pages: Number(current.pages || 0) + Number(usage.pages || 0),
       details: Number(current.details || 0) + Number(usage.details || 0),
@@ -175,9 +198,11 @@
       analysisTokens: Number(current.analysisTokens || 0) + Number(usage.analysisTokens || 0)
     };
     if (platform && queryCount) nextUsage.queriesByPlatform[platform] = Number(nextUsage.queriesByPlatform[platform] || 0) + queryCount;
+    for (const [name, count] of queryMapEntries) {
+      if (count) nextUsage.queriesByPlatform[name] = Number(nextUsage.queriesByPlatform[name] || 0) + count;
+    }
     const checks = [
       [nextUsage.platforms, budget.maxPlatforms, '平台数'],
-      [platform ? nextUsage.queriesByPlatform[platform] || 0 : usage.queriesPerPlatform ?? usage.queries ?? 0, budget.maxQueriesPerPlatform, '每平台查询数'],
       [nextUsage.pages, budget.maxPages, '翻页数'],
       [nextUsage.details, budget.maxDetails, '详情数'],
       [nextUsage.durationMs, budget.maxDurationMs, '执行时间'],
@@ -186,6 +211,9 @@
     ];
     for (const [actual, limit, label] of checks) {
       if (Number.isFinite(Number(actual)) && Number(actual) > Number(limit)) throw budgetError(`${label}超出预算`);
+    }
+    for (const [name, count] of Object.entries(nextUsage.queriesByPlatform)) {
+      if (count > Number(budget.maxQueriesPerPlatform)) throw budgetError(`平台 ${name} 的查询数超出预算`);
     }
     return { ...task, usage: nextUsage };
   }
@@ -219,14 +247,47 @@
 
   function canRequestSupplementarySearch(task, request = {}) {
     try {
-      assertApproved(task);
-      const additionalPlatforms = request.platforms || (request.platform ? [request.platform] : []);
-      const currentPlatforms = new Set(task.platforms || []);
-      if (additionalPlatforms.some(platform => !currentPlatforms.has(String(platform).toLowerCase()))) {
+      assertActive(task);
+      if (task.status !== 'searching') return { allowed: false, reason: '补搜仅允许在 searching 状态申请' };
+      const hasPlatformArray = Object.prototype.hasOwnProperty.call(request, 'platforms');
+      if (hasPlatformArray && !Array.isArray(request.platforms)) throw new TypeError('platforms 必须是平台数组');
+      const requestedPlatforms = normalizePlatformList(hasPlatformArray
+        ? request.platforms
+        : request.platform ? [request.platform] : Object.keys(request.queriesByPlatform || {}));
+      const approvedPlatforms = new Set(normalizePlatformList(task.platforms || []));
+      if (requestedPlatforms.some(platform => !approvedPlatforms.has(platform))) {
         return { allowed: false, reason: '补搜不能增加未批准的平台' };
       }
-      consumeResearchBudget(task, request);
-      return { allowed: true, reason: '' };
+      if (request.platform && (requestedPlatforms.length !== 1 || String(request.platform).trim().toLowerCase() !== requestedPlatforms[0])) {
+        throw new TypeError('platform 必须与单平台请求一致');
+      }
+      const queryMap = request.queriesByPlatform;
+      if (queryMap !== undefined && (!queryMap || typeof queryMap !== 'object' || Array.isArray(queryMap))) {
+        throw new TypeError('queriesByPlatform 必须是平台到查询数量的对象');
+      }
+      const normalizedQueryMap = queryMap && Object.entries(queryMap).reduce((result, [name, count]) => {
+        const normalizedName = String(name).trim().toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(result, normalizedName)) throw new TypeError('queriesByPlatform 存在重复平台');
+        result[normalizedName] = count;
+        return result;
+      }, {});
+      if (requestedPlatforms.length > 1) {
+        if (!normalizedQueryMap || requestedPlatforms.some(platform => !Object.prototype.hasOwnProperty.call(normalizedQueryMap, platform)) ||
+          Object.keys(normalizedQueryMap).some(platform => !requestedPlatforms.includes(platform))) {
+          throw new TypeError('多平台补搜必须为每个平台提供 queriesByPlatform');
+        }
+      } else if (normalizedQueryMap && Object.keys(normalizedQueryMap).some(platform => !requestedPlatforms.includes(platform))) {
+        throw new TypeError('queriesByPlatform 包含未请求的平台');
+      }
+      const { platforms: ignoredPlatforms, ...requestedUsage } = request;
+      const normalizedUsage = {
+        ...requestedUsage,
+        usedPlatforms: requestedPlatforms,
+        ...(requestedPlatforms.length === 1 ? { platform: requestedPlatforms[0] } : {}),
+        ...(normalizedQueryMap ? { queriesByPlatform: normalizedQueryMap } : {})
+      };
+      const updated = consumeResearchBudget(task, normalizedUsage);
+      return { allowed: true, reason: '', usage: normalizedUsage, task: updated };
     } catch (error) {
       return { allowed: false, reason: error.code === 'budget_exceeded' ? error.code : error.message };
     }
