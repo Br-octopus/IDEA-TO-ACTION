@@ -154,14 +154,61 @@
     return countWords([slide.title, body].filter(Boolean).join(' '));
   }
 
+  function evaluatePreferences(preferences, slides, perSlideWords) {
+    const checks = [];
+    const deviations = [];
+    const needsReview = [];
+    const rules = [
+      { type: 'max-slides', pattern: /(?:最多|至多|不超过)\s*(\d+)\s*页/, actual: () => slides.length },
+      { type: 'min-slides', pattern: /(?:至少|不少于)\s*(\d+)\s*页/, actual: () => slides.length },
+      {
+        type: 'max-words-per-slide',
+        pattern: /每页(?:最多|至多|不超过)\s*(\d+)\s*词/,
+        actual: () => Math.max(0, ...perSlideWords.map(item => item.words))
+      }
+    ];
+
+    for (const preference of preferences) {
+      const matches = rules.flatMap(rule => {
+        const match = preference.match(rule.pattern);
+        return match ? [{ rule, target: Number(match[1]) }] : [];
+      });
+      if (matches.length !== 1 || !Number.isSafeInteger(matches[0]?.target) || matches[0]?.target < 1) {
+        needsReview.push({
+          preference,
+          status: 'needs-review',
+          reason: '该自由文本偏好没有匹配到唯一、明确的数值规则，需人工核对。'
+        });
+        continue;
+      }
+
+      const { rule, target } = matches[0];
+      const actual = rule.actual();
+      const deviates = rule.type === 'min-slides' ? actual < target : actual > target;
+      const check = {
+        preference,
+        type: rule.type,
+        status: deviates ? 'deviation' : 'met',
+        actual,
+        target,
+        basis: rule.type === 'max-words-per-slide'
+          ? '取每页 title 与 body 的词数，并与单页词数偏好比较。'
+          : '取草稿页数，并与明确的页数偏好比较。'
+      };
+      checks.push(check);
+      if (deviates) deviations.push({ ...check, message: `偏好“${preference}”未满足：当前值 ${actual}，目标为 ${target}。` });
+    }
+
+    return { checks, deviations, needsReview };
+  }
+
   function validatePptConstraints(briefInput = {}, draftInput = {}) {
     const brief = schema.createPptBrief(object(briefInput));
     const draft = schema.normalizePptDraft(object(draftInput));
     const constraints = object(brief.constraints);
     const slides = Array.isArray(draft.slides) ? draft.slides : [];
     const hardConflicts = [];
-    const preferenceDeviations = [];
-    const preferenceReview = Array.isArray(brief.preferences) ? brief.preferences.slice() : [];
+    const preferences = Array.isArray(brief.preferences) ? brief.preferences : [];
     const maxSlides = numberOrNull(constraints.maxSlides);
     const minSlides = numberOrNull(constraints.minSlides);
     const maxWordsPerSlide = numberOrNull(constraints.maxWordsPerSlide);
@@ -181,6 +228,7 @@
 
     const perSlideWords = slides.map((slide, index) => ({ page: slide.page || index + 1, words: slideWords(slide) }));
     const wordCount = perSlideWords.reduce((sum, item) => sum + item.words, 0);
+    const preferenceResults = evaluatePreferences(preferences, slides, perSlideWords);
     const wordCapacity = maxWordsPerSlide === null ? null : slides.length * maxWordsPerSlide;
     if (maxWordsPerSlide !== null) {
       for (const item of perSlideWords) {
@@ -218,8 +266,9 @@
 
     return {
       hardConflicts,
-      preferenceDeviations,
-      preferenceReview,
+      preferenceDeviations: preferenceResults.deviations,
+      preferenceChecks: preferenceResults.checks,
+      preferenceReview: preferenceResults.needsReview,
       effectiveConstraints: { minSlides, maxSlides, maxWordsPerSlide },
       wordCount,
       wordCapacity,
@@ -270,10 +319,18 @@
       const sourceIds = Array.isArray(slide.sourceIds) ? slide.sourceIds : [];
       const invalidSources = knownSources.size ? sourceIds.filter(id => !knownSources.has(id)) : [];
       const missingEvidence = sourceIds.length === 0;
+      const conciseCopy = maxWords === null
+        ? { status: 'needs-review', actualWords: words, limit: null, reason: '未设置单页字数上限，精简度没有可执行的判定阈值。' }
+        : {
+          status: words <= maxWords ? 'pass' : 'fail',
+          actualWords: words,
+          limit: maxWords,
+          reason: words <= maxWords ? '' : `超过简报设置的单页字数上限 ${maxWords}。`
+        };
       const checks = {
         purpose: Boolean(String(slide.purpose || '').trim()),
         conclusion: Boolean(String(slide.title || '').trim()),
-        conciseCopy: maxWords === null || words <= maxWords,
+        conciseCopy,
         evidence: !missingEvidence && invalidSources.length === 0,
         visualDirection: Boolean(String(slide.visualDescription || '').trim()),
         speakerNotes: { optional: true, provided: Boolean(String(slide.speakerNotes || '').trim()) }
@@ -281,7 +338,7 @@
       const issues = [];
       if (!checks.purpose) issues.push('缺少页面职责 purpose。');
       if (!checks.conclusion) issues.push('缺少页面结论或标题。');
-      if (!checks.conciseCopy) issues.push(`页面文案约 ${words} 词，超过单页上限 ${maxWords} 词。`);
+      if (conciseCopy.status === 'fail') issues.push(`页面文案约 ${words} 词，超过单页上限 ${maxWords} 词。`);
       if (missingEvidence) issues.push('缺少证据来源引用。');
       if (invalidSources.length) issues.push(`引用了简报未登记的来源 ID：${invalidSources.join(', ')}。`);
       if (!checks.visualDirection) issues.push('缺少视觉表达方向。');
@@ -292,20 +349,24 @@
     for (let index = 1; index < slides.length; index++) {
       const previous = slides[index - 1];
       const current = slides[index];
+      const sequential = current.page === previous.page + 1;
+      const hasPagePurposes = Boolean(String(previous.purpose || '').trim() && String(current.purpose || '').trim());
       transitionChecks.push({
         fromPage: previous.page || index,
         toPage: current.page || index + 1,
-        sequential: current.page === previous.page + 1,
-        hasPagePurposes: Boolean(String(previous.purpose || '').trim() && String(current.purpose || '').trim()),
-        connected: current.page === previous.page + 1
-          && Boolean(String(previous.purpose || '').trim() && String(current.purpose || '').trim()),
-        basis: '根据相邻页页码连续性和 purpose 是否填写检查结构衔接；语义因果仍需人工审阅。'
+        pageOrder: { status: sequential ? 'pass' : 'fail', sequential },
+        purposeFields: { status: hasPagePurposes ? 'present' : 'missing', bothPresent: hasPagePurposes },
+        semanticContinuity: {
+          status: 'needs-review',
+          evaluated: false,
+          reason: '语义上的承接关系未由确定性字段验证，需人工核对。'
+        }
       });
     }
     const totalConstraints = validatePptConstraints(brief, draft);
     const issues = pages.flatMap(page => page.issues.map(message => ({ page: page.page, message })))
-      .concat(transitionChecks.filter(transition => !transition.connected)
-        .map(transition => ({ page: transition.toPage, message: `第 ${transition.fromPage} 页到第 ${transition.toPage} 页的结构衔接不完整。` })))
+      .concat(transitionChecks.filter(transition => !transition.pageOrder.sequential || !transition.purposeFields.bothPresent)
+        .map(transition => ({ page: transition.toPage, message: `第 ${transition.fromPage} 页到第 ${transition.toPage} 页的页序或职责字段不完整。` })))
       .concat(totalConstraints.hardConflicts.map(conflict => ({ page: conflict.page || null, message: conflict.message })));
     return { pages, transitionChecks, totalConstraints, issues };
   }

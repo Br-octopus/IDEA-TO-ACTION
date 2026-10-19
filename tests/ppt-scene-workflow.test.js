@@ -115,7 +115,7 @@ test('模型草稿中的自报约束不能覆盖简报硬约束', () => {
   assert.equal(result.effectiveConstraints.maxSlides, 5);
 });
 
-test('硬约束校验沿用 schema 严格数值规则，偏好单独列为待审', () => {
+test('硬约束校验沿用 schema 严格数值规则，无法判断的自由文本偏好单独待审', () => {
   assert.throws(() => validatePptConstraints({ constraints: { maxSlides: true } }, { slides: [] }), /正安全整数/);
 
   const result = validatePptConstraints({
@@ -124,7 +124,35 @@ test('硬约束校验沿用 schema 严格数值规则，偏好单独列为待审
   }, { slides: [{ page: 1 }] });
   assert.ok(result.hardConflicts.some(item => item.type === 'min-slides'));
   assert.deepEqual(result.preferenceDeviations, []);
-  assert.deepEqual(result.preferenceReview, ['尽量少用术语']);
+  assert.equal(result.preferenceReview[0].preference, '尽量少用术语');
+  assert.equal(result.preferenceReview[0].status, 'needs-review');
+});
+
+test('明确数值偏好计算偏离并与硬约束分开', () => {
+  const result = validatePptConstraints({
+    preferences: ['最多 1 页', '每页不超过 3 词', '尽量少用术语'],
+    constraints: { maxSlides: 3 }
+  }, {
+    slides: [
+      { page: 1, title: '一二', body: ['三四'] },
+      { page: 2, title: '五六', body: ['七八'] }
+    ]
+  });
+
+  assert.deepEqual(result.hardConflicts, []);
+  assert.equal(result.preferenceDeviations.length, 2);
+  assert.deepEqual(result.preferenceDeviations.map(item => item.type), ['max-slides', 'max-words-per-slide']);
+  assert.ok(result.preferenceDeviations.every(item => item.status === 'deviation' && item.basis));
+  assert.equal(result.preferenceChecks.length, 2);
+  assert.equal(result.preferenceReview[0].status, 'needs-review');
+});
+
+test('满足的明确数值偏好记录为 met，不列为偏离或待审', () => {
+  const result = validatePptConstraints({ preferences: ['最多 2 页'] }, { slides: [{ page: 1 }] });
+
+  assert.equal(result.preferenceChecks[0].status, 'met');
+  assert.deepEqual(result.preferenceDeviations, []);
+  assert.deepEqual(result.preferenceReview, []);
 });
 
 test('逐页检查职责、结论、精简文案、证据、视觉方向、衔接和总量', () => {
@@ -159,9 +187,13 @@ test('逐页检查职责、结论、精简文案、证据、视觉方向、衔�
   assert.deepEqual(result.issues, []);
   assert.equal(result.pages.length, 2);
   assert.ok(result.pages.every(page => page.checks.purpose && page.checks.conclusion
-    && page.checks.conciseCopy && page.checks.evidence && page.checks.visualDirection));
+    && page.checks.conciseCopy.status === 'pass' && page.checks.evidence && page.checks.visualDirection));
   assert.equal(result.transitionChecks.length, 1);
-  assert.equal(result.transitionChecks[0].connected, true);
+  assert.equal(result.transitionChecks[0].pageOrder.status, 'pass');
+  assert.equal(result.transitionChecks[0].purposeFields.status, 'present');
+  assert.equal(result.transitionChecks[0].semanticContinuity.status, 'needs-review');
+  assert.equal(result.transitionChecks[0].semanticContinuity.evaluated, false);
+  assert.equal(Object.hasOwn(result.transitionChecks[0], 'connected'), false);
   assert.ok(result.totalConstraints);
 });
 
@@ -185,6 +217,36 @@ test('页面编号不连续会报告衔接问题，未提供演讲备注仍属�
 
   assert.equal(result.pages[0].checks.speakerNotes.optional, true);
   assert.equal(result.pages[0].checks.speakerNotes.provided, false);
-  assert.equal(result.transitionChecks[0].sequential, false);
-  assert.ok(result.issues.some(item => /结构衔接/.test(item.message)));
+  assert.equal(result.transitionChecks[0].pageOrder.sequential, false);
+  assert.equal(result.transitionChecks[0].semanticContinuity.status, 'needs-review');
+  assert.ok(result.issues.some(item => /页序或职责字段/.test(item.message)));
+});
+
+test('没有单页字数上限时长文案的精简度标记待审，不误报通过', () => {
+  const longCopy = '这是一段很长的页面正文内容'.repeat(20);
+  const result = checkSlideDraft({
+    slides: [{ page: 1, purpose: '说明背景', title: '背景', body: [longCopy], sourceIds: ['s1'] }]
+  }, { sourceIds: ['s1'] });
+
+  assert.ok(result.pages[0].words > 100);
+  assert.equal(result.pages[0].checks.conciseCopy.status, 'needs-review');
+  assert.equal(result.pages[0].checks.conciseCopy.limit, null);
+  assert.match(result.pages[0].checks.conciseCopy.reason, /未设置单页字数上限/);
+  assert.equal(result.issues.some(item => /精简|字数上限/.test(item.message)), false);
+});
+
+test('页序和职责字段齐全仍不推断语义衔接成立', () => {
+  const result = checkSlideDraft({
+    slides: [
+      { page: 1, purpose: '讨论天气', title: '天气', body: ['晴天'], sourceIds: ['s1'] },
+      { page: 2, purpose: '讨论预算', title: '预算', body: ['成本'], sourceIds: ['s1'] }
+    ]
+  }, { sourceIds: ['s1'] });
+
+  const transition = result.transitionChecks[0];
+  assert.equal(transition.pageOrder.status, 'pass');
+  assert.equal(transition.purposeFields.status, 'present');
+  assert.equal(transition.semanticContinuity.status, 'needs-review');
+  assert.equal(transition.semanticContinuity.evaluated, false);
+  assert.equal(Object.hasOwn(transition, 'connected'), false);
 });
