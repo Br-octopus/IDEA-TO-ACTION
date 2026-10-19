@@ -24,7 +24,7 @@
   }
 
   function assertActive(task) {
-    if (!task || task.status === 'cancelled' || task.status === 'saved' || task.status === 'partial-failure') {
+    if (!task || task.status === 'cancelled' || task.status === 'saved' || task.status === 'partial-failure' || task.status === 'failed') {
       throw new Error('任务已取消或终止，不能继续推进');
     }
   }
@@ -40,11 +40,11 @@
     return [...new Set(values.map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
   }
 
-  function assertAllPlatformsReady(task, readyPlatforms) {
+  function assertAtLeastOnePlatformReady(task, readyPlatforms) {
     const planned = normalizePlatformList(task.platforms || []);
     const ready = normalizePlatformList(readyPlatforms || []);
     assertPreparedPlatformsBelongToPlan(planned, ready);
-    if (planned.some(platform => !ready.includes(platform))) throw new Error('平台尚未全部准备完成');
+    if (!ready.length) throw new Error('至少需要一个已准备的平台');
     return ready;
   }
 
@@ -113,6 +113,13 @@
     assertActive(task);
     const type = typeof event === 'string' ? event : event.type;
     const details = typeof event === 'object' && event ? event : {};
+    if (type === 'preparation_failed') {
+      if (task.status !== 'awaiting-platform-preparation') {
+        throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+      }
+      if ((task.preparedPlatforms || []).length) throw new Error('已有可用平台时不能标记准备失败');
+      return { ...task, status: 'failed' };
+    }
     if (type === 'prepared') {
       if (task.status !== 'awaiting-platform-preparation') {
         throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
@@ -128,7 +135,7 @@
         throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
       }
       assertApproved(task);
-      assertAllPlatformsReady(task, task.preparedPlatforms || []);
+      assertAtLeastOnePlatformReady(task, task.preparedPlatforms || []);
       return { ...task, status: 'searching' };
     }
     const transitions = {
@@ -301,7 +308,7 @@
     startResearchTask: task => {
       assertApproved(task);
       if (task.status !== 'awaiting-platform-preparation') throw new Error('任务尚未完成平台准备');
-      assertAllPlatformsReady(task, task.preparedPlatforms || []);
+      assertAtLeastOnePlatformReady(task, task.preparedPlatforms || []);
       return { ...task, status: 'searching' };
     },
     consumeResearchBudget,

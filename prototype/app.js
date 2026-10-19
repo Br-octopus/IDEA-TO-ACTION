@@ -47,7 +47,34 @@
       const createPlan = async input => {
         const taskInput = { ...input };
         const generated = parseModel(await requestModel("plan", prompts.buildResearchPlanPrompt(taskInput)), {});
-        const task = workflow.createResearchPlan({ ...taskInput, ...generated, topic: taskInput.topic, template: taskInput.template, platforms: taskInput.platforms || generated.platforms, budget: generated.budget || taskInput.budget, queries: generated.queries || taskInput.queries });
+        const generatedFields = ["objective", "researchType", "platformRoles", "timeRange", "region", "audience", "filters", "expectedResultCount", "evidenceRequirements", "stopConditions"];
+        const generatedPlan = Object.fromEntries(generatedFields
+          .filter(field => Object.prototype.hasOwnProperty.call(generated, field))
+          .map(field => [field, generated[field]]));
+        const planned = workflow.createResearchPlan({
+          ...taskInput,
+          topic: taskInput.topic,
+          template: taskInput.template,
+          platforms: taskInput.platforms || generated.platforms,
+          budget: taskInput.budget || generated.budget,
+          queries: taskInput.queries || generated.queries
+        });
+        const userPlan = taskInput.plan && typeof taskInput.plan === "object" ? taskInput.plan : {};
+        const userPlanFields = Object.fromEntries(generatedFields
+          .filter(field => Object.prototype.hasOwnProperty.call(taskInput, field))
+          .map(field => [field, taskInput[field]]));
+        const task = {
+          ...planned,
+          profileId: taskInput.profileId,
+          plan: schema.normalizeResearchPlan({
+            ...planned.plan,
+            ...generatedPlan,
+            ...userPlanFields,
+            ...userPlan,
+            queries: taskInput.queries || userPlan.queries || generated.queries || planned.plan.queries,
+            budget: taskInput.budget || userPlan.budget || generated.budget || planned.plan.budget
+          })
+        };
         state = { ...state, researchTasks: [...state.researchTasks, task] };
         persist();
         return task;
@@ -65,7 +92,7 @@
       const run = async taskId => {
         const current = findTask(taskId);
         if (!current) throw new Error("研究任务不存在");
-        if (current.status === "cancelled") throw new Error("任务已取消或终止，不能继续推进");
+        if (current.status !== "awaiting-platform-preparation") throw new Error("研究任务不在可运行的准备状态");
         let task = current;
         const prepared = [];
         const platformErrors = {};
@@ -80,14 +107,20 @@
             platformErrors[platform] = { message: error.message || "平台检查失败" };
           }
         }
-        task = workflow.transitionResearchTask(task, { type: "prepared", platforms: prepared });
-        if (prepared.length !== task.platforms.length) {
-          task = { ...task, status: "searching", platformErrors };
-          updateTask(task);
-        } else {
-          task = workflow.startResearchTask(task);
-          updateTask(task);
+        if (prepared.length) task = workflow.transitionResearchTask(task, { type: "prepared", platforms: prepared });
+        if (prepared.length === 0 || task.platforms.length === 0) {
+          task = workflow.transitionResearchTask(task, { type: "preparation_failed" });
+          return {
+            ...updateTask({
+              ...task,
+              platformErrors,
+              failureReason: "没有可用平台，研究未启动"
+            }),
+            platformErrors
+          };
         }
+        task = workflow.startResearchTask(task);
+        updateTask(task);
         const results = [];
         for (const platform of prepared) {
           const preference = task.connectionModes?.[platform] || "auto";
@@ -112,7 +145,19 @@
             platformErrors[platform] = { message: error.message || "平台执行失败" };
           }
         }
-        const reportRaw = await requestModel("report", prompts.buildResearchReportPrompt({ ...task, results }, results));
+        let reportRaw;
+        try {
+          reportRaw = await requestModel("report", prompts.buildResearchReportPrompt({ ...task, results }, results));
+        } catch (error) {
+          task = workflow.transitionResearchTask(task, { type: "partial_failure" });
+          return updateTask({
+            ...task,
+            results,
+            resultIds: results.map(item => item.id),
+            platformErrors,
+            reportError: error.message || "研究报告生成失败"
+          });
+        }
         const generatedReport = parseModel(reportRaw, { summary: "", resultIds: results.map(item => item.id) });
         const errorNotes = Object.entries(platformErrors).map(([platform, error]) => `${platform} 平台执行失败，需核验：${error.message}`);
         const verificationItems = Array.isArray(generatedReport.needsVerification)
@@ -123,7 +168,9 @@
           results,
           report: { ...generatedReport, needsVerification: [...verificationItems, ...errorNotes] }
         }).report;
-        task = { ...task, results, resultIds: results.map(item => item.id), report: normalizedReport, reportId: `${task.id}-report`, platformErrors, status: "awaiting-save" };
+        task = workflow.transitionResearchTask(task, "report_ready");
+        task = workflow.transitionResearchTask(task, "request_save");
+        task = { ...task, results, resultIds: results.map(item => item.id), report: normalizedReport, reportId: `${task.id}-report`, platformErrors };
         return { ...updateTask(task), platformErrors };
       };
       const saveSelected = (taskId, selectedResultIds) => {
@@ -132,7 +179,8 @@
         const selected = new Set(Array.isArray(selectedResultIds) ? selectedResultIds : []);
         const entries = task.results.filter(result => selected.has(result.id)).map(result => storage.buildResearchKnowledgeEntry(result, task));
         let next = task;
-        state = { ...state, knowledgeEntries: [...state.knowledgeEntries, ...entries], researchTasks: state.researchTasks.map(item => item.id === taskId ? { ...item, selectedResultIds: entries.map(entry => entry.sourceId), savedResultIds: entries.map(entry => entry.sourceId), status: "saved" } : item) };
+        const savedTask = workflow.transitionResearchTask(task, "save");
+        state = { ...state, knowledgeEntries: [...state.knowledgeEntries, ...entries], researchTasks: state.researchTasks.map(item => item.id === taskId ? { ...savedTask, selectedResultIds: entries.map(entry => entry.sourceId), savedResultIds: entries.map(entry => entry.sourceId) } : item) };
         persist();
         next = findTask(taskId);
         return next;

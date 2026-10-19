@@ -6,7 +6,7 @@
   const TASK_STATUSES = new Set([
     "draft", "awaiting-plan-confirmation", "awaiting-platform-preparation", "searching",
     "awaiting-refinement-confirmation", "report-ready", "awaiting-save", "saved",
-    "partial-failure", "cancelled"
+    "partial-failure", "failed", "cancelled"
   ]);
   const RETRIEVAL_METHODS = new Set(["api", "browser"]);
   const EVIDENCE_STATUSES = new Set([
@@ -264,6 +264,8 @@
       template: text(source.template),
       plan: normalizeResearchPlan(source.plan),
       platforms: listValue(source.platforms),
+      preparedPlatforms: listValue(source.preparedPlatforms),
+      profileId: text(source.profileId),
       connectionModes: isObject(source.connectionModes)
         ? Object.entries(source.connectionModes).reduce((result, [platform, mode]) => {
           if (CONNECTION_MODES.has(mode)) result[text(platform).toLowerCase()] = mode;
@@ -271,6 +273,17 @@
         }, {})
         : {},
       status: TASK_STATUSES.has(source.status) ? source.status : "draft",
+      platformErrors: isObject(source.platformErrors)
+        ? Object.entries(source.platformErrors).reduce((result, [platform, error]) => {
+          const key = text(platform).toLowerCase();
+          if (key && isObject(error)) {
+            result[key] = { message: text(error.message), ...(text(error.code) ? { code: text(error.code) } : {}) };
+          }
+          return result;
+        }, {})
+        : {},
+      failureReason: text(source.failureReason),
+      reportError: text(source.reportError),
       budget: normalizeBudget(source.budget),
       queries: listValue(source.queries),
       resultIds,

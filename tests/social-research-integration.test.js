@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { createSocialResearchCoordinator } = require('../prototype/app.js');
 const storage = require('../prototype/storage.js');
 
-function makeModelClient({ emptyPlan = false, emptyReport = false } = {}) {
+function makeModelClient({ emptyPlan = false, emptyReport = false, planResponse, reportError } = {}) {
   const calls = [];
   return {
     calls,
@@ -12,7 +12,7 @@ function makeModelClient({ emptyPlan = false, emptyReport = false } = {}) {
       const prompt = messages?.[0]?.content || '';
       calls.push({ purpose, prompt });
       if (purpose === 'plan') {
-        return emptyPlan ? '' : JSON.stringify({
+        return emptyPlan ? '' : JSON.stringify(planResponse || {
           objective: '了解独立开发者记账工具的用户痛点',
           researchType: 'pain-points',
           platformRoles: [
@@ -24,6 +24,7 @@ function makeModelClient({ emptyPlan = false, emptyReport = false } = {}) {
           budget: { maxPlatforms: 2, maxQueriesPerPlatform: 2 }
         });
       }
+      if (purpose === 'report' && reportError) throw new Error(reportError);
       return emptyReport ? '' : JSON.stringify({
         summary: '发现两个平台的共同痛点',
         coreFindings: ['用户关注账单同步可靠性'],
@@ -39,6 +40,7 @@ function makeSocial(overrides = {}) {
     calls,
     async check(platform, profileId) {
       calls.push(['check', platform, profileId]);
+      if (overrides[platform]?.check) return overrides[platform].check({ platform, profileId });
       return { platform, status: 'ready', apiAvailable: platform === 'reddit', browserAvailable: true };
     },
     async search(platform, { query, mode }) {
@@ -76,12 +78,45 @@ test('目标到报告并只保存用户勾选结果的完整闭环', async () =>
   assert.equal(finished.status, 'awaiting-save');
   assert.equal(finished.results.length, 2);
   assert.equal(finished.report.summary, '发现两个平台的共同痛点');
+  await assert.rejects(() => harness.coordinator.run(finished.id), /可运行的准备状态/);
   const saved = harness.coordinator.saveSelected(finished.id, ['reddit-1']);
   assert.equal(saved.status, 'saved');
   assert.deepEqual(saved.savedResultIds, ['reddit-1']);
   assert.equal(harness.coordinator.getState().knowledgeEntries.length, 1);
   assert.equal(harness.coordinator.getState().knowledgeEntries[0].sourceType, '社媒研究');
   assert.equal(harness.coordinator.getState().knowledgeEntries[0].sourceUrl, 'https://reddit.example/bookkeeping app');
+  await assert.rejects(() => harness.coordinator.run(finished.id), /可运行的准备状态/);
+});
+
+test('模型计划字段使用白名单，用户连接偏好和 profileId 优先', async () => {
+  const model = makeModelClient({ planResponse: {
+    objective: '模型覆盖主题',
+    researchType: 'model-type',
+    platformRoles: [{ platform: 'reddit', role: 'model role', queries: ['model query'] }],
+    queries: ['model query'],
+    connectionModes: { reddit: 'browser' },
+    profileId: 'model-profile',
+    status: 'saved',
+    unexpected: 'must be ignored'
+  } });
+  const harness = makeHarness({ model });
+  const task = await harness.coordinator.createPlan({
+    topic: '用户主题',
+    template: 'pain-points',
+    platforms: ['reddit'],
+    queries: ['user query'],
+    connectionModes: { reddit: 'api' },
+    profileId: 'user-profile',
+    objective: '用户目标'
+  });
+
+  assert.equal(task.status, 'awaiting-plan-confirmation');
+  assert.equal(task.topic, '用户主题');
+  assert.equal(task.plan.objective, '用户目标');
+  assert.deepEqual(task.plan.queries, ['user query']);
+  assert.deepEqual(task.connectionModes, { reddit: 'api' });
+  assert.equal(task.profileId, 'user-profile');
+  assert.equal(task.unexpected, undefined);
 });
 
 test('API 无配置直接使用浏览器，API 空结果自动回退浏览器', async () => {
@@ -123,9 +158,66 @@ test('用户取消后不执行搜索、不生成报告且不保存结果', async
   const task = await harness.coordinator.createPlan({ topic: '取消测试', template: 'trends', platforms: ['reddit'] });
   const cancelled = harness.coordinator.cancel(task.id);
   assert.equal(cancelled.status, 'cancelled');
-  await assert.rejects(() => harness.coordinator.run(task.id), /取消|终止/);
+  await assert.rejects(() => harness.coordinator.run(task.id), /可运行的准备状态/);
   assert.equal(social.calls.some(call => call[0] === 'search'), false);
   assert.equal(harness.coordinator.getState().knowledgeEntries.length, 0);
+});
+
+test('所有平台检查失败时通过状态机终止任务且不能保存报告', async () => {
+  const social = makeSocial({
+    reddit: { check: async () => { throw new Error('reddit unavailable'); } },
+    youtube: { check: async () => { throw new Error('youtube unavailable'); } }
+  });
+  const model = makeModelClient();
+  const harness = makeHarness({ social, model });
+  const task = await harness.coordinator.createPlan({
+    topic: '平台准备失败', template: 'trends', platforms: ['reddit', 'youtube']
+  });
+  await harness.coordinator.confirmPlan(task.id);
+
+  const failed = await harness.coordinator.run(task.id);
+
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.failureReason, '没有可用平台，研究未启动');
+  assert.deepEqual(Object.keys(failed.platformErrors), ['reddit', 'youtube']);
+  assert.equal(social.calls.some(call => call[0] === 'search'), false);
+  assert.equal(model.calls.some(call => call.purpose === 'report'), false);
+  assert.equal(harness.coordinator.getState().knowledgeEntries.length, 0);
+  assert.throws(() => harness.coordinator.saveSelected(task.id, []), /尚未进入保存阶段/);
+});
+
+test('部分平台检查失败时继续搜索已准备平台并在报告中保留失败', async () => {
+  const social = makeSocial({
+    youtube: { check: async () => { throw new Error('youtube unavailable'); } }
+  });
+  const harness = makeHarness({ social });
+  const task = await harness.coordinator.createPlan({
+    topic: '部分平台可用', template: 'trends', platforms: ['reddit', 'youtube']
+  });
+  await harness.coordinator.confirmPlan(task.id);
+
+  const result = await harness.coordinator.run(task.id);
+
+  assert.equal(result.status, 'awaiting-save');
+  assert.deepEqual(result.results.map(item => item.platform), ['reddit']);
+  assert.equal(result.platformErrors.youtube.message, 'youtube unavailable');
+  assert.ok(result.report.needsVerification.includes('youtube 平台执行失败，需核验：youtube unavailable'));
+  assert.deepEqual(social.calls.filter(call => call[0] === 'search').map(call => call[1]), ['reddit']);
+});
+
+test('报告模型请求失败会记录错误并进入 partial-failure，不能保存或重跑', async () => {
+  const harness = makeHarness({ model: makeModelClient({ reportError: 'report service unavailable' }) });
+  const task = await harness.coordinator.createPlan({
+    topic: '报告失败', template: 'trends', platforms: ['reddit']
+  });
+  await harness.coordinator.confirmPlan(task.id);
+
+  const failed = await harness.coordinator.run(task.id);
+
+  assert.equal(failed.status, 'partial-failure');
+  assert.equal(failed.reportError, 'report service unavailable');
+  assert.throws(() => harness.coordinator.saveSelected(task.id, []), /尚未进入保存阶段/);
+  await assert.rejects(() => harness.coordinator.run(task.id), /可运行的准备状态/);
 });
 
 test('未勾选结果不会自动进入知识库', async () => {

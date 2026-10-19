@@ -45,22 +45,30 @@ test('未批准不能开始或消耗搜索预算，批准后进入平台准备�
   const approved = workflow.approveResearchPlan(planned);
   assert.equal(approved.status, 'awaiting-platform-preparation');
   assert.equal(planned.status, 'awaiting-plan-confirmation');
-  assert.throws(() => workflow.startResearchTask(approved), /平台.*准备/);
-  assert.throws(() => workflow.startResearchTask(approved, platforms), /平台.*准备/);
+  assert.throws(() => workflow.startResearchTask(approved), /至少需要一个已准备的平台/);
+  assert.throws(() => workflow.startResearchTask(approved, platforms), /至少需要一个已准备的平台/);
 });
 
-test('平台准备事件不能直接搜索，缺少任一平台时拒绝开始', () => {
+test('准备的平台必须属于计划，至少一个平台就绪后才能开始', () => {
   const approved = workflow.approveResearchPlan(makePlan());
   const partial = workflow.transitionResearchTask(approved, { type: 'prepared', platforms: platforms.slice(0, 2) });
   assert.equal(partial.status, 'awaiting-platform-preparation');
   assert.deepEqual(partial.preparedPlatforms, platforms.slice(0, 2));
-  assert.throws(() => workflow.startResearchTask(partial), /平台.*准备/);
-  assert.throws(() => workflow.startResearchTask(approved, platforms.slice(0, 2)), /平台.*准备/);
+  assert.equal(workflow.startResearchTask(partial).status, 'searching');
+  assert.throws(() => workflow.startResearchTask(approved), /至少需要一个已准备的平台/);
   const ready = workflow.transitionResearchTask(partial, { type: 'prepared', platforms });
   assert.deepEqual(ready.preparedPlatforms, platforms);
   assert.equal(workflow.startResearchTask(ready).status, 'searching');
-  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'start' }), /平台.*准备/);
-  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'start', platforms }), /平台.*准备/);
+  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'start' }), /至少需要一个已准备的平台/);
+  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'prepared', platforms: ['not-planned'] }), /不在已批准计划/);
+});
+
+test('没有平台就绪时通过明确的失败转换终止', () => {
+  const approved = workflow.approveResearchPlan(makePlan());
+  const failed = workflow.transitionResearchTask(approved, { type: 'preparation_failed' });
+  assert.equal(failed.status, 'failed');
+  assert.throws(() => workflow.startResearchTask(failed), /取消或终止/);
+  assert.throws(() => workflow.transitionResearchTask(failed, { type: 'preparation_failed' }), /取消或终止/);
 });
 
 test('拒绝和取消后任务不可继续推进', () => {
