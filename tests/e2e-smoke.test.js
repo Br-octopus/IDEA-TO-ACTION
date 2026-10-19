@@ -271,3 +271,42 @@ test('社媒研究入口加载 UI 并贯通计划、平台准备、结果和报�
   assert.match(ui, /data-report-result/);
   assert.match(ui, /data-save-result/);
 });
+
+test('社媒研究工作区备份可恢复摘要报告和附件元数据且不带凭证', () => {
+  const { createBackup, replaceState } = require('../prototype/workspace-backup.js');
+  const state = {
+    researchTasks: [{
+      id: 'smoke-research-task',
+      topic: '用户对产品的反馈',
+      results: [{ id: 'smoke-result', summary: '用户普遍反馈上手困难。', url: 'https://example.test/post' }],
+      report: { coreFindings: ['上手成本是主要问题。'], resultIds: ['smoke-result'] },
+      apiKey: 'task-secret'
+    }],
+    platformConnections: {
+      reddit: {
+        platform: 'reddit', status: 'ready', profilePath: 'C:/private/profile',
+        cookies: ['cookie-secret'], sessionToken: 'session-secret', apiKey: 'api-secret', password: 'password-secret'
+      }
+    },
+    researchAttachments: [{
+      id: 'smoke-attachment', type: 'document', size: 128, sourceResultId: 'smoke-result',
+      relativePath: 'research/smoke.pdf', savedAt: '2026-10-19T08:00:00.000Z', password: 'attachment-secret'
+    }]
+  };
+
+  const backup = createBackup(state, { scope: 'workspace', now: '2026-10-19T08:00:00.000Z' });
+  const restored = replaceState({}, JSON.parse(JSON.stringify(backup)));
+  const serialized = JSON.stringify(backup);
+
+  assert.equal(restored.researchTasks[0].results[0].summary, '用户普遍反馈上手困难。');
+  assert.deepEqual(restored.researchTasks[0].report.coreFindings, ['上手成本是主要问题。']);
+  assert.deepEqual(restored.researchTasks[0].report.resultIds, ['smoke-result']);
+  assert.deepEqual(restored.researchAttachments[0], {
+    id: 'smoke-attachment', type: 'document', size: 128, sourceResultId: 'smoke-result',
+    relativePath: 'research/smoke.pdf', savedAt: '2026-10-19T08:00:00.000Z'
+  });
+  assert.equal(restored.platformConnections.reddit.status, 'needs-recheck');
+  for (const secret of ['task-secret', 'C:/private/profile', 'cookie-secret', 'session-secret', 'api-secret', 'password-secret', 'attachment-secret']) {
+    assert.equal(serialized.includes(secret), false, `备份不应包含 ${secret}`);
+  }
+});
