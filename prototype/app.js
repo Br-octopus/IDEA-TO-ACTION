@@ -79,7 +79,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
 
 
 (() => {
-  const { STORAGE_KEY, createEmptyState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry } = window.ForwardStepStorage;
+  const { STORAGE_KEY, createEmptyState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase } = window.ForwardStepStorage;
   const research = window.ForwardStepResearchCatalog;
   const desktopApi = window.desktopApi;
   const workspaceBackup = window.ForwardStepWorkspaceBackup;
@@ -525,6 +525,8 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     document.getElementById("project-review-status").value = "待验证";
     document.getElementById("project-review-lessons").value = "";
     document.getElementById("project-review-next-prompt").value = "";
+    document.getElementById("project-review-applicable").value = "";
+    document.getElementById("project-review-not-applicable").value = "";
     document.getElementById("project-review-prompt").textContent = "";
     document.getElementById("project-review-result").classList.remove("visible");
     if (clearInputs) {
@@ -557,6 +559,8 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       status: document.getElementById("project-review-status").value,
       lessons: document.getElementById("project-review-lessons").value.trim(),
       nextPrompt: document.getElementById("project-review-next-prompt").value.trim(),
+      applicableWhen: splitLines(document.getElementById("project-review-applicable").value),
+      notApplicableWhen: splitLines(document.getElementById("project-review-not-applicable").value),
       createdAt: currentProjectReviewCase?.createdAt || new Date().toISOString()
     };
   }
@@ -566,6 +570,8 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     document.getElementById("project-review-status").value = reviewCase.status || "待验证";
     document.getElementById("project-review-lessons").value = reviewCase.lessons || "";
     document.getElementById("project-review-next-prompt").value = reviewCase.nextPrompt || "";
+    document.getElementById("project-review-applicable").value = (reviewCase.applicableWhen || []).join("\n");
+    document.getElementById("project-review-not-applicable").value = (reviewCase.notApplicableWhen || []).join("\n");
   }
   document.getElementById("build-project-review").addEventListener("click", () => {
     const project = getActiveProject();
@@ -588,8 +594,9 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     if (!reviewCase) return;
     if (currentProjectReviewCase?.confirmed) {
       state = updateCase(state, reviewCase);
+      syncCaseInsightState(state.cases.find(item => item.id === reviewCase.id));
       if (!persist()) return;
-      currentProjectReviewCase = { ...reviewCase, confirmed: true };
+      currentProjectReviewCase = { ...state.cases.find(item => item.id === reviewCase.id), confirmed: true };
       toast("判断已更新并保存");
     } else {
       currentProjectReviewCase = reviewCase;
@@ -608,8 +615,9 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     } else {
       state = confirmCase(state, reviewCase, true);
     }
+    syncCaseInsightState(state.cases.find(item => item.id === reviewCase.id));
     if (!persist()) return;
-    currentProjectReviewCase = { ...reviewCase, confirmed: true };
+    currentProjectReviewCase = { ...state.cases.find(item => item.id === reviewCase.id), confirmed: true };
     toast("复盘案例已确认记录");
   });
   function savePrompt(title, text, projectId = activeProjectId) {
@@ -731,8 +739,9 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     if (!reviewCase) return;
     if (currentArticleReviewCase.confirmed) {
       state = updateCase(state, reviewCase);
+      syncCaseInsightState(state.cases.find(item => item.id === reviewCase.id));
       if (!persist()) return;
-      currentArticleReviewCase = { ...reviewCase, confirmed: true };
+      currentArticleReviewCase = { ...state.cases.find(item => item.id === reviewCase.id), confirmed: true };
       toast("判断已更新并保存");
     } else {
       currentArticleReviewCase = reviewCase;
@@ -749,8 +758,9 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     state = currentArticleReviewCase.confirmed
       ? updateCase(state, reviewCase)
       : confirmCase(state, reviewCase, true);
+    syncCaseInsightState(state.cases.find(item => item.id === reviewCase.id));
     if (!persist()) return;
-    currentArticleReviewCase = { ...reviewCase, confirmed: true };
+    currentArticleReviewCase = { ...state.cases.find(item => item.id === reviewCase.id), confirmed: true };
     toast("复盘案例已确认记录");
   });
   document.getElementById("save-article-instruction").addEventListener("click", () => {
@@ -926,19 +936,34 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       ? state.cases.find(caseItem => caseItem.id === item.linkedCaseId)
       : null;
   }
+  function currentCaseVersion(caseItem) {
+    return getCurrentCaseVersion(caseItem) || caseItem || {};
+  }
+  function caseVersionText(value) {
+    return Array.isArray(value) ? value.join("；") : String(value ?? "").trim();
+  }
   function caseDetail(caseItem) {
     if (!caseItem) return "";
+    const current = currentCaseVersion(caseItem);
+    const versions = listCaseVersions(caseItem);
+    const currentVersion = Number(current.version || caseItem.currentVersion || 1);
     const value = item => String(item ?? "").trim();
-    const list = item => Array.isArray(item) ? item.join("；") : value(item);
+    const list = item => caseVersionText(item);
     const line = (label, item) => `<p><strong>${label}：</strong>${escapeHtml(value(item) || "暂无")}</p>`;
+    const history = versions.map(version => `<div class="library-meta"><strong>V${escapeHtml(version.version)}</strong> · ${escapeHtml(version.status || "待验证")} · ${escapeHtml(version.changeNote || "无版本说明")} <button class="button-quiet" data-case-compare="${escapeHtml(caseItem.id)}" data-case-left="${escapeHtml(version.version)}" data-case-right="${escapeHtml(currentVersion)}" type="button">对比版本</button></div><p>${escapeHtml(caseVersionText(version.lessons) || "暂无经验教训")}</p>`).join("");
     return [
-      line("目标", caseItem.goal),
-      line("复盘维度", list(caseItem.dimensions)),
-      line("证据摘要", list(caseItem.evidence)),
-      line("用户意见", caseItem.userFeedback),
-      line("经验教训", caseItem.lessons),
-      line("下一条提示词摘要", value(caseItem.nextPrompt).slice(0, 240)),
-      line("确认时间", caseItem.confirmedAt)
+      `<div class="library-meta">当前版本：V${escapeHtml(currentVersion)} · 最近复盘：${escapeHtml(caseItem.lastReviewedAt || caseItem.confirmedAt || "暂无")} · 复盘次数：${escapeHtml(caseItem.reviewCount || 0)}</div>`,
+      line("目标", current.goal),
+      line("复盘维度", list(current.dimensions)),
+      line("证据摘要", list(current.evidence)),
+      line("用户意见", current.userFeedback),
+      line("经验教训", current.lessons),
+      line("下一条提示词摘要", value(current.nextPrompt).slice(0, 240)),
+      line("适用场景", list(current.applicableWhen)),
+      line("不适用场景", list(current.notApplicableWhen)),
+      line("确认时间", caseItem.confirmedAt),
+      `<details class="case-history"><summary>查看历史（${escapeHtml(versions.length)} 个版本）</summary>${history || '<p class="library-meta">暂无历史版本</p>'}<div class="case-comparison" data-case-comparison="${escapeHtml(caseItem.id)}"></div></details>`,
+      `<div class="button-row case-actions"><button class="button-secondary" data-case-new-version="${escapeHtml(caseItem.id)}" type="button">创建新版本</button><button class="button-secondary" data-case-defer="${escapeHtml(caseItem.id)}" type="button">暂不复用</button><button class="button-secondary" data-case-delete="${escapeHtml(caseItem.id)}" type="button">删除案例</button></div>`
     ].join("");
   }
   function knowledgeDetail(item) {
@@ -990,6 +1015,35 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       return true;
     });
   }
+  function buildCaseInsightEntry(caseItem) {
+    const current = currentCaseVersion(caseItem);
+    const evidence = Array.isArray(current.evidence) ? current.evidence.join("；") : current.evidence || "";
+    const notApplicable = Array.isArray(current.notApplicableWhen) ? current.notApplicableWhen.join("；") : current.notApplicableWhen || "";
+    return knowledgeSchemaApi.normalizeKnowledgeEntry({
+      id: `case-insight-${caseItem.id}`,
+      type: current.status === "成功"
+        ? "success-case"
+        : current.status === "失败" ? "failure-case" : "review-insight",
+      title: `${current.taskType || "任务"}复盘经验`,
+      domains: [current.domain],
+      summary: current.goal,
+      reusablePatterns: current.lessons,
+      limitations: [notApplicable ? `不适用：${notApplicable}` : "", evidence].filter(Boolean).join("；") || "仅适用于该案例，仍需相似任务验证。",
+      applicableCases: current.applicableWhen,
+      contentExcerpt: current.nextPrompt,
+      linkedProjectId: current.projectId,
+      linkedCaseId: caseItem.id,
+      sourceKind: "case",
+      sourceId: caseItem.id,
+      verificationStatus: current.status === "待验证" ? "unverified" : "user-confirmed",
+      sourceType: "用户确认案例"
+    });
+  }
+  function syncCaseInsightState(caseItem) {
+    if (!caseItem || !state.knowledgeEntries.some(entry => entry.linkedCaseId === caseItem.id)) return false;
+    state = upsertKnowledgeEntry(state, buildCaseInsightEntry(caseItem)).state;
+    return true;
+  }
   function saveCaseInsight(caseItem) {
     if (!caseItem || caseItem.confirmed !== true) {
       toast("只有已确认案例可以提炼资料卡");
@@ -999,23 +1053,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       toast("案例资料卡功能暂不可用");
       return;
     }
-    const entry = knowledgeSchemaApi.normalizeKnowledgeEntry({
-      id: `case-insight-${caseItem.id}`,
-      type: caseItem.status === "成功"
-        ? "success-case"
-        : caseItem.status === "失败" ? "failure-case" : "review-insight",
-      title: `${caseItem.taskType || "任务"}复盘经验`,
-      domains: [caseItem.domain],
-      summary: caseItem.goal,
-      reusablePatterns: caseItem.lessons,
-      limitations: Array.isArray(caseItem.evidence)
-        ? caseItem.evidence.join("；")
-        : caseItem.evidence || "仅适用于该案例，仍需相似任务验证。",
-      linkedProjectId: caseItem.projectId,
-      linkedCaseId: caseItem.id,
-      verificationStatus: caseItem.status === "待验证" ? "unverified" : "user-confirmed",
-      sourceType: "用户确认案例"
-    });
+    const entry = buildCaseInsightEntry(caseItem);
     const previousState = state;
     try {
       const result = upsertKnowledgeEntry(state, entry);
@@ -1031,6 +1069,68 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
       toast(`案例资料卡保存失败：${error.message || "未知错误"}`);
     }
   }
+  function beginCaseVersion(caseItem) {
+    if (!caseItem) return;
+    const project = state.projects.find(item => item.id === caseItem.projectId);
+    if (!project) { toast("找不到该案例所属计划，无法创建新版本"); return; }
+    renderProject(project);
+    currentProjectReviewCase = { ...caseItem, confirmed: true };
+    document.getElementById("project-review-before").value = caseItem.before || "";
+    document.getElementById("project-review-external-result").value = caseItem.externalResult || caseItem.after || "";
+    document.getElementById("project-review-feedback").value = caseItem.userFeedback || "";
+    renderProjectReviewDraft(currentProjectReviewCase);
+    document.getElementById("project-review-result").classList.add("visible");
+    document.getElementById("project-review-result").scrollIntoView({ behavior: "smooth", block: "start" });
+    toast(`已载入 V${caseItem.currentVersion || 1}，修改后确认即可创建新版本`);
+  }
+  function deferCaseReuse(caseId) {
+    const linkedEntries = state.knowledgeEntries.filter(item => item.linkedCaseId === caseId);
+    if (!linkedEntries.length) {
+      toast("该案例尚未生成资料卡，暂不复用将在生成资料卡后生效");
+      return;
+    }
+    const hiddenAt = new Date().toISOString();
+    state = {
+      ...state,
+      knowledgeEntries: state.knowledgeEntries.map(item => item.linkedCaseId === caseId ? { ...item, hiddenAt } : item)
+    };
+    if (!persist()) return;
+    refreshKnowledgeView();
+    toast("已暂不复用该案例资料卡；原始案例仍保留");
+  }
+  async function deleteCaseFromLibrary(caseId) {
+    const caseItem = state.cases.find(item => item.id === caseId);
+    if (!caseItem) { toast("找不到要删除的案例"); return; }
+    if (!window.confirm("删除案例前会先导出安全备份；确认继续？")) return;
+    const previousState = state;
+    try {
+      await createSafetyBackup();
+      state = deleteCase(state, caseId);
+      if (!persist()) { state = previousState; return; }
+      if (currentProjectReviewCase?.id === caseId) resetProjectReviewFields({ clearInputs: true });
+      if (currentArticleReviewCase?.id === caseId) resetArticleReviewResult({ clearFeedback: true });
+      refreshKnowledgeView();
+      toast("案例及其资料卡已删除，项目和提示词未受影响");
+    } catch (error) {
+      state = previousState;
+      toast(`删除已取消，当前数据未改变：${error.message || "安全备份失败"}`);
+    }
+  }
+  function renderCaseComparison(button) {
+    const card = button.closest(".reference");
+    const target = card && [...card.querySelectorAll("[data-case-comparison]")]
+      .find(node => node.dataset.caseComparison === button.dataset.caseCompare);
+    if (!target) return;
+    const caseItem = state.cases.find(item => item.id === button.dataset.caseCompare);
+    const differences = caseItem
+      ? compareCaseVersions(caseItem, button.dataset.caseLeft, button.dataset.caseRight)
+      : [];
+    const labels = { status: "判断", evidence: "证据", lessons: "经验教训", nextPrompt: "下一条提示词", applicableWhen: "适用场景", notApplicableWhen: "不适用场景", changeNote: "版本说明" };
+    const display = value => Array.isArray(value) ? value.join("；") : String(value ?? "").trim();
+    target.innerHTML = differences.length
+      ? `<div class="notice"><strong>V${escapeHtml(button.dataset.caseLeft)} → V${escapeHtml(button.dataset.caseRight)} 差异</strong>${differences.map(item => `<p><strong>${escapeHtml(labels[item.field] || item.field)}：</strong>${escapeHtml(display(item.before) || "暂无")} → ${escapeHtml(display(item.after) || "暂无")}</p>`).join("")}</div>`
+      : '<div class="library-meta">两个版本没有字段差异。</div>';
+  }
   function renderKnowledgeResults(entries) {
     const root = document.getElementById("knowledge-results");
     const status = document.getElementById("knowledge-search-status");
@@ -1045,7 +1145,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
         ? `<button class="button-secondary" data-case-insight="${escapeHtml(caseItem.id)}" type="button">${hasInsight ? "更新资料卡" : "生成资料卡"}</button>`
         : "";
       const selected = state.knowledgeSelection.includes(item.id);
-      const derived = item.source !== "knowledge-entry" && (item.sourceKind || "") !== "manual";
+      const derived = Boolean(item.linkedCaseId) || (item.source !== "knowledge-entry" && (item.sourceKind || "") !== "manual");
       const sourceAction = derived ? `<button class="button-secondary" data-knowledge-source="${escapeHtml(item.id)}" type="button">编辑原始来源</button>` : `<button class="button-secondary" data-knowledge-edit="${escapeHtml(item.id)}" type="button">编辑资料</button>`;
       return `<article class="reference"><div class="library-item-head"><label><input type="checkbox" data-knowledge-check="${escapeHtml(item.id)}" ${selected ? "checked" : ""}> 选择</label><h3>${escapeHtml(item.title)}</h3><span class="status">${escapeHtml(knowledgeTypeLabel(item.type))}</span></div><p>${escapeHtml(item.summary || "暂无摘要")}</p>${knowledgeDetail(item)}<div class="library-meta">${escapeHtml((item.domains || []).join("、") || "未标注领域")} · 验证状态：${escapeHtml(item.verificationStatus || "unverified")} · ${item.favorite ? "已收藏 · " : ""}${item.pinned ? "已置顶 · " : ""}${escapeHtml(item.updatedAt || "")}</div><div class="button-row" style="margin-top:8px"><button class="button-secondary" data-knowledge-favorite="${escapeHtml(item.id)}" type="button">${item.favorite ? "取消收藏" : "收藏"}</button><button class="button-secondary" data-knowledge-pin="${escapeHtml(item.id)}" type="button">${item.pinned ? "取消置顶" : "置顶"}</button>${insightButton}${sourceAction}<button class="button-secondary" data-knowledge-select="${escapeHtml(item.id)}" type="button">${selected ? "取消选择" : "选择摘要用于当前提示词"}</button><button class="button-secondary" data-knowledge-open="${escapeHtml(item.id)}" type="button">查看来源</button><button class="button-secondary" data-knowledge-hide="${escapeHtml(item.id)}" type="button">从资料库移除</button></div></article>`;
      }).join("") || '<p class="library-meta">没有匹配的资料；换个搜索词或清空筛选。</p>';
@@ -1077,6 +1177,18 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     }));
     root.querySelectorAll("[data-case-insight]").forEach(button => button.addEventListener("click", () => {
       saveCaseInsight(state.cases.find(caseItem => caseItem.id === button.dataset.caseInsight));
+    }));
+    root.querySelectorAll("[data-case-new-version]").forEach(button => button.addEventListener("click", () => {
+      beginCaseVersion(state.cases.find(caseItem => caseItem.id === button.dataset.caseNewVersion));
+    }));
+    root.querySelectorAll("[data-case-defer]").forEach(button => button.addEventListener("click", () => {
+      deferCaseReuse(button.dataset.caseDefer);
+    }));
+    root.querySelectorAll("[data-case-delete]").forEach(button => button.addEventListener("click", () => {
+      deleteCaseFromLibrary(button.dataset.caseDelete);
+    }));
+    root.querySelectorAll("[data-case-compare]").forEach(button => button.addEventListener("click", () => {
+      renderCaseComparison(button);
     }));
   }
   function refreshKnowledgeView() {

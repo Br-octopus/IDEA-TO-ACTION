@@ -365,6 +365,8 @@
                     <div><label class="field-label" for="project-review-status">判断</label><select id="project-review-status"><option>待验证</option><option>成功</option><option>失败</option></select></div>
                     <div class="wide"><label class="field-label" for="project-review-lessons">经验教训</label><textarea id="project-review-lessons" class="reply-area" placeholder="这次结果说明了什么？不要泛化成普遍规律"></textarea></div>
                     <div class="wide"><label class="field-label" for="project-review-next-prompt">下一条指令</label><textarea id="project-review-next-prompt" class="reply-area" placeholder="针对证据生成的下一条修正提示词"></textarea></div>
+                    <div><label class="field-label" for="project-review-applicable">适用场景</label><textarea id="project-review-applicable" class="reply-area" placeholder="一行一项：什么情况下可以复用"></textarea></div>
+                    <div><label class="field-label" for="project-review-not-applicable">不适用场景</label><textarea id="project-review-not-applicable" class="reply-area" placeholder="一行一项：什么情况下不要复用"></textarea></div>
                   </div>
                   <div class="prompt-bottom"><small>只有点击“确认记录”才会写入本地 cases；“修改判断”只更新当前复盘结论</small><div class="button-row"><button class="button-secondary" id="edit-project-review" type="button">修改判断</button><button class="button-secondary" id="skip-project-review" type="button">暂不记录</button><button class="button-primary" id="confirm-project-review" type="button">确认记录</button></div></div>
                 </div>

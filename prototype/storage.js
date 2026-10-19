@@ -460,5 +460,42 @@
     return { state: next, entry: saved, updated: true };
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry };
+  function listCaseVersions(caseItem) {
+    if (!caseItem || typeof caseItem !== "object") return [];
+    if (Array.isArray(caseItem.versionHistory) && caseItem.versionHistory.length) {
+      return caseItem.versionHistory.map(version => ({ ...version }));
+    }
+    const version = positiveInteger(caseItem.currentVersion, 1);
+    return [createCaseVersionSnapshot(caseItem, version, caseItem.changeNote)];
+  }
+
+  function getCurrentCaseVersion(caseItem) {
+    const versions = listCaseVersions(caseItem);
+    return versions[versions.length - 1] || null;
+  }
+
+  function compareCaseVersions(caseItem, leftVersion, rightVersion) {
+    const versions = listCaseVersions(caseItem);
+    const left = versions.find(version => version.version === Number(leftVersion));
+    const right = versions.find(version => version.version === Number(rightVersion));
+    if (!left || !right || left.version === right.version) return [];
+    return ["status", "evidence", "lessons", "nextPrompt", "applicableWhen", "notApplicableWhen", "changeNote"]
+      .filter(field => !sameCaseValue(left[field], right[field]))
+      .map(field => ({ field, before: left[field], after: right[field] }));
+  }
+
+  function deleteCase(state, caseId) {
+    const next = migrateState(state);
+    const id = String(caseId ?? "").trim();
+    if (!id) return next;
+    const removedEntryIds = new Set(next.knowledgeEntries
+      .filter(entry => String(entry?.linkedCaseId || "").trim() === id)
+      .map(entry => entry.id));
+    next.cases = next.cases.filter(item => item.id !== id);
+    next.knowledgeEntries = next.knowledgeEntries.filter(item => !removedEntryIds.has(item.id));
+    next.knowledgeSelection = next.knowledgeSelection.filter(itemId => !removedEntryIds.has(itemId));
+    return next;
+  }
+
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase };
 });

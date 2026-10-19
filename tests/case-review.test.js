@@ -8,7 +8,11 @@ const {
   createEmptyState,
   confirmCase,
   updateCase,
-  upsertKnowledgeEntry
+  upsertKnowledgeEntry,
+  getCurrentCaseVersion,
+  listCaseVersions,
+  compareCaseVersions,
+  deleteCase
 } = require('../prototype/storage.js');
 const { collectKnowledgeEntries } = require('../prototype/knowledge-search.js');
 
@@ -195,6 +199,57 @@ test('空更新不产生新版本', () => {
   assert.equal(second.cases[0].lastReviewedAt, firstCase.lastReviewedAt);
 });
 
+test('案例版本辅助接口返回当前版本、历史并输出关键字段差异', () => {
+  const first = confirmCase(createEmptyState(), {
+    id: 'case-compare',
+    status: '失败',
+    evidence: ['旧证据'],
+    lessons: '旧经验',
+    nextPrompt: '旧指令',
+    applicableWhen: ['小范围任务'],
+    notApplicableWhen: ['高风险任务']
+  }, true);
+  const second = updateCase(first, {
+    id: 'case-compare',
+    status: '成功',
+    evidence: ['新证据'],
+    lessons: '新经验',
+    nextPrompt: '新指令',
+    applicableWhen: ['有明确验收标准'],
+    notApplicableWhen: ['没有可观察结果'],
+    changeNote: '补充成功证据'
+  });
+  const item = second.cases[0];
+  assert.equal(getCurrentCaseVersion(item).version, 2);
+  assert.equal(listCaseVersions(item).length, 2);
+  const comparison = compareCaseVersions(item, 1, 2);
+  assert.deepEqual(comparison.map(item => item.field), [
+    'status', 'evidence', 'lessons', 'nextPrompt', 'applicableWhen', 'notApplicableWhen', 'changeNote'
+  ]);
+  assert.equal(comparison.find(item => item.field === 'status').before, '失败');
+  assert.equal(comparison.find(item => item.field === 'status').after, '成功');
+});
+
+test('删除案例同时移除 linkedCaseId 资料卡，但保留项目、提示词和公开资料', () => {
+  const state = {
+    ...createEmptyState(),
+    projects: [{ id: 'project-keep' }],
+    prompts: [{ id: 'prompt-keep' }],
+    references: [{ id: 'reference-keep' }],
+    cases: [{ id: 'case-delete', confirmed: true }],
+    knowledgeEntries: [
+      { id: 'case-card', linkedCaseId: 'case-delete' },
+      { id: 'manual-keep' }
+    ]
+  };
+  const next = deleteCase(state, 'case-delete');
+  assert.equal(next.cases.length, 0);
+  assert.deepEqual(next.knowledgeEntries.map(item => item.id), ['manual-keep']);
+  assert.deepEqual(next.projects.map(item => item.id), ['project-keep']);
+  assert.deepEqual(next.prompts.map(item => item.id), ['prompt-keep']);
+  assert.deepEqual(next.references.map(item => item.id), ['reference-keep']);
+});
+
 test('只有用户确认的成功或失败案例进入可复用案例检索', () => {
   const entries = collectKnowledgeEntries({
     prompts: [],
@@ -252,12 +307,21 @@ test('案例库界面提供案例组合筛选、摘要字段和安全的资料�
   for (const phrase of ['全部案例', '成功案例', '失败案例', '待验证复盘', '当前领域', '当前项目']) {
     assert.match(html, new RegExp(phrase));
   }
-  for (const phrase of ['目标', '复盘维度', '证据摘要', '用户意见', '经验教训', '下一条提示词摘要', '确认时间']) {
+  for (const phrase of ['目标', '复盘维度', '证据摘要', '用户意见', '经验教训', '下一条提示词摘要', '确认时间', '当前版本', '最近复盘', '复盘次数', '适用场景', '不适用场景', '查看历史', '对比版本', '暂不复用', '删除案例']) {
     assert.match(app, new RegExp(phrase));
   }
   assert.match(app, /caseItem\.confirmed === true/);
   assert.match(app, /case-insight-\$\{caseItem\.id\}/);
   assert.match(app, /upsertKnowledgeEntry/);
+  assert.match(app, /getCurrentCaseVersion/);
+  assert.match(app, /<details class="case-history">/);
+  assert.match(app, /data-case-compare/);
+  assert.match(app, /data-case-delete/);
+  assert.match(app, /sourceKind: "case"/);
+  assert.match(app, /Boolean\(item\.linkedCaseId\)/);
+  assert.match(app, /createSafetyBackup\(\)/);
+  assert.match(app, /deleteCase\(state, caseId\)/);
+  assert.match(app, /compareCaseVersions/);
   assert.match(app, /if \(!persist\(\)\) return/);
   const caseFilter = app.match(/function filterCaseEntries\(entries, filters\) \{([\s\S]*?)\n  \}/)?.[1] || '';
   assert.match(caseFilter, /filters\.caseType === "case"/);

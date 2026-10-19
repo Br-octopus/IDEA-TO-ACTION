@@ -46,6 +46,14 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
   assert.ok(html.includes('删除手动资料'), '批量删除必须明确限于手动资料');
   assert.ok(html.includes('最近备份'), '应显示最近备份提示');  assert.ok(html.includes('<option value="pinned">置顶</option>'), '应提供置顶筛选');
   const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
+  for (const phrase of ['当前版本', '最近复盘', '复盘次数', '适用场景', '不适用场景', '查看历史', '对比版本', '暂不复用', '删除案例']) {
+    assert.match(app, new RegExp(phrase), '案例资料卡缺少版本或适用边界能力: ' + phrase);
+  }
+  assert.match(app, /<details class="case-history">/, '案例历史默认应折叠');
+  assert.match(app, /data-case-compare/, '案例应提供版本对比入口');
+  assert.match(app, /data-case-delete/, '案例应提供删除入口');
+  assert.match(app, /createSafetyBackup\(\)/, '删除案例前必须创建安全备份');
+  assert.match(app, /deleteCase\(state, caseId\)/, '删除案例必须调用 storage.deleteCase');
   assert.match(app, /\["knowledge-scope", "knowledge-type", "knowledge-domain", "knowledge-stage", "knowledge-verification", "case-filter", "case-domain", "case-project"\]\.forEach\(id => document\.getElementById\(id\)\.addEventListener\("change", refreshKnowledgeView\)\)/, '资料范围筛选变更必须立即刷新资料视图');
   assert.ok(app.includes('data-knowledge-edit'), '手动资料应提供编辑入口');
   assert.ok(app.includes('data-knowledge-source'), '派生资料应提供编辑原始来源入口');
