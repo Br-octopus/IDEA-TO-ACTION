@@ -657,6 +657,39 @@ test('项目和确认案例中的凭证字段会递归剔除', () => {
   assert.equal(JSON.stringify(confirmed).includes('review-token'), false);
 });
 
+test('迁移和保存会剔除裸 token 与 secret，同时保留业务字段', () => {
+  const input = {
+    token: 'workspace-token-secret',
+    secret: 'workspace-secret-value',
+    projects: [{
+      id: 'p-plain-credentials',
+      title: '应保留的项目标题',
+      token: 'project-token-secret',
+      secret: 'project-secret-value',
+      custom: '应保留的业务字段'
+    }]
+  };
+  const storage = memoryStorage();
+  const migrated = migrateState(input);
+  const saved = saveState(storage, input);
+  const serialized = storage.getItem(STORAGE_KEY);
+
+  for (const state of [migrated, saved]) {
+    assert.equal(state.token, undefined);
+    assert.equal(state.secret, undefined);
+    assert.equal(state.projects[0].token, undefined);
+    assert.equal(state.projects[0].secret, undefined);
+    assert.equal(state.projects[0].title, '应保留的项目标题');
+    assert.equal(state.projects[0].custom, '应保留的业务字段');
+  }
+  for (const credential of [
+    'workspace-token-secret', 'workspace-secret-value',
+    'project-token-secret', 'project-secret-value'
+  ]) {
+    assert.equal(serialized.includes(credential), false, `不得持久化 ${credential}`);
+  }
+});
+
 test('迁移和保存会递归剔除 cookie、会话、配置路径及未知凭证字段', () => {
   const input = {
     projects: [{
