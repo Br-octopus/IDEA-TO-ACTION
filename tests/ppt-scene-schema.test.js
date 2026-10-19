@@ -48,6 +48,10 @@ test('brief 固定硬性要求、偏好、保留/排除项、事实/假设和听
 test('brief 校验页数边界、时长、材料用途、来源 ID 和路线枚举', () => {
   assert.throws(() => createPptBrief({ constraints: { minSlides: 12, maxSlides: 4 } }), /页数/);
   assert.throws(() => createPptBrief({ durationMinutes: -1 }), /时长/);
+  assert.throws(() => createPptBrief({ durationMinutes: true }), /时长/);
+  assert.throws(() => createPptBrief({ durationMinutes: 9007199254740992 }), /时长/);
+  assert.throws(() => createPptBrief({ constraints: { minSlides: true } }), /minSlides/);
+  assert.throws(() => createPptBrief({ constraints: { maxSlides: 9007199254740992 } }), /maxSlides/);
   assert.throws(() => createPptBrief({ materials: [{ id: 'f1', role: 'notes' }] }), /材料用途/);
   assert.throws(() => createPptBrief({ sourceIds: ['s1', ''] }), /来源/);
   assert.throws(() => createPptBrief({ route: 'magic' }), /路线/);
@@ -67,4 +71,20 @@ test('草稿规范化输出稳定字段并拒绝无效页码和敏感字段', ()
   assert.equal(JSON.stringify(draft).includes('do-not-keep'), false);
   assert.equal(JSON.stringify(draft).includes('private attachment text'), false);
   assert.throws(() => normalizePptDraft({ slides: [{ page: -1 }] }), /页码/);
+  assert.throws(() => normalizePptDraft({ slides: [{ page: true }] }), /页码/);
+  assert.throws(() => normalizePptDraft({ slides: [{ page: 9007199254740992 }] }), /页码/);
+});
+
+test('列表只规范化上限范围内的条目，超出部分的无效值不影响结果', () => {
+  const hardRequirements = Array.from({ length: 30 }, (_, index) => `要求${index}`);
+  hardRequirements.push({ invalid: true });
+  const sourceIds = Array.from({ length: 50 }, (_, index) => `source-${index}`);
+  sourceIds.push({ invalid: true });
+
+  const brief = createPptBrief({ hardRequirements, sourceIds });
+
+  assert.equal(brief.hardRequirements.length, 30);
+  assert.equal(brief.hardRequirements[29], '要求29');
+  assert.equal(brief.sourceIds.length, 50);
+  assert.equal(brief.sourceIds[49], 'source-49');
 });

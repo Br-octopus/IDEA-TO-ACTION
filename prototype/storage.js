@@ -343,14 +343,19 @@
     if (!sceneSchema || typeof sceneSchema.normalizePptScene !== "function" || !Array.isArray(state?.promptAgentTasks)) {
       return sanitized;
     }
-    const scenesById = new Map(state.promptAgentTasks
-      .filter(task => task && typeof task.id === "string" && task.pptScene)
-      .map(task => [task.id, sceneSchema.normalizePptScene(task.pptScene)]));
+    const scenesById = new Map();
+    for (const task of state.promptAgentTasks) {
+      if (!task || typeof task.id !== "string" || !task.pptScene) continue;
+      const normalizedId = task.id.trim().slice(0, 100);
+      if (!scenesById.has(normalizedId)) scenesById.set(normalizedId, []);
+      scenesById.get(normalizedId).push(sceneSchema.normalizePptScene(task.pptScene));
+    }
     return {
       ...sanitized,
-      promptAgentTasks: sanitized.promptAgentTasks.map(task => scenesById.has(task.id)
-        ? { ...task, pptScene: scenesById.get(task.id) }
-        : task)
+      promptAgentTasks: sanitized.promptAgentTasks.map(task => {
+        const scenes = scenesById.get(task.id);
+        return scenes?.length ? { ...task, pptScene: scenes.shift() } : task;
+      })
     };
   }
 

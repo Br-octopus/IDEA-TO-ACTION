@@ -152,18 +152,34 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     const browserStorage = memoryStorage();
     context.ForwardStepStorage.saveState(browserStorage, {
       promptAgentTasks: [{
-        id: 'browser-ppt-task', type: 'advance-idea', goal: '介绍新流程',
+        id: ' browser-ppt-task ', type: 'advance-idea', goal: '介绍新流程',
         pptScene: {
-          brief: { idea: '介绍新流程', audience: '一线客服', durationMinutes: 10, route: 'native-ppt' },
-          draft: { title: '新客服流程', slides: [{ id: 's1', title: '分流', body: ['按优先级处理'] }] }
+          brief: {
+            idea: '介绍新流程', audience: '一线客服', durationMinutes: 10, route: 'native-ppt',
+            apiKey: 'browser-ppt-credential-sentinel',
+            materials: [{ id: 'f1', role: 'content', kind: 'pptx', body: 'browser-ppt-original-sentinel' }]
+          },
+          draft: {
+            title: '新客服流程', originalAttachmentBody: 'browser-ppt-draft-original-sentinel',
+            slides: [{ id: 's1', title: '分流', body: ['按优先级处理'] }]
+          }
         }
       }]
     });
+    const browserSerialized = browserStorage.getItem(STORAGE_KEY);
     const restoredPptScene = context.ForwardStepStorage.loadState(browserStorage).state.promptAgentTasks[0].pptScene;
+    assert.equal(JSON.parse(browserSerialized).promptAgentTasks[0].id, 'browser-ppt-task');
     assert.equal(restoredPptScene.brief.audience, '一线客服');
     assert.equal(restoredPptScene.brief.durationMinutes, 10);
     assert.equal(restoredPptScene.brief.route, 'native-ppt');
     assert.equal(restoredPptScene.draft.slides[0].title, '分流');
+    for (const sentinel of [
+      'browser-ppt-credential-sentinel',
+      'browser-ppt-original-sentinel',
+      'browser-ppt-draft-original-sentinel'
+    ]) {
+      assert.equal(browserSerialized.includes(sentinel), false, `浏览器存储不应包含 ${sentinel}`);
+    }
   }
 });
 
@@ -215,7 +231,7 @@ test('PPT 场景只持久化规范化 brief 和草稿字段', () => {
   const storage = memoryStorage();
   const saved = saveState(storage, {
     promptAgentTasks: [{
-      id: 'ppt-task', type: 'advance-idea', goal: '说明新流程',
+      id: ' ppt-task ', type: 'advance-idea', goal: '说明新流程',
       pptScene: {
         brief: {
           idea: '说明新流程', audience: '客服', route: 'native-ppt',
@@ -232,6 +248,7 @@ test('PPT 场景只持久化规范化 brief 和草稿字段', () => {
   const loaded = loadState(storage).state.promptAgentTasks[0].pptScene;
 
   assert.equal(saved.promptAgentTasks[0].pptScene.brief.route, 'native-ppt');
+  assert.equal(saved.promptAgentTasks[0].id, 'ppt-task');
   assert.equal(loaded.brief.materials[0].role, 'both');
   assert.equal(loaded.brief.apiKey, undefined);
   assert.equal(loaded.brief.materials[0].body, undefined);

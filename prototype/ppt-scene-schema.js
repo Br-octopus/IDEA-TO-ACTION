@@ -21,15 +21,21 @@
   function textList(value, field, limit = 30) {
     if (value === undefined || value === null) return [];
     if (!Array.isArray(value)) throw new TypeError(`${field}必须是列表`);
-    return value.map((item, index) => text(item, `${field}[${index}]`)).filter(Boolean).slice(0, limit);
+    return value.slice(0, limit).map((item, index) => text(item, `${field}[${index}]`)).filter(Boolean);
   }
 
   function sourceIdList(value, field, limit) {
     if (value === undefined || value === null) return [];
     if (!Array.isArray(value)) throw new TypeError(`${field}必须是列表`);
-    const ids = value.map((item, index) => text(item, `${field}[${index}]`, 120));
+    const ids = value.slice(0, limit).map((item, index) => text(item, `${field}[${index}]`, 120));
     if (ids.some(id => !id)) throw new TypeError(`${field}不能包含空来源 ID`);
-    return [...new Set(ids)].slice(0, limit);
+    return [...new Set(ids)];
+  }
+
+  function positiveSafeInteger(value, field) {
+    const number = typeof value === "boolean" ? NaN : Number(value);
+    if (!Number.isSafeInteger(number) || number < 1) throw new TypeError(`${field}必须是正安全整数`);
+    return number;
   }
 
   function normalizeConstraints(input) {
@@ -38,9 +44,7 @@
     const constraints = {};
     for (const field of ["minSlides", "maxSlides", "maxWordsPerSlide"]) {
       if (source[field] === undefined || source[field] === null || source[field] === "") continue;
-      const value = Number(source[field]);
-      if (!Number.isInteger(value) || value < 1) throw new TypeError(`${field}必须是正整数`);
-      constraints[field] = value;
+      constraints[field] = positiveSafeInteger(source[field], field);
     }
     if (constraints.minSlides !== undefined && constraints.maxSlides !== undefined
       && constraints.minSlides > constraints.maxSlides) {
@@ -78,8 +82,11 @@
     if (!isObject(input)) throw new TypeError("PPT 简报必须是对象");
     let durationMinutes = null;
     if (input.durationMinutes !== undefined && input.durationMinutes !== null && input.durationMinutes !== "") {
+      if (typeof input.durationMinutes === "boolean") throw new TypeError("时长必须是有效分钟数");
       durationMinutes = Number(input.durationMinutes);
-      if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) throw new TypeError("时长必须大于 0 分钟");
+      if (!Number.isFinite(durationMinutes) || durationMinutes <= 0 || durationMinutes > Number.MAX_SAFE_INTEGER) {
+        throw new TypeError("时长必须是有效分钟数且不超过安全范围");
+      }
     }
     return {
       idea: text(input.idea, "目标"),
@@ -101,8 +108,7 @@
 
   function normalizeSlide(input, index) {
     if (!isObject(input)) throw new TypeError(`第 ${index + 1} 页必须是对象`);
-    const page = input.page === undefined ? index + 1 : Number(input.page);
-    if (!Number.isInteger(page) || page < 1) throw new TypeError(`第 ${index + 1} 页的页码必须是正整数`);
+    const page = input.page === undefined ? index + 1 : positiveSafeInteger(input.page, `第 ${index + 1} 页的页码`);
     const body = input.body === undefined || input.body === null
       ? []
       : Array.isArray(input.body) ? textList(input.body, `第 ${page} 页文案`, 30) : [text(input.body, `第 ${page} 页文案`)];
