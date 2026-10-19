@@ -35,6 +35,24 @@
     }
   }
 
+  function normalizePlatformList(values) {
+    return [...new Set(values.map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
+  }
+
+  function assertAllPlatformsReady(task, readyPlatforms) {
+    const planned = normalizePlatformList(task.platforms || []);
+    const ready = normalizePlatformList(readyPlatforms || []);
+    assertPreparedPlatformsBelongToPlan(planned, ready);
+    if (planned.some(platform => !ready.includes(platform))) throw new Error('平台尚未全部准备完成');
+    return ready;
+  }
+
+  function assertPreparedPlatformsBelongToPlan(plannedPlatforms, readyPlatforms) {
+    if (readyPlatforms.some(platform => !plannedPlatforms.includes(platform))) {
+      throw new Error('准备的平台不在已批准计划中');
+    }
+  }
+
   function createResearchPlan(input = {}, capabilities = []) {
     const source = input && typeof input === 'object' ? input : {};
     const platforms = [...new Set((Array.isArray(source.platforms) ? source.platforms : [])
@@ -93,9 +111,27 @@
   function transitionResearchTask(task, event = {}) {
     assertActive(task);
     const type = typeof event === 'string' ? event : event.type;
+    const details = typeof event === 'object' && event ? event : {};
+    if (type === 'prepared') {
+      if (task.status !== 'awaiting-platform-preparation') {
+        throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+      }
+      const newlyReady = details.platforms || details.readyPlatforms || (details.platform ? [details.platform] : []);
+      if (!Array.isArray(newlyReady) || newlyReady.length === 0) throw new Error('prepared 事件必须提供已准备的平台');
+      const preparedPlatforms = normalizePlatformList([...(task.preparedPlatforms || []), ...newlyReady]);
+      assertPreparedPlatformsBelongToPlan(normalizePlatformList(task.platforms || []), preparedPlatforms);
+      return { ...task, preparedPlatforms };
+    }
+    if (type === 'start') {
+      if (task.status !== 'awaiting-platform-preparation') {
+        throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+      }
+      assertApproved(task);
+      const readyPlatforms = details.platforms || details.readyPlatforms || task.preparedPlatforms || [];
+      assertAllPlatformsReady(task, readyPlatforms);
+      return { ...task, status: 'searching' };
+    }
     const transitions = {
-      start: ['awaiting-platform-preparation', 'searching'],
-      prepared: ['awaiting-platform-preparation', 'searching'],
       finish: ['searching', 'report-ready'],
       request_refinement: ['report-ready', 'awaiting-refinement-confirmation'],
       confirm_refinement: ['awaiting-refinement-confirmation', 'searching'],
@@ -115,10 +151,19 @@
     assertApproved(task);
     const budget = task.budget || {};
     const current = task.usage || EMPTY_USAGE();
+    const integerMetrics = new Set(['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'attachmentBytes', 'analysisTokens']);
+    const metricFields = [...integerMetrics, 'durationMs'];
+    for (const field of metricFields) {
+      if (!Object.prototype.hasOwnProperty.call(usage, field)) continue;
+      const value = usage[field];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || (integerMetrics.has(field) && !Number.isInteger(value))) {
+        throw new TypeError(`${field} 必须是有限的非负${integerMetrics.has(field) ? '整数' : '数值'}`);
+      }
+    }
     const platform = String(usage.platform || '').trim().toLowerCase();
-    const queryCount = Number(usage.queries || 0);
+    const queryCount = usage.queries ?? usage.queriesPerPlatform ?? 0;
     const nextUsage = {
-      platforms: Math.max(Number(current.platforms || 0), Number(usage.platforms || 0),
+      platforms: Math.max(Number(current.platforms || 0), usage.platforms || 0,
         platform && !(current.queriesByPlatform || {})[platform] ? Number(current.platforms || 0) + 1 : 0),
       queriesByPlatform: { ...(current.queriesByPlatform || {}) },
       pages: Number(current.pages || 0) + Number(usage.pages || 0),
@@ -130,7 +175,7 @@
     if (platform && queryCount) nextUsage.queriesByPlatform[platform] = Number(nextUsage.queriesByPlatform[platform] || 0) + queryCount;
     const checks = [
       [nextUsage.platforms, budget.maxPlatforms, '平台数'],
-      [platform ? nextUsage.queriesByPlatform[platform] || 0 : Number(usage.queriesPerPlatform || 0), budget.maxQueriesPerPlatform, '每平台查询数'],
+      [platform ? nextUsage.queriesByPlatform[platform] || 0 : usage.queriesPerPlatform ?? usage.queries ?? 0, budget.maxQueriesPerPlatform, '每平台查询数'],
       [nextUsage.pages, budget.maxPages, '翻页数'],
       [nextUsage.details, budget.maxDetails, '详情数'],
       [nextUsage.durationMs, budget.maxDurationMs, '执行时间'],
@@ -190,9 +235,10 @@
     approveResearchPlan,
     rejectResearchPlan,
     transitionResearchTask,
-    startResearchTask: task => {
+    startResearchTask: (task, readyPlatforms) => {
       assertApproved(task);
       if (task.status !== 'awaiting-platform-preparation') throw new Error('任务尚未完成平台准备');
+      assertAllPlatformsReady(task, readyPlatforms === undefined ? task.preparedPlatforms : readyPlatforms);
       return { ...task, status: 'searching' };
     },
     consumeResearchBudget,

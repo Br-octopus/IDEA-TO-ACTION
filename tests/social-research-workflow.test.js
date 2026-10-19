@@ -40,7 +40,22 @@ test('未批准不能开始或消耗搜索预算，批准后进入平台准备�
   const approved = workflow.approveResearchPlan(planned);
   assert.equal(approved.status, 'awaiting-platform-preparation');
   assert.equal(planned.status, 'awaiting-plan-confirmation');
-  assert.equal(workflow.startResearchTask(approved).status, 'searching');
+  assert.throws(() => workflow.startResearchTask(approved), /平台.*准备/);
+  assert.equal(workflow.startResearchTask(approved, platforms).status, 'searching');
+});
+
+test('平台准备事件不能直接搜索，缺少任一平台时拒绝开始', () => {
+  const approved = workflow.approveResearchPlan(makePlan());
+  const partial = workflow.transitionResearchTask(approved, { type: 'prepared', platforms: platforms.slice(0, 2) });
+  assert.equal(partial.status, 'awaiting-platform-preparation');
+  assert.deepEqual(partial.preparedPlatforms, platforms.slice(0, 2));
+  assert.throws(() => workflow.startResearchTask(partial), /平台.*准备/);
+  assert.throws(() => workflow.startResearchTask(approved, platforms.slice(0, 2)), /平台.*准备/);
+  const ready = workflow.transitionResearchTask(partial, { type: 'prepared', platforms: [platforms[2]] });
+  assert.deepEqual(ready.preparedPlatforms, platforms);
+  assert.equal(workflow.startResearchTask(ready).status, 'searching');
+  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'start' }), /平台.*准备/);
+  assert.equal(workflow.transitionResearchTask(approved, { type: 'start', platforms }).status, 'searching');
 });
 
 test('拒绝和取消后任务不可继续推进', () => {
@@ -70,7 +85,7 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
       maxDurationMs: 1000,
       maxAttachmentBytes: 100
     }
-  })));
+  })), platforms);
   const cases = [
     { platforms: 4 },
     { platform: 'reddit', queries: 3 },
@@ -89,10 +104,27 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
   assert.equal(task.usage.platforms, 0);
 });
 
+test('预算计量拒绝非有限、负数和非整数值，且无效输入不修改旧任务', () => {
+  const task = workflow.startResearchTask(workflow.approveResearchPlan(makePlan()), platforms);
+  const invalidInputs = [];
+  for (const field of ['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'durationMs', 'attachmentBytes', 'analysisTokens']) {
+    invalidInputs.push({ [field]: NaN }, { [field]: Infinity }, { [field]: -1 });
+  }
+  for (const field of ['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'attachmentBytes', 'analysisTokens']) {
+    invalidInputs.push({ [field]: 1.5 });
+  }
+  const original = structuredClone(task);
+  for (const usage of invalidInputs) {
+    assert.throws(() => workflow.consumeResearchBudget(task, usage), TypeError);
+    assert.deepEqual(task, original);
+  }
+  assert.equal(workflow.consumeResearchBudget(task, { durationMs: 0.5 }).usage.durationMs, 0.5);
+});
+
 test('补搜只允许在已批准预算剩余额度内进行', () => {
   const task = workflow.startResearchTask(workflow.approveResearchPlan(makePlan({
     budget: { maxQueriesPerPlatform: 2 }
-  })));
+  })), platforms);
   assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, true);
   const used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 2 });
   assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'reddit', queries: 1 }).allowed, false);
