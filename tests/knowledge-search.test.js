@@ -311,8 +311,8 @@ test('Prompt Agent 检索遍历超过通用搜索窗口的候选，并优先选�
 
   const result = selectPromptAgentEntries(entries, 'CSV', { limit: 3 });
 
-  assert.ok(result.some(item => item.id === 'condition-match'));
-  assert.ok(result[0].promptAgentScore >= result.at(-1).promptAgentScore);
+  assert.ok(entries.findIndex(item => item.id === 'condition-match') > 20);
+  assert.equal(result[0].id, 'condition-match');
 });
 
 test('搜索结果明确记录命中的查询词', () => {

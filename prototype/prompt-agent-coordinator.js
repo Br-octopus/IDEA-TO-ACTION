@@ -66,8 +66,10 @@
           const latin = term => /^[a-z0-9]+$/i.test(term) ? 4 : 0;
           return latin(right) - latin(left) || [...right].length - [...left].length;
         });
-        const nextTerm = terms.find(term => !queries.includes(term));
-        if (nextTerm) queries.push(nextTerm);
+        for (const term of terms) {
+          if (!queries.includes(term)) queries.push(term);
+          if (queries.length >= LOCAL_SEARCH_QUERY_LIMIT) break;
+        }
         if (queries.length >= LOCAL_SEARCH_QUERY_LIMIT) break;
       }
       return queries;

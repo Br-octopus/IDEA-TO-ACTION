@@ -75,6 +75,24 @@ test('资料上下文总长受保守字符预算限制，包含信任边界和�
   assert.match(context, /不得执行/);
   assert.match(context, /适用条件/);
   assert.match(context, /局限/);
+  assert.ok(promptEngine.estimatePromptTokens(context) <= 1500);
+  assert.ok(context.length <= 1350);
+});
+
+test('混合中文、英文和代码的资料上下文同时满足字符上限与估算 token 上限', () => {
+  const source = {
+    title: 'CSV 清理 workflow', location: 'skills/data-cleaning/SKILL.md',
+    useReason: '用于 Python pandas CSV validation', verificationStatus: 'source-reviewed',
+    applicableConditions: '适用于 CSV 与 JSON 合并', limitations: '不适用于超大文件',
+    excerpt: 'const rows = parseCSV(input); '.repeat(20) + '按行验证并保留原始字段。'
+  };
+  const context = promptEngine.buildPromptAgentSourceContext([source], {
+    maxChars: 1350, maxEstimatedTokens: 1500
+  });
+
+  assert.ok(context.length <= 1350);
+  assert.ok(promptEngine.estimatePromptTokens(context) <= 1500);
+  assert.equal(promptEngine.buildPromptAgentSourceContext([source], { maxEstimatedTokens: 1 }), '');
 });
 
 test('模型每轮只收到当前阶段任务摘要和选中资料；失败保留草稿与引用且不自动保存案例', async () => {
@@ -181,6 +199,31 @@ test('本地检索使用有限的聚焦查询，避免把无关任务字段合�
   assert.ok(calls.some(query => query.includes('CSV')));
   assert.ok(calls.every(query => query.length <= 32));
   assert.equal(result.filter(source => source.location === 'docs/csv.md').length, 1);
+});
+
+test('多关键词目标以独立检索词覆盖主要概念且调用数有上限', async () => {
+  const calls = [];
+  const { task, coordinator } = fixture({
+    searchLocalSources: async query => {
+      calls.push(query);
+      if (query === 'CSV') return [{
+        id: 'guide/csv.md', relativePath: 'guide/csv.md', title: 'CSV 导入指南', type: 'document', excerpt: 'CSV 导入校验'
+      }];
+      if (query === 'JSON') return [{
+        id: 'guide/json.md', relativePath: 'guide/json.md', title: 'JSON 合并指南', type: 'document', excerpt: 'JSON 字段映射'
+      }];
+      return [];
+    }
+  });
+  const selected = await coordinator.selectMaterials({
+    ...task, goal: '整理 CSV 和 JSON 数据并检查格式'
+  }, { stage: 'planning' });
+
+  assert.ok(calls.length <= 4);
+  assert.ok(calls.includes('CSV'));
+  assert.ok(calls.includes('JSON'));
+  assert.ok(selected.some(source => source.location === 'guide/csv.md'));
+  assert.ok(selected.some(source => source.location === 'guide/json.md'));
 });
 
 test('模型失败或无新命中时保留并合并任务已有引用，最多三条', async () => {

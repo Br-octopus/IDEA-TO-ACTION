@@ -106,11 +106,11 @@
 - Test: `tests/knowledge-search.test.js`
 - Test: `tests/prompt-engine.test.js`
 
-- [ ] **Step 1: 写自动选材测试。** 准备提示词、成功案例、失败案例、待验证案例、Skill、工作流、脚本和无关资料；验证按任务领域、当前阶段、关键词、验证状态和适用边界排序。成功案例不能只因标为成功就泛化，失败案例必须展示触发条件与失效原因。
-- [ ] **Step 2: 实现相关性选择和预算限制。** 复用现有 `collectKnowledgeEntries`/`searchKnowledge` 能力，扩展任务阶段和来源类别筛选；默认最多 3 条来源、模型上下文合计约 1,500 tokens。来源片段始终带标题、路径/链接、用途、验证状态和局限。
-- [ ] **Step 3: 写协调器失败测试。** 注入模型、资料检索、持久化和研究服务，验证每一阶段只发必要摘要；来源指令不会覆盖用户要求；取消、超时和模型失败保留当前草稿与已有来源。
-- [ ] **Step 4: 实现 coordinator。** 提供 `createPromptAgentCoordinator(dependencies)`，其阶段方法调用 schema/workflow/prompt/index/retriever 的窄接口；禁止自由循环、隐式多模型评审或自动保存案例。
-- [ ] **Step 5: 运行知识检索和协调器回归。** 运行 `node --test tests/prompt-agent-coordinator.test.js tests/knowledge-search.test.js tests/prompt-engine.test.js`；预期自动选材顺序、来源引用和上下文上限通过。
+- [x] **Step 1: 写自动选材测试。** 准备提示词、成功案例、失败案例、待验证案例、Skill、工作流、脚本和无关资料；验证按任务领域、当前阶段、关键词、验证状态和适用边界排序。成功案例不能只因标为成功就泛化，失败案例必须展示触发条件与失效原因。
+- [x] **Step 2: 实现相关性选择和预算限制。** 复用现有 `collectKnowledgeEntries`/`searchKnowledge` 能力，扩展任务阶段和来源类别筛选；默认最多 3 条来源，上下文使用约 1,500 tokens 的本地估算上限并受字符硬上限约束。来源片段始终带标题、路径/链接、用途、验证状态和局限。
+- [x] **Step 3: 写协调器失败测试。** 注入模型、资料检索、持久化和研究服务，验证每一阶段只发必要摘要；来源指令不会覆盖用户要求；取消、超时和模型失败保留当前草稿与已有来源。
+- [x] **Step 4: 实现 coordinator。** 提供 `createPromptAgentCoordinator(dependencies)`，其阶段方法调用 schema/workflow/prompt/index/retriever 的窄接口；禁止自由循环、隐式多模型评审或自动保存案例。
+- [x] **Step 5: 运行知识检索和协调器回归。** 运行 `node --test tests/prompt-agent-coordinator.test.js tests/knowledge-search.test.js tests/prompt-engine.test.js`；预期自动选材顺序、来源引用和上下文上限通过。
 
 ## Task 5: 联网搜索与研究 Agent 的确认式交接
 
