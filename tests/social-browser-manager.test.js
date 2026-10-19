@@ -20,8 +20,9 @@ function createHarness({ loadURL, navigationTimeoutMs } = {}) {
     }
     on(name, listener) { this.listeners[name] = listener; }
     isDestroyed() { return this.destroyed; }
-    async loadURL(url) { if (loadURL) return loadURL(url); this.url = url; }
+    async loadURL(url) { if (loadURL) return loadURL(url, this); this.url = url; }
     close() { this.destroyed = true; this.listeners.closed?.(); }
+    destroy() { this.destroyed = true; this.listeners.closed?.(); }
   }
   const manager = createSocialBrowserManager({
     BrowserWindow: FakeBrowserWindow,
@@ -79,7 +80,48 @@ test('导航超时会标记 timeout 并对调用方返回稳定错误', async ()
   const { manager } = createHarness({ loadURL: () => new Promise(() => {}), navigationTimeoutMs: 5 });
   const pending = manager.openPlatformSession({ platform: 'reddit', profileId: 'slow', startUrl: 'https://reddit.com/' });
   await assert.rejects(pending, error => error.code === 'NAVIGATION_TIMEOUT');
-  assert.equal(manager.getSessionStatus('reddit:slow').status, 'timeout');
+  assert.equal(manager.getSessionStatus('reddit:slow').status, 'closed');
+  assert.equal(manager.getSessionStatus('reddit:slow').errorCode, 'NAVIGATION_TIMEOUT');
+});
+
+test('导航超时销毁旧窗口，迟到的 loadURL 不影响后续同 profile 会话', async () => {
+  let finishLateLoad;
+  const { manager, windows } = createHarness({
+    navigationTimeoutMs: 5,
+    loadURL: (url, window) => {
+      if (url.endsWith('/slow')) {
+        return new Promise(resolve => {
+          finishLateLoad = () => {
+            window.url = url;
+            resolve();
+          };
+        });
+      }
+      window.url = url;
+      return Promise.resolve();
+    }
+  });
+  await assert.rejects(
+    manager.openPlatformSession({ platform: 'reddit', profileId: 'late', startUrl: 'https://reddit.com/slow' }),
+    error => error.code === 'NAVIGATION_TIMEOUT'
+  );
+
+  const timedOutWindow = windows[0];
+  assert.equal(timedOutWindow.destroyed, true);
+  assert.equal(manager.getSessionStatus('reddit:late').status, 'closed');
+  assert.equal(manager.getSessionStatus('reddit:late').errorCode, 'NAVIGATION_TIMEOUT');
+
+  const later = await manager.openPlatformSession({ platform: 'reddit', profileId: 'late', startUrl: 'https://reddit.com/later' });
+  assert.equal(windows.length, 2);
+  assert.equal(later.status, 'ready');
+  assert.equal(windows[1].url, 'https://reddit.com/later');
+
+  finishLateLoad();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(timedOutWindow.url, 'https://reddit.com/slow');
+  assert.equal(windows[1].url, 'https://reddit.com/later');
+  assert.equal(manager.getSessionStatus('reddit:late').status, 'ready');
+  assert.equal(manager.getSessionStatus('reddit:late').currentUrl, 'https://reddit.com/later');
 });
 
 test('拒绝非白名单 URL、路径型 profile 与非固定脚本名', async () => {

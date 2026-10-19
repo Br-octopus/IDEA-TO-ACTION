@@ -60,7 +60,7 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
     sessions.set(sessionId, record);
     window.on?.('closed', () => {
       record.status = 'closed';
-      record.errorCode = 'SESSION_CLOSED';
+      if (record.errorCode !== 'NAVIGATION_TIMEOUT') record.errorCode = 'SESSION_CLOSED';
       record.updatedAt = now();
       record.window = null;
     });
@@ -108,10 +108,16 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
       record.currentUrl = url;
       record.status = 'ready';
     } catch (error) {
-      const closed = !record.window || record.window.isDestroyed?.() || error.code === 'SESSION_CLOSED';
-      record.status = closed ? 'closed' : error.code === 'NAVIGATION_TIMEOUT' ? 'timeout' : 'failed';
-      record.errorCode = closed ? 'SESSION_CLOSED' : record.status === 'timeout' ? 'NAVIGATION_TIMEOUT' : 'NAVIGATION_FAILED';
-      const message = closed ? '浏览器会话已关闭' : record.status === 'timeout' ? '页面导航超时' : '页面导航失败';
+      const timedOut = error.code === 'NAVIGATION_TIMEOUT';
+      const closed = !timedOut && (!record.window || record.window.isDestroyed?.() || error.code === 'SESSION_CLOSED');
+      record.status = timedOut || closed ? 'closed' : 'failed';
+      record.errorCode = timedOut ? 'NAVIGATION_TIMEOUT' : closed ? 'SESSION_CLOSED' : 'NAVIGATION_FAILED';
+      record.updatedAt = now();
+      if (timedOut && record.window && !record.window.isDestroyed?.()) {
+        if (typeof record.window.destroy === 'function') record.window.destroy();
+        else record.window.close();
+      }
+      const message = timedOut ? '页面导航超时' : closed ? '浏览器会话已关闭' : '页面导航失败';
       throw Object.assign(new Error(message), { code: record.errorCode });
     } finally {
       clearTimeout(timeout);
