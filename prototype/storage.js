@@ -25,6 +25,11 @@
     "status", "suggestedLabel", "evidence", "lessons", "nextPrompt",
     "applicableWhen", "notApplicableWhen"
   ];
+  const STATE_FIELDS = [
+    "schemaVersion", "projects", "prompts", "references", "researchSelection",
+    "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters",
+    "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings"
+  ];
 
   function createEmptyState() {
     return {
@@ -88,13 +93,13 @@
         const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
         const currentIsBusinessField = options.preserveBusinessFields === true
           && path.length === 0
-          && ["token", "secret"].includes(normalized)
-          || options.preserveBusinessFields === true
-          && path.length === 0
-          && key === "apiKey";
+          && ["token", "secret"].includes(normalized);
         const currentMatchesPattern = /^(?:api|model|search|access|refresh|client|auth|bearer|private)(?:api)?(?:key|token|secret|credential)$/.test(normalized);
+        const currentIsOAuthCredential = /^oauth(?:[a-z0-9]+)?(?:token|key|secret|credential)$/.test(normalized);
+        const currentIsSensitive = /(?:cookie|session|password|credential|authorization|profilepath|authblob)/.test(normalized)
+          || /(?:api|access|refresh|session|auth|bearer|client|private|model|search)(?:key|token|secret|credential)$/.test(normalized);
         return currentIsBusinessField
-          || (!credentialFields.has(normalized) && !currentMatchesPattern);
+          || (!credentialFields.has(normalized) && !currentMatchesPattern && !currentIsOAuthCredential && !currentIsSensitive);
       })
       .map(([key, item]) => [key, stripModelKeys(item, options, [...path, key])]));
   }
@@ -321,9 +326,12 @@
     const knowledgeEntries = normalizeKnowledgeEntries(source.knowledgeEntries);
     const researchSelection = sanitizeResearchSelection(source.researchSelection);
     const researchState = sanitizeResearchState(source);
+    const knownState = stripModelKeys(source);
     const state = {
       ...createEmptyState(),
-      ...stripModelKeys(source),
+      ...Object.fromEntries(STATE_FIELDS
+        .filter(field => Object.hasOwn(knownState, field))
+        .map(field => [field, knownState[field]])),
       schemaVersion: 3,
       projects: Array.isArray(source.projects) ? stripModelKeys(source.projects).map(withProjectDefaults) : [],
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],
@@ -504,6 +512,30 @@
     return { state: next, entry: saved, updated: true };
   }
 
+  function buildResearchKnowledgeEntry(result, task = {}) {
+    if (!knowledgeSchema || typeof knowledgeSchema.normalizeKnowledgeEntry !== "function") {
+      throw new KnowledgeSchemaUnavailableError();
+    }
+    const source = result && typeof result === "object" ? result : {};
+    const id = String(source.id || "").trim();
+    if (!id) throw new TypeError("研究结果必须提供非空 id");
+    return knowledgeSchema.normalizeKnowledgeEntry({
+      id: `research-${id}`,
+      type: "manual-note",
+      title: source.title || `${source.platform || "社媒"} 研究结果`,
+      sourceUrl: source.url,
+      sourceType: "社媒研究",
+      sourceKind: "manual",
+      sourceId: id,
+      domains: [source.platform].filter(Boolean),
+      keywords: task.plan?.queries || task.queries || [],
+      summary: source.summary,
+      contentExcerpt: source.discussionSummary,
+      limitations: source.evidenceStatus === "unverified" ? "来源尚未由用户逐条核验" : "",
+      verificationStatus: source.evidenceStatus || "unverified"
+    });
+  }
+
   function listCaseVersions(caseItem) {
     if (!caseItem || typeof caseItem !== "object") return [];
     if (Array.isArray(caseItem.versionHistory) && caseItem.versionHistory.length) {
@@ -557,5 +589,6 @@
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, StorageWriteError, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

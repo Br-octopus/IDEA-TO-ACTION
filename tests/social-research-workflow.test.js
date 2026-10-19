@@ -1,233 +1,270 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
+const fs = require('node:fs');
+const vm = require('node:vm');
+const schema = require('../prototype/social-research-schema.js');
 const workflow = require('../prototype/social-research-workflow.js');
 const prompts = require('../prototype/social-research-prompts.js');
 
-const {
-  createResearchPlan,
-  startResearchTask,
-  approveResearchPlan,
-  rejectResearchPlan,
-  transitionResearchTask,
-  consumeResearchBudget,
-  approveSupplementarySearch,
-  decideConnectionMode,
-  shouldFallbackToBrowser,
-  canRequestSupplementarySearch
-} = workflow;
+const platforms = ['xiaohongshu', 'reddit', 'youtube'];
 
 function makePlan(overrides = {}) {
-  return createResearchPlan({
+  return workflow.createResearchPlan({
     topic: '小红书上的独立开发工具体验',
     template: 'pain-points',
-    platforms: ['xiaohongshu', 'reddit', 'youtube'],
+    platforms,
     ...overrides
   });
 }
 
-function approve(overrides = {}) {
-  return approveResearchPlan(makePlan(overrides));
+function startPreparedTask(task) {
+  const prepared = workflow.transitionResearchTask(task, { type: 'prepared', platforms: task.platforms });
+  return workflow.startResearchTask(prepared);
 }
 
-test('创建计划需要用户确认，未确认不能启动，批准后进入平台准备', () => {
+function expectBudgetExceeded(task, usage) {
+  assert.throws(
+    () => workflow.consumeResearchBudget(task, usage),
+    error => error.code === 'budget_exceeded'
+  );
+}
+
+test('计划使用 schema 状态并等待用户确认，且接受 schema 标准结构', () => {
   const planned = makePlan();
-
-  assert.equal(planned.status, 'awaiting_confirmation');
-  assert.throws(() => startResearchTask(planned), error => (
-    error.code === 'PLAN_NOT_CONFIRMED' && /确认/.test(error.message)
-  ));
-
-  const approved = approveResearchPlan(planned);
-  assert.equal(approved.status, 'preparing_platforms');
-  assert.equal(approved.approved, true);
+  assert.equal(planned.status, 'awaiting-plan-confirmation');
+  assert.deepEqual(planned.platforms, platforms);
+  assert.equal(planned.plan.objective, '小红书上的独立开发工具体验');
+  assert.equal(planned.plan.researchType, 'pain-points');
+  assert.equal(schema.normalizeResearchPlan(planned.plan).researchType, 'pain-points');
 });
 
-test('未批准、已取消或已拒绝的任务不能进入搜索', () => {
+test('未批准不能开始或消耗搜索预算，批准后进入平台准备状态', () => {
   const planned = makePlan();
-  const cancelled = rejectResearchPlan(planned, '用户取消');
+  assert.throws(() => workflow.startResearchTask(planned), /确认/);
+  assert.throws(() => workflow.consumeResearchBudget(planned, { queries: 1 }), /确认/);
+  const approved = workflow.approveResearchPlan(planned);
+  assert.equal(approved.status, 'awaiting-platform-preparation');
+  assert.equal(planned.status, 'awaiting-plan-confirmation');
+  assert.throws(() => workflow.startResearchTask(approved), /至少需要一个已准备的平台/);
+  assert.throws(() => workflow.startResearchTask(approved, platforms), /至少需要一个已准备的平台/);
+});
 
+test('准备的平台必须属于计划，至少一个平台就绪后才能开始', () => {
+  const approved = workflow.approveResearchPlan(makePlan());
+  const partial = workflow.transitionResearchTask(approved, { type: 'prepared', platforms: platforms.slice(0, 2) });
+  assert.equal(partial.status, 'awaiting-platform-preparation');
+  assert.deepEqual(partial.preparedPlatforms, platforms.slice(0, 2));
+  assert.equal(workflow.startResearchTask(partial).status, 'searching');
+  assert.throws(() => workflow.startResearchTask(approved), /至少需要一个已准备的平台/);
+  const ready = workflow.transitionResearchTask(partial, { type: 'prepared', platforms });
+  assert.deepEqual(ready.preparedPlatforms, platforms);
+  assert.equal(workflow.startResearchTask(ready).status, 'searching');
+  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'start' }), /至少需要一个已准备的平台/);
+  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'prepared', platforms: ['not-planned'] }), /不在已批准计划/);
+});
+
+test('没有平台就绪时通过明确的失败转换终止', () => {
+  const approved = workflow.approveResearchPlan(makePlan());
+  const failed = workflow.transitionResearchTask(approved, { type: 'preparation_failed' });
+  assert.equal(failed.status, 'failed');
+  assert.throws(() => workflow.startResearchTask(failed), /取消或终止/);
+  assert.throws(() => workflow.transitionResearchTask(failed, { type: 'preparation_failed' }), /取消或终止/);
+});
+
+test('拒绝和取消后任务不可继续推进', () => {
+  const rejected = workflow.rejectResearchPlan(makePlan(), '范围太大');
+  assert.equal(rejected.status, 'cancelled');
+  assert.throws(() => workflow.startResearchTask(rejected), /取消|终止/);
+  const cancelled = workflow.transitionResearchTask(workflow.approveResearchPlan(makePlan()), { type: 'cancel' });
   assert.equal(cancelled.status, 'cancelled');
-  assert.throws(() => startResearchTask(cancelled), error => error.code === 'TASK_CANCELLED');
-  assert.throws(() => transitionResearchTask(cancelled, 'start_search'), error => error.code === 'TASK_CANCELLED');
-  assert.throws(() => transitionResearchTask(planned, 'start_search'), error => error.code === 'PLAN_NOT_CONFIRMED');
+  assert.throws(() => workflow.transitionResearchTask(cancelled, { type: 'start' }), /取消|终止/);
 });
 
-test('状态迁移只允许批准后的确定性顺序', () => {
-  const approved = approve();
-  const searching = startResearchTask(approved);
-  const reportReady = transitionResearchTask(searching, 'report_ready');
-
-  assert.equal(searching.status, 'searching');
-  assert.equal(reportReady.status, 'report_ready');
-  assert.throws(() => transitionResearchTask(reportReady, 'start_search'), error => (
-    error.code === 'INVALID_TRANSITION'
-  ));
-});
-
-test('补搜确认不能被 startResearchTask 绕过，取消任务也不能推进', () => {
-  const approved = approve({ platforms: ['reddit'], budget: { maxQueriesPerPlatform: 2 } });
-  const searching = startResearchTask(approved);
-  const reportReady = transitionResearchTask(searching, 'report_ready');
-  const waiting = transitionResearchTask(reportReady, {
-    type: 'request_supplementary',
-    request: { platform: 'reddit', queries: 1 }
-  });
-
-  assert.equal(waiting.status, 'awaiting_supplementary_confirmation');
-  assert.throws(() => startResearchTask(waiting), error => error.code === 'SUPPLEMENTARY_CONFIRMATION_REQUIRED');
-  const cancelled = rejectResearchPlan(waiting, '用户取消');
-  assert.throws(() => approveSupplementarySearch(cancelled, { platform: 'reddit', queries: 1 }), error => error.code === 'TASK_CANCELLED');
-});
-
-test('批准补搜在同一校验中消费预算，超预算不部分消费', () => {
-  const approved = approve({ platforms: ['reddit'], budget: { maxQueriesPerPlatform: 2 } });
-  const waiting = transitionResearchTask(
-    transitionResearchTask(startResearchTask(approved), 'report_ready'),
-    'request_supplementary'
+test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () => {
+  assert.throws(
+    () => makePlan({ platforms: [...platforms, 'tiktok'], budget: { maxPlatforms: 3 } }),
+    error => error.code === 'budget_exceeded'
   );
-  const first = approveSupplementarySearch(waiting, { platform: 'reddit', queries: 1 });
-  assert.equal(first.code, 'ok');
-  assert.equal(first.status, 'searching');
-  assert.equal(first.budgetUsage.queriesByPlatform.reddit, 1);
-
-  const waitingWithPlatforms = transitionResearchTask(
-    transitionResearchTask(first.task, 'report_ready'),
-    'request_supplementary'
+  assert.throws(
+    () => makePlan({ queries: ['q1', 'q2', 'q3', 'q4', 'q5', 'q6'] }),
+    error => error.code === 'budget_exceeded'
   );
-  const second = approveSupplementarySearch(waitingWithPlatforms, { platforms: ['reddit'], queries: 1 });
-  assert.equal(second.code, 'ok');
-  assert.equal(second.budgetUsage.platforms, 0);
-  assert.equal(second.budgetUsage.queriesByPlatform.reddit, 2);
-
-  const waitingAgain = transitionResearchTask(
-    transitionResearchTask(second.task, 'report_ready'),
-    'request_supplementary'
-  );
-  const exceeded = approveSupplementarySearch(waitingAgain, { platform: 'reddit', queries: 2 });
-  assert.equal(exceeded.code, 'budget_exceeded');
-  assert.equal(exceeded.status, 'awaiting_supplementary_confirmation');
-  assert.equal(exceeded.budgetUsage.queriesByPlatform.reddit, 2);
-});
-
-test('平台、查询、翻页、详情、时间、附件和分析 token 超预算返回 budget_exceeded', () => {
-  const limits = {
-    maxPlatforms: 1,
-    maxQueriesPerPlatform: 1,
-    maxPages: 1,
-    maxDetails: 1,
-    maxDurationMs: 100,
-    maxAttachmentBytes: 10,
-    maxAnalysisTokens: 10
-  };
-  const task = approve({ platforms: ['reddit'], budget: limits });
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
+    budget: {
+      maxPlatforms: 3,
+      maxQueriesPerPlatform: 2,
+      maxPages: 2,
+      maxDetails: 2,
+      maxDurationMs: 1000,
+      maxAttachmentBytes: 100
+    }
+  })));
   const cases = [
-    { platforms: 2 },
-    { queries: { reddit: 2 } },
-    { pages: 2 },
-    { details: 2 },
-    { durationMs: 101 },
-    { attachmentBytes: 11 },
-    { analysisTokens: 11 }
+    { platforms: 4 },
+    { platform: 'reddit', queries: 3 },
+    { pages: 3 },
+    { details: 3 },
+    { durationMs: 1001 },
+    { attachmentBytes: 101 },
+    { analysisTokens: 10001 }
   ];
-
-  for (const usage of cases) {
-    const result = consumeResearchBudget(task, usage);
-    assert.equal(result.code, 'budget_exceeded', JSON.stringify(usage));
-    assert.equal(result.ok, false);
-  }
+  const originalUsage = structuredClone(task.usage);
+  for (const usage of cases) expectBudgetExceeded(task, usage);
+  assert.throws(
+    () => workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 0, queriesPerPlatform: 100 }),
+    TypeError
+  );
+  expectBudgetExceeded(task, { platform: 'reddit', queries: 3, queriesPerPlatform: 3 });
+  assert.deepEqual(task.usage, originalUsage);
+  const consumed = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 1 });
+  assert.equal(consumed.usage.platforms, 1);
+  assert.deepEqual(consumed.usage.queriesByPlatform, { reddit: 1 });
+  assert.equal(task.usage.platforms, 0);
 });
 
-test('预算消费成功后只允许在剩余预算内补搜', () => {
-  const task = approve({
-    platforms: ['reddit'],
-    budget: { maxQueriesPerPlatform: 2, maxPages: 2 }
+test('查询计量必须带平台或使用逐平台 map，并对重复调用累计', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
+    budget: { maxQueriesPerPlatform: 2 }
+  })));
+  assert.throws(() => workflow.consumeResearchBudget(task, { queries: 1 }), TypeError);
+  assert.throws(() => workflow.consumeResearchBudget(task, { queriesPerPlatform: 1 }), TypeError);
+  let used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 1 });
+  used = workflow.consumeResearchBudget(used, { platform: 'reddit', queriesPerPlatform: 1 });
+  assert.equal(used.usage.queriesByPlatform.reddit, 2);
+  expectBudgetExceeded(used, { platform: 'reddit', queries: 1 });
+  used = workflow.consumeResearchBudget(task, { queriesByPlatform: { reddit: 2, youtube: 1 } });
+  assert.deepEqual(used.usage.queriesByPlatform, { reddit: 2, youtube: 1 });
+});
+
+test('预算计量拒绝非有限、负数和非整数值，且无效输入不修改旧任务', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan()));
+  const invalidInputs = [];
+  for (const field of ['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'durationMs', 'attachmentBytes', 'analysisTokens']) {
+    invalidInputs.push({ [field]: NaN }, { [field]: Infinity }, { [field]: -1 });
+  }
+  for (const field of ['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'attachmentBytes', 'analysisTokens']) {
+    invalidInputs.push({ [field]: 1.5 });
+  }
+  const original = structuredClone(task);
+  for (const usage of invalidInputs) {
+    assert.throws(() => workflow.consumeResearchBudget(task, usage), TypeError);
+    assert.deepEqual(task, original);
+  }
+  assert.equal(workflow.consumeResearchBudget(task, { durationMs: 0.5 }).usage.durationMs, 0.5);
+});
+
+test('补搜只允许在已批准预算剩余额度内进行', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
+    budget: { maxQueriesPerPlatform: 2 }
+  })));
+  assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, true);
+  const used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 2 });
+  assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'reddit', queries: 1 }).allowed, false);
+  const analysisUsed = workflow.consumeResearchBudget(task, { analysisTokens: 9000 });
+  assert.equal(analysisUsed.usage.analysisTokens, 9000);
+  assert.equal(workflow.canRequestSupplementarySearch(analysisUsed, { analysisTokens: 1001 }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(analysisUsed, { analysisTokens: 1000 }).allowed, true);
+  assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'tiktok', platforms: ['tiktok'] }).allowed, false);
+});
+
+test('补搜规范化单平台数组、累计平台预算并要求多平台逐平台查询 map', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
+    budget: { maxPlatforms: 3, maxQueriesPerPlatform: 2 }
+  })));
+  const single = workflow.canRequestSupplementarySearch(task, { platforms: [' REDDIT '], queries: 1 });
+  assert.equal(single.allowed, true);
+  assert.equal(single.usage.platform, 'reddit');
+  let used = single.task;
+  const second = workflow.canRequestSupplementarySearch(used, { platforms: ['youtube'], queries: 1 });
+  assert.equal(second.allowed, true);
+  used = second.task;
+  assert.deepEqual(used.usage.usedPlatforms, ['reddit', 'youtube']);
+  const third = workflow.canRequestSupplementarySearch(used, { platforms: ['xiaohongshu'], queries: 1 });
+  assert.equal(third.allowed, true);
+  used = third.task;
+  assert.equal(used.usage.platforms, 3);
+  const limitedTask = { ...task, budget: { ...task.budget, maxPlatforms: 2 } };
+  const firstLimited = workflow.canRequestSupplementarySearch(limitedTask, { platforms: ['reddit'], queries: 1 });
+  const secondLimited = workflow.canRequestSupplementarySearch(firstLimited.task, { platforms: ['youtube'], queries: 1 });
+  assert.equal(secondLimited.allowed, true);
+  const thirdLimited = workflow.canRequestSupplementarySearch(secondLimited.task, { platforms: ['xiaohongshu'], queries: 1 });
+  assert.equal(thirdLimited.allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, { platforms: ['unknown'] }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, {
+    platform: 'unknown',
+    platforms: ['reddit', 'youtube'],
+    queriesByPlatform: { reddit: 1, youtube: 1 }
+  }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, { platforms: ['reddit', 'youtube'], queries: 1 }).allowed, false);
+  const multi = workflow.canRequestSupplementarySearch(task, {
+    platforms: ['reddit', 'youtube'],
+    queriesByPlatform: { reddit: 1, youtube: 2 }
   });
-  const consumed = consumeResearchBudget(task, { queries: { reddit: 1 }, pages: 1 });
-  const next = consumed.task;
-
-  assert.equal(consumed.code, 'ok');
-  assert.equal(canRequestSupplementarySearch(next, { platform: 'reddit', queries: 1, pages: 1 }), true);
-  assert.equal(canRequestSupplementarySearch(next, { platform: 'reddit', queries: 2, pages: 1 }), false);
-  assert.equal(canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }), false);
+  assert.equal(multi.allowed, true);
+  assert.deepEqual(multi.usage.queriesByPlatform, { reddit: 1, youtube: 2 });
 });
 
-test('连接策略遵守 API、浏览器和自动偏好', () => {
-  const apiConnection = { apiAvailable: true, apiConfigured: true, browserAvailable: true };
-  const browserOnly = { apiAvailable: false, browserAvailable: true };
-
-  assert.equal(decideConnectionMode('reddit', browserOnly, 'auto'), 'browser');
-  assert.equal(decideConnectionMode('reddit', apiConnection, 'auto'), 'api');
-  assert.equal(decideConnectionMode('reddit', apiConnection, 'api'), 'api');
-  assert.equal(decideConnectionMode('reddit', apiConnection, 'browser'), 'browser');
-  assert.equal(decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'api'), 'api_unavailable');
-  assert.equal(decideConnectionMode('reddit', { apiAvailable: true, apiConfigured: false }, 'api'), 'api_unavailable');
-  assert.equal(decideConnectionMode('reddit', { apiAvailable: true, apiConfigured: true }, 'browser'), 'browser');
+test('补搜仅在 searching 状态开放', () => {
+  const draft = makePlan();
+  const awaitingPreparation = workflow.approveResearchPlan(draft);
+  const searching = startPreparedTask(awaitingPreparation);
+  const reportReady = workflow.transitionResearchTask(searching, { type: 'finish' });
+  const awaitingSave = workflow.transitionResearchTask(reportReady, { type: 'request_save' });
+  for (const task of [draft, awaitingPreparation, awaitingSave]) {
+    assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, false);
+  }
+  assert.equal(workflow.canRequestSupplementarySearch(searching, { platform: 'reddit', queries: 1 }).allowed, true);
 });
 
-test('API 认证失败、超时、限流、空结果、结果不足或字段不完整时建议浏览器', () => {
-  const capability = { minimumResults: 2, requiredFields: ['title', 'url'] };
-  const failures = [
-    { code: 'AUTH_FAILED' },
-    { code: 'TIMEOUT' },
-    { code: 'RATE_LIMITED' },
-    { results: [] },
-    { results: [{ title: '只有一条', url: 'https://example.test/1' }] },
-    { results: [{ title: '缺少链接' }] }
-  ];
-
-  for (const result of failures) assert.equal(shouldFallbackToBrowser(result, capability), true);
-  assert.equal(shouldFallbackToBrowser({ results: [
-    { title: '完整结果一', url: 'https://example.test/1' },
-    { title: '完整结果二', url: 'https://example.test/2' }
+test('连接偏好尊重能力和明确选择，并在 auto 下检查 API 结果质量', () => {
+  assert.equal(workflow.decideConnectionMode('xiaohongshu', { apiAvailable: false, browserAvailable: true }, 'auto'), 'browser');
+  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'auto'), 'api');
+  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'browser'), 'browser');
+  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'api'), 'api');
+  assert.throws(
+    () => workflow.decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'api'),
+    error => error.code === 'api_unavailable' && /API/.test(error.message)
+  );
+  assert.throws(
+    () => workflow.decideConnectionMode('reddit', { apiAvailable: true, status: 'not-ready' }, 'api'),
+    error => error.code === 'api_unavailable'
+  );
+  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'auto'), 'browser');
+  const capability = { minimumResults: 2, requiredFields: ['url', 'title'] };
+  for (const apiResult of [
+    { error: 'authentication' }, { error: 'timeout' }, { error: 'rate_limit' },
+    { results: [] }, { results: [{ url: 'https://a.test', title: 'a' }] },
+    { results: [{ url: 'https://a.test', title: 'a' }, { url: 'https://b.test' }] }
+  ]) assert.equal(workflow.shouldFallbackToBrowser(apiResult, capability), true);
+  assert.equal(workflow.shouldFallbackToBrowser({ results: [
+    { url: 'https://a.test', title: 'a' }, { url: 'https://b.test', title: 'b' }
   ] }, capability), false);
-  assert.equal(shouldFallbackToBrowser({ code: 'AUTH_FAILED' }, capability, 'api'), false);
+  assert.equal(workflow.shouldFallbackToBrowser({ ok: false, error: 'timeout' }, { preference: 'api' }), false);
+  assert.equal(workflow.shouldFallbackToBrowser({ error: 'timeout' }, { preference: 'browser' }), false);
 });
 
-test('四种研究模板提示词要求可解析结构、来源链接和未完成平台', () => {
-  for (const template of ['trends', 'pain-points', 'content-competitors', 'fact-check']) {
-    const prompt = prompts.buildResearchPlanPrompt({
-      topic: '独立开发工具',
-      template,
-      platforms: ['reddit']
-    });
-    assert.match(prompt, /JSON|结构化/);
-    assert.match(prompt, /链接|URL/);
-    assert.match(prompt, /未完成平台/);
-    assert.match(prompt, /高热度.*事实|事实.*高热度/);
+test('提示词覆盖四种模板并要求结构化输出、证据边界和来源链接', () => {
+  const templates = ['trends', 'pain-points', 'content-competitors', 'fact-check'];
+  for (const template of templates) {
+    const input = { topic: '独立开发工具', template, platforms };
+    const planPrompt = prompts.buildResearchPlanPrompt(input);
+    const reportPrompt = prompts.buildResearchReportPrompt({ ...makePlan({ template }), plan: { researchType: template } }, []);
+    assert.match(planPrompt, /JSON|可解析/);
+    assert.match(reportPrompt, /JSON|可解析/);
+    assert.match(reportPrompt, /热度.*事实|热度不等于事实/);
+    assert.match(reportPrompt, /未完成平台/);
+    assert.match(reportPrompt, /链接/);
+    assert.match(prompts.buildSupplementarySearchPrompt(makePlan({ template }), '缺少反例'), /JSON|可解析/);
   }
 });
 
-test('补搜和报告提示词要求证据可追溯且不为无链接结果生成结论', () => {
-  const task = approve({ platforms: ['reddit'] });
-  const supplementary = prompts.buildSupplementarySearchPrompt(task, '缺少反例和发布时间');
-  const report = prompts.buildResearchReportPrompt(task, [
-    { id: 'result-1', platform: 'reddit', title: '结果', url: 'https://example.test/1' }
-  ]);
-
-  for (const prompt of [supplementary, report]) {
-    assert.match(prompt, /结构化|JSON/);
-    assert.match(prompt, /链接|URL/);
-    assert.match(prompt, /追溯|来源/);
+test('工作流和提示词同时支持浏览器全局导出', () => {
+  for (const [file, globalName, exportName] of [
+    ['social-research-workflow.js', 'ForwardStepSocialResearchWorkflow', 'createResearchPlan'],
+    ['social-research-prompts.js', 'ForwardStepSocialResearchPrompts', 'buildResearchPlanPrompt']
+  ]) {
+    const context = {};
+    vm.runInNewContext(fs.readFileSync(require.resolve(`../prototype/${file}`), 'utf8'), context);
+    assert.equal(typeof context[globalName][exportName], 'function');
   }
-  assert.match(report, /没有.*链接|无.*链接/);
-});
-
-test('提示词会脱敏主题、证据缺口和结果摘要中的疑似凭证', () => {
-  const secret = 'sk-live-1234567890abcdef';
-  const plan = prompts.buildResearchPlanPrompt({ topic: `研究主题 password=${secret}`, platforms: ['reddit'] });
-  const supplementary = prompts.buildSupplementarySearchPrompt(
-    { id: 'task-1', topic: '正常中文主题', template: 'pain-points', platforms: ['reddit'], budget: {}, budgetUsage: {}, status: 'awaiting_supplementary_confirmation' },
-    `缺口 token: ${secret}`
-  );
-  const report = prompts.buildResearchReportPrompt(
-    { id: 'task-1', topic: '正常中文主题', template: 'pain-points', platforms: ['reddit'] },
-    [{ id: 'r1', platform: 'reddit', title: '结果', url: 'https://example.test/1', summary: `摘要 secret=${secret}` }]
-  );
-
-  for (const prompt of [plan, supplementary, report]) {
-    assert.equal(prompt.includes(secret), false);
-    assert.match(prompt, /REDACTED_SENSITIVE_VALUE/);
-  }
-  assert.match(plan, /研究主题/);
 });

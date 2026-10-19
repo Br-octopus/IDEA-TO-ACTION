@@ -4,6 +4,8 @@ const path = require('node:path');
 const { URL } = require('node:url');
 const { createModelClient } = require('./server/model-client');
 const { createSearchClient } = require('./server/search-client');
+const { createSocialApiClient, SOCIAL_API_CODES, listSocialPlatformDefinitions } = require('./server/social-api-client');
+const { normalizeSocialResult } = require('./prototype/social-research-schema');
 
 const ROOT = __dirname;
 const DEFAULT_PORT = Number(process.env.PORT || 4173);
@@ -17,6 +19,13 @@ const ENV_CONFIG = {
   search: {
     baseUrl: process.env.SEARCH_API_URL || '',
     apiKey: process.env.SEARCH_API_KEY || ''
+  },
+  social: {
+    reddit: {
+      accessToken: process.env.REDDIT_ACCESS_TOKEN || '',
+      userAgent: process.env.REDDIT_USER_AGENT || ''
+    },
+    youtube: { apiKey: process.env.YOUTUBE_API_KEY || '' }
   }
 };
 
@@ -25,15 +34,23 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+class InvalidRequestError extends Error {}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > 2_000_000) reject(new Error('请求内容过大'));
+      if (body.length > 2_000_000) reject(new InvalidRequestError());
     });
     req.on('end', () => {
-      try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('请求不是有效 JSON')); }
+      try {
+        const parsed = body ? JSON.parse(body) : {};
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new InvalidRequestError();
+        resolve(parsed);
+      } catch {
+        reject(new InvalidRequestError());
+      }
     });
     req.on('error', reject);
   });
@@ -56,7 +73,7 @@ function serveStatic(req, res) {
   });
 }
 
-function createServer({ config = ENV_CONFIG } = {}) {
+function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch, socialTimeoutMs } = {}) {
   const modelClient = createModelClient(config.model);
   const searchClient = createSearchClient(config.search);
   return http.createServer(async (req, res) => {
@@ -76,8 +93,52 @@ function createServer({ config = ENV_CONFIG } = {}) {
     }
     if (req.method === 'POST' && requestUrl.pathname === '/api/search') {
       const body = await readBody(req);
-      if (!body.query?.trim()) return sendJson(res, 400, { error: '缺少搜索词' });
+      if (typeof body?.query !== 'string' || !body.query.trim()) return sendJson(res, 400, { error: '缺少搜索词' });
       return sendJson(res, 200, await searchClient.search(body.query.trim(), body.options));
+    }
+    if (req.method === 'GET' && requestUrl.pathname === '/api/social/platforms') {
+      const definitions = listSocialPlatformDefinitions().map(({ platform, displayName, apiAvailable, requiredConfig, maxResults, supportedFields, supportsSearch, supportsDetail, supportsComments }) => ({
+        platform, displayName, apiAvailable, requiredConfig, maxResults, supportedFields, supportsSearch, supportsDetail, supportsComments
+      }));
+      return sendJson(res, 200, { platforms: definitions });
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/social/search') {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return sendJson(res, 400, { code: 'SOCIAL_API_INVALID_REQUEST', message: '请求内容必须是 JSON 对象。' });
+      }
+      const platform = typeof body.platform === 'string' ? body.platform.trim().toLowerCase() : '';
+      const definition = listSocialPlatformDefinitions().find(item => item.platform === platform);
+      if (!definition) return sendJson(res, 400, { code: SOCIAL_API_CODES.UNSUPPORTED_PLATFORM, message: '不支持该社交平台。' });
+      if (!definition.apiAvailable) return sendJson(res, 501, { code: SOCIAL_API_CODES.UNSUPPORTED_CAPABILITY, message: '该平台暂不支持 API 搜索。' });
+      const query = typeof body.query === 'string' ? body.query.trim() : '';
+      if (!query || query.length > 500) return sendJson(res, 400, { code: 'SOCIAL_API_INVALID_QUERY', message: '搜索词长度必须为 1 到 500 个字符。' });
+      const requestedMaxResults = body.maxResults === undefined ? definition.maxResults : Number(body.maxResults);
+      if (!Number.isInteger(requestedMaxResults) || requestedMaxResults < 1) {
+        return sendJson(res, 400, { code: 'SOCIAL_API_INVALID_RESULT_COUNT', message: '结果数量超出平台允许范围。' });
+      }
+      if (requestedMaxResults > definition.maxResults) {
+        return sendJson(res, 400, { code: 'SOCIAL_API_INVALID_RESULT_COUNT', message: '结果数量超出平台允许范围。' });
+      }
+      const maxResults = requestedMaxResults;
+      const client = createSocialApiClient({
+        platform,
+        config: config.social?.[platform] || {},
+        fetchImpl: socialFetchImpl,
+        timeoutMs: socialTimeoutMs
+      });
+      const outcome = await client.search(query, { maxResults });
+      if (!Array.isArray(outcome)) {
+        const status = outcome.code === SOCIAL_API_CODES.UNSUPPORTED_CAPABILITY ? 501
+          : outcome.code === SOCIAL_API_CODES.NOT_CONFIGURED ? 503
+            : outcome.code === SOCIAL_API_CODES.RATE_LIMITED ? 429
+              : outcome.code === SOCIAL_API_CODES.TIMEOUT ? 504
+                : outcome.code === SOCIAL_API_CODES.UNSUPPORTED_PLATFORM ? 400
+                  : 502;
+        return sendJson(res, status, { code: outcome.code, message: outcome.message });
+      }
+      const results = outcome.map(result => normalizeSocialResult(result));
+      return sendJson(res, 200, { platform, results });
     }
     if (req.method === 'GET') return serveStatic(req, res);
     return sendJson(res, 405, { error: '不支持的请求方法' });
@@ -86,13 +147,16 @@ function createServer({ config = ENV_CONFIG } = {}) {
       res.destroy(error);
       return;
     }
-    return sendJson(res, 500, { error: error.message || '服务发生未知错误' });
+    if (error instanceof InvalidRequestError) {
+      return sendJson(res, 400, { code: 'INVALID_REQUEST', message: '请求格式无效。' });
+    }
+    return sendJson(res, 500, { code: 'INTERNAL_ERROR', message: '服务发生未知错误。' });
   }
   });
 }
 
-function startServer({ port = DEFAULT_PORT, host = DEFAULT_HOST, config = ENV_CONFIG } = {}) {
-  const server = createServer({ config });
+function startServer({ port = DEFAULT_PORT, host = DEFAULT_HOST, config = ENV_CONFIG, socialFetchImpl, socialTimeoutMs } = {}) {
+  const server = createServer({ config, socialFetchImpl, socialTimeoutMs });
   return new Promise((resolve, reject) => {
     const onError = error => {
       server.off('listening', onListening);

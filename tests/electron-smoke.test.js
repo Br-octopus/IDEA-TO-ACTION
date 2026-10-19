@@ -100,7 +100,7 @@ test('Electron security settings and preload whitelist are present', () => {
   assert.match(main, /sandbox:\s*true/);
   for (const method of [
     'getConfig', 'saveConfig', 'requestModel', 'requestSearch',
-    'exportBackup', 'importBackup', 'listBackups', 'readBackup'
+    'exportBackup', 'importBackup', 'listBackups', 'readBackup', 'social', 'research'
   ]) {
     assert.match(preload, new RegExp(`${method}\\s*:`));
   }
@@ -321,7 +321,7 @@ test('非法 HTTP URL 返回 JSON 错误，服务运行期错误会记录', asyn
   const chunks = [];
   for await (const chunk of response) chunks.push(chunk);
   assert.equal(response.statusCode, 500);
-  assert.match(Buffer.concat(chunks).toString(), /"error"/);
+  assert.match(Buffer.concat(chunks).toString(), /"code"/);
 
   const runtimeError = new Error('模拟运行期错误');
   server.emit('error', runtimeError);
@@ -397,10 +397,15 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'start-bundled-service:127.0.0.1:0',
     'load-url:http://127.0.0.1:50987'
   ]);
-  assert.equal(registeredHandlers.size, 8);
+  assert.equal(registeredHandlers.size, 20);
   for (const channel of ['backup:export', 'backup:import', 'backup:list', 'backup:read']) {
     assert.equal(registeredHandlers.has(channel), true);
   }
+  for (const channel of [
+    'social:list-platforms', 'social:get-status', 'social:open-login', 'social:check', 'social:search',
+    'social:fetch-detail', 'social:capture-evidence', 'social:close', 'social:clear-profile',
+    'research:save-attachment', 'research:read-attachment', 'research:delete-attachment'
+  ]) assert.equal(registeredHandlers.has(channel), true, channel);
   assert.doesNotMatch(mainSource, /loadFile\(/);
 
   let prevented = false;

@@ -1,10 +1,14 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, session } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createBackupStore } = require(path.join(__dirname, 'backup-store.js'));
 const { createSettingsStore } = require(path.join(__dirname, 'settings-store.js'));
 const { createModelClient } = require(path.join(__dirname, '..', 'server', 'model-client.js'));
 const { createSearchClient } = require(path.join(__dirname, '..', 'server', 'search-client.js'));
+const { createSocialBrowserManager } = require(path.join(__dirname, 'social-browser-manager.js'));
+const { createBrowserPlatformAdapters } = require(path.join(__dirname, 'social-browser-adapters.js'));
+const { createSocialApiClient, listSocialPlatformDefinitions } = require(path.join(__dirname, '..', 'server', 'social-api-client.js'));
+const { createSocialAttachmentStore } = require(path.join(__dirname, 'social-attachment-store.js'));
 
 const DEV_PAGE_URL = process.env.DESKTOP_SERVICE_URL || 'http://127.0.0.1:4173';
 const SERVER_SHUTDOWN_TIMEOUT_MS = 2000;
@@ -14,6 +18,22 @@ let localServiceUrl = DEV_PAGE_URL;
 let settingsStore;
 let backupStore;
 let backupExportTempSequence = 0;
+let socialBrowserManager;
+const socialBrowserAdapters = new Map();
+let socialAttachmentStore;
+const socialProfiles = new Map();
+const SOCIAL_PLATFORMS = new Set(listSocialPlatformDefinitions().map(item => item.platform));
+const SOCIAL_START_URLS = Object.freeze({
+  xiaohongshu: 'https://www.xiaohongshu.com/',
+  reddit: 'https://www.reddit.com/',
+  youtube: 'https://www.youtube.com/'
+});
+const SOCIAL_RESULT_DOMAINS = Object.freeze({
+  xiaohongshu: new Set(['www.xiaohongshu.com', 'xiaohongshu.com']),
+  reddit: new Set(['www.reddit.com', 'reddit.com']),
+  youtube: new Set(['www.youtube.com', 'youtube.com'])
+});
+const SOCIAL_MODES = new Set(['auto', 'api', 'browser']);
 
 function isDevelopment() {
   return !app.isPackaged || process.env.NODE_ENV === 'development';
@@ -58,6 +78,195 @@ function getBackupStore() {
     backupStore = createBackupStore({ userDataPath: app.getPath('userData') });
   }
   return backupStore;
+}
+
+function getSocialManager() {
+  if (!socialBrowserManager) {
+    socialBrowserManager = createSocialBrowserManager({ BrowserWindow, session, app });
+  }
+  return socialBrowserManager;
+}
+
+function getSocialAdapter(platform, profileId) {
+  const key = `${platform}:${profileId}`;
+  let adapter = socialBrowserAdapters.get(key);
+  if (!adapter) {
+    adapter = createBrowserPlatformAdapters({ manager: getSocialManager() })[platform];
+    adapter.attachSession(key);
+    socialBrowserAdapters.set(key, adapter);
+  }
+  return adapter;
+}
+
+function getSocialAttachmentStore() {
+  if (!socialAttachmentStore) socialAttachmentStore = createSocialAttachmentStore({ userDataPath: app.getPath('userData') });
+  return socialAttachmentStore;
+}
+
+function validateSocialPlatform(platform) {
+  if (typeof platform !== 'string' || !SOCIAL_PLATFORMS.has(platform)) {
+    throw Object.assign(new TypeError(), { code: 'UNSUPPORTED_PLATFORM' });
+  }
+}
+
+function validateSocialProfileId(profileId) {
+  if (typeof profileId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(profileId)) {
+    throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  }
+}
+
+function validateSocialResultPayload(platform, payload) {
+  validateSocialPayload(payload, ['profileId', 'resultId', 'url']);
+  validateSocialProfileId(payload.profileId);
+  if (typeof payload.resultId !== 'string' || !payload.resultId.trim() || payload.resultId.length > 512
+    || typeof payload.url !== 'string' || !payload.url || payload.url.trim() !== payload.url || payload.url.length > 2048) {
+    throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  }
+
+  let resultUrl;
+  try { resultUrl = new URL(payload.url); }
+  catch { throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' }); }
+
+  const hostname = resultUrl.hostname.toLowerCase();
+  if (!['http:', 'https:'].includes(resultUrl.protocol) || resultUrl.username || resultUrl.password
+    || !SOCIAL_RESULT_DOMAINS[platform].has(hostname)) {
+    throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  }
+}
+
+function validateSocialPayload(payload, allowedKeys) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || Object.keys(payload).some(key => !allowedKeys.includes(key))) {
+    throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  }
+}
+
+function socialError(error) {
+  const code = ['UNSUPPORTED_PLATFORM', 'INVALID_REQUEST', 'NOT_CONFIGURED', 'UNSUPPORTED_CAPABILITY', 'SESSION_NOT_FOUND', 'SESSION_CLOSED', 'NAVIGATION_TIMEOUT', 'UNSUPPORTED_PAGE', 'PAGE_READ_FAILED', 'NAVIGATION_FAILED', 'AUTH_FAILED', 'RATE_LIMITED', 'UPSTREAM_ERROR', 'TIMEOUT', 'INVALID_RESPONSE', 'EMPTY_RESULTS', 'REQUEST_FAILED', 'ATTACHMENT_ERROR'].includes(error?.code)
+    ? error.code : 'REQUEST_FAILED';
+  const messages = {
+    UNSUPPORTED_PLATFORM: '不支持该平台。', INVALID_REQUEST: '请求参数无效。', NOT_CONFIGURED: '该平台 API 尚未安全配置。',
+    UNSUPPORTED_CAPABILITY: '该平台暂不支持此 API 能力。', SESSION_NOT_FOUND: '尚未打开该平台浏览器。',
+    SESSION_CLOSED: '平台浏览器已关闭。', NAVIGATION_TIMEOUT: '平台页面加载超时。', UNSUPPORTED_PAGE: '平台页面结构暂不支持。',
+    PAGE_READ_FAILED: '无法读取平台页面。', NAVIGATION_FAILED: '平台页面导航失败。', AUTH_FAILED: '平台 API 凭证无效或已过期。',
+    RATE_LIMITED: '平台 API 暂时限流。', UPSTREAM_ERROR: '平台 API 暂时不可用。', TIMEOUT: '平台 API 请求超时。',
+    INVALID_RESPONSE: '平台 API 返回了无法识别的数据。', EMPTY_RESULTS: '平台 API 未返回可用结果。',
+    ATTACHMENT_ERROR: '附件操作失败。', REQUEST_FAILED: '社媒请求失败。'
+  };
+  return { status: 'error', code, message: messages[code] };
+}
+
+function attachSocialProfile(platform, profileId) {
+  socialProfiles.set(`${platform}:${profileId}`, { platform, profileId });
+  getSocialAdapter(platform, profileId);
+}
+
+async function browserSocialSearch(platform, profileId, payload) {
+  validateSocialProfileId(profileId);
+  return getSocialAdapter(platform, profileId).search(payload.query, { maxResults: payload.maxResults });
+}
+
+async function runSocialSearch(platform, payload) {
+  validateSocialPlatform(platform);
+  validateSocialPayload(payload, ['query', 'profileId', 'mode', 'maxResults']);
+  const query = typeof payload.query === 'string' ? payload.query.trim() : '';
+  if (!query || query.length > 500) throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  const mode = payload.mode || 'auto';
+  if (!SOCIAL_MODES.has(mode)) throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  const maxResults = payload.maxResults == null ? 5 : payload.maxResults;
+  if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 100) throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  validateSocialProfileId(payload.profileId);
+  const normalized = { query, profileId: payload.profileId, maxResults };
+
+  if (mode !== 'browser' && platform !== 'xiaohongshu') {
+    const settings = getSettingsStore();
+    const config = typeof settings.getSocialApiConfig === 'function' ? settings.getSocialApiConfig(platform) : null;
+    const client = createSocialApiClient({ platform, config: config || {} });
+    if (client.configured) {
+      const apiResult = await client.search(query, { maxResults });
+      if (Array.isArray(apiResult) && (mode === 'api' || apiResult.length >= maxResults)) {
+        return { status: 'ok', platform, retrievalMethod: 'api', results: apiResult };
+      }
+      if (!Array.isArray(apiResult) && mode === 'api') return socialError(apiResult);
+    } else if (mode === 'api') {
+      return socialError(Object.assign(new Error(), { code: 'NOT_CONFIGURED' }));
+    }
+  } else if (mode === 'api') {
+    return socialError(Object.assign(new Error(), { code: 'UNSUPPORTED_CAPABILITY' }));
+  }
+  return browserSocialSearch(platform, payload.profileId, normalized);
+}
+
+function registerSocialHandlers() {
+  ipcMain.handle('social:list-platforms', async () => listSocialPlatformDefinitions());
+  ipcMain.handle('social:get-status', async (_event, platform) => {
+    try {
+      validateSocialPlatform(platform);
+      const profiles = [...socialProfiles.values()].filter(item => item.platform === platform).map(item => ({
+        profileId: item.profileId,
+        ...getSocialManager().getSessionStatus(`${platform}:${item.profileId}`)
+      }));
+      return { status: 'ok', platform, apiConfigured: false, profiles };
+    } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('social:open-login', async (_event, platform, profileId) => {
+    try {
+      validateSocialPlatform(platform); validateSocialProfileId(profileId);
+      const manager = getSocialManager();
+      const opened = await manager.openPlatformSession({ platform, profileId, startUrl: SOCIAL_START_URLS[platform] });
+      attachSocialProfile(platform, profileId);
+      return { status: 'ok', ...opened };
+    } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('social:check', async (_event, platform, profileId) => {
+    try {
+      validateSocialPlatform(platform); validateSocialProfileId(profileId);
+      if (!socialProfiles.has(`${platform}:${profileId}`)) return { status: 'not-ready', platform, profileId };
+      return await getSocialAdapter(platform, profileId).checkReady();
+    } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('social:search', async (_event, platform, payload) => {
+    try { return await runSocialSearch(platform, payload); } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('social:fetch-detail', async (_event, platform, payload) => {
+    try {
+      validateSocialPlatform(platform); validateSocialResultPayload(platform, payload);
+      return await getSocialAdapter(platform, payload.profileId).fetchDetail(payload);
+    } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('social:capture-evidence', async (_event, platform, payload) => {
+    try {
+      validateSocialPlatform(platform); validateSocialResultPayload(platform, payload);
+      return await getSocialAdapter(platform, payload.profileId).captureEvidence(payload, {});
+    } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('social:close', async (_event, platform, profileId) => {
+    try {
+      validateSocialPlatform(platform); validateSocialProfileId(profileId);
+      return { status: 'ok', ...(await getSocialManager().closeSession(`${platform}:${profileId}`)) };
+    } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('social:clear-profile', async (_event, platform, profileId) => {
+    try {
+      validateSocialPlatform(platform); validateSocialProfileId(profileId);
+      const result = await getSocialManager().clearPlatformProfile(platform, profileId);
+      socialProfiles.delete(`${platform}:${profileId}`);
+      socialBrowserAdapters.delete(`${platform}:${profileId}`);
+      return { status: 'ok', ...result };
+    } catch (error) { return socialError(error); }
+  });
+  ipcMain.handle('research:save-attachment', async (_event, payload) => {
+    try { return { status: 'ok', attachment: getSocialAttachmentStore().save(payload) }; }
+    catch { return socialError(Object.assign(new Error(), { code: 'ATTACHMENT_ERROR' })); }
+  });
+  ipcMain.handle('research:read-attachment', async (_event, id) => {
+    try { return { status: 'ok', content: getSocialAttachmentStore().read(id).toString('base64') }; }
+    catch { return socialError(Object.assign(new Error(), { code: 'ATTACHMENT_ERROR' })); }
+  });
+  ipcMain.handle('research:delete-attachment', async (_event, id) => {
+    try { return { status: 'ok', ...getSocialAttachmentStore().delete(id) }; }
+    catch { return socialError(Object.assign(new Error(), { code: 'ATTACHMENT_ERROR' })); }
+  });
 }
 
 function showFileDialog(method, options) {
@@ -237,6 +446,8 @@ ipcMain.handle('backup:import', async () => {
 ipcMain.handle('backup:list', async () => getBackupStore().listBackups());
 
 ipcMain.handle('backup:read', async (_event, filename) => getBackupStore().readBackup(filename));
+
+registerSocialHandlers();
 
 app.whenReady().then(() => createWindow()).catch(reportStartupError);
 

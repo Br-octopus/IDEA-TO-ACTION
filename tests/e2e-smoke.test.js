@@ -312,3 +312,64 @@ test('浏览器导入入口先确认安全备份，再打开文件选择并导�
   assert.ok(app.includes('browserImportGate = null;'), '令牌必须在 change 前后清理，防止重复导入');
   assert.ok(app.indexOf('consumeBrowserImportGate(importGate);') < app.indexOf('await importBackupContent(await file.text(), importGate);'), '未通过令牌检查不能调用导入');
 });
+
+test('社媒研究入口加载 UI 并贯通计划、平台准备、结果和报告区域', () => {
+  const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
+  const ui = fs.readFileSync(path.join(root, 'prototype', 'social-research-ui.js'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
+  for (const id of [
+    'view-social-research', 'social-research-entry', 'social-research-plan-confirm',
+    'social-platform-preparation', 'social-research-status', 'social-research-results',
+    'social-research-save-selection', 'social-research-report'
+  ]) assert.ok(html.includes(`id="${id}"`), `研究工作台缺少 ${id}`);
+  assert.ok(html.indexOf('src="/prototype/social-research-ui.js"') < html.indexOf('src="/prototype/app.js"'));
+  assert.match(app, /createSocialResearchCoordinator\(/);
+  assert.match(app, /ForwardStepSocialResearchUI\.createSocialResearchUI\(/);
+  assert.match(ui, /data-report-result/);
+  assert.match(ui, /data-save-result/);
+});
+
+test('社媒研究工作区备份可恢复摘要报告和附件元数据且不带凭证', () => {
+  const { createBackup, replaceState } = require('../prototype/workspace-backup.js');
+  const state = {
+    researchTasks: [{
+      id: 'smoke-research-task',
+      topic: '用户对产品的反馈',
+      results: [{ id: 'smoke-result', summary: '用户普遍反馈上手困难。', url: 'https://example.test/post' }],
+      report: { coreFindings: ['上手成本是主要问题。'], resultIds: ['smoke-result'] },
+      apiKey: 'task-secret'
+    }],
+    platformConnections: {
+      reddit: {
+        platform: 'reddit', status: 'ready', profilePath: 'C:/private/profile',
+        storagePath: 'C:/private/storage', profileDirectory: 'C:/private/profile-directory',
+        cookies: ['cookie-secret'], sessionToken: 'session-secret', apiKey: 'api-secret', password: 'password-secret'
+      }
+    },
+    researchAttachments: [{
+      id: 'smoke-attachment', type: 'document', size: 128, sourceResultId: 'smoke-result',
+      relativePath: 'research/smoke.pdf', savedAt: '2026-10-19T08:00:00.000Z', password: 'attachment-secret'
+    }]
+  };
+
+  const backup = createBackup(state, { scope: 'workspace', now: '2026-10-19T08:00:00.000Z' });
+  const restored = replaceState({}, JSON.parse(JSON.stringify(backup)));
+  const serialized = JSON.stringify(backup);
+
+  assert.equal(restored.researchTasks[0].results[0].summary, '用户普遍反馈上手困难。');
+  assert.deepEqual(restored.researchTasks[0].report.coreFindings, ['上手成本是主要问题。']);
+  assert.deepEqual(restored.researchTasks[0].report.resultIds, ['smoke-result']);
+  assert.deepEqual(restored.researchAttachments[0], {
+    id: 'smoke-attachment', type: 'document', size: 128, sourceResultId: 'smoke-result',
+    relativePath: 'research/smoke.pdf', savedAt: '2026-10-19T08:00:00.000Z'
+  });
+  assert.equal(restored.platformConnections.reddit.status, 'needs-recheck');
+  const connectionMetadata = restored.platformConnections.reddit;
+  for (const pathField of ['profilePath', 'storagePath', 'profileDirectory']) {
+    assert.equal(Object.hasOwn(connectionMetadata, pathField), false, `连接备份不应包含 ${pathField}`);
+    assert.equal(serialized.includes(pathField), false, `序列化备份不应包含 ${pathField}`);
+  }
+  for (const secret of ['task-secret', 'C:/private/profile', 'C:/private/storage', 'C:/private/profile-directory', 'cookie-secret', 'session-secret', 'api-secret', 'password-secret', 'attachment-secret']) {
+    assert.equal(serialized.includes(secret), false, `备份不应包含 ${secret}`);
+  }
+});

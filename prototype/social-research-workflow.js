@@ -1,551 +1,326 @@
 (function (root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
+  const schema = typeof module === 'object' && module.exports
+    ? require('./social-research-schema.js')
+    : root.ForwardStepSocialResearchSchema;
+  const api = factory(schema);
+  if (typeof module === 'object' && module.exports) module.exports = api;
   else root.ForwardStepSocialResearchWorkflow = api;
-})(typeof globalThis === "undefined" ? this : globalThis, function () {
-  const DEFAULT_BUDGET = Object.freeze({
-    maxPlatforms: 3,
-    maxQueriesPerPlatform: 5,
-    maxPages: 3,
-    maxDetails: 20,
-    maxDurationMs: 300000,
-    maxAttachmentBytes: 25 * 1024 * 1024,
-    maxAnalysisTokens: 10000
+})(typeof globalThis === 'undefined' ? this : globalThis, function (schema) {
+  const EMPTY_USAGE = () => ({
+    platforms: 0,
+    usedPlatforms: [],
+    queriesByPlatform: {},
+    pages: 0,
+    details: 0,
+    durationMs: 0,
+    attachmentBytes: 0,
+    analysisTokens: 0
   });
-  const ALLOWED_STATUSES = new Set([
-    "awaiting_confirmation", "preparing_platforms", "searching", "paused",
-    "awaiting_supplementary_confirmation", "partial_failure", "report_ready",
-    "awaiting_save", "saved", "cancelled", "budget_exceeded"
-  ]);
-  const TERMINAL_STATUSES = new Set(["cancelled", "saved"]);
 
-  function isObject(value) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  }
-
-  function text(value) {
-    return String(value ?? "").trim();
-  }
-
-  function list(value) {
-    const values = Array.isArray(value)
-      ? value
-      : typeof value === "string" ? value.split(/[\r\n,，]/) : [];
-    return [...new Set(values.map(item => text(item)).filter(Boolean))];
-  }
-
-  function positiveInteger(value, fallback) {
-    const number = Number(value);
-    return Number.isInteger(number) && number > 0 ? number : fallback;
-  }
-
-  function nonNegativeNumber(value, fallback = 0) {
-    const number = Number(value);
-    return Number.isFinite(number) && number >= 0 ? number : fallback;
-  }
-
-  function nowIso() {
-    return new Date().toISOString();
-  }
-
-  function makeId(value) {
-    if (text(value)) return text(value);
-    try {
-      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        return `research-task-${crypto.randomUUID()}`;
-      }
-    } catch {
-      // 随机源不可用时仍保证任务具有稳定格式的本地 id。
-    }
-    return `research-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  }
-
-  function normalizeBudget(input) {
-    const source = isObject(input) ? input : {};
-    return {
-      maxPlatforms: positiveInteger(source.maxPlatforms, DEFAULT_BUDGET.maxPlatforms),
-      maxQueriesPerPlatform: positiveInteger(source.maxQueriesPerPlatform, DEFAULT_BUDGET.maxQueriesPerPlatform),
-      maxPages: positiveInteger(source.maxPages, DEFAULT_BUDGET.maxPages),
-      maxDetails: positiveInteger(source.maxDetails, DEFAULT_BUDGET.maxDetails),
-      maxDurationMs: positiveInteger(source.maxDurationMs ?? source.maxTimeMs, DEFAULT_BUDGET.maxDurationMs),
-      maxAttachmentBytes: positiveInteger(source.maxAttachmentBytes, DEFAULT_BUDGET.maxAttachmentBytes),
-      maxAnalysisTokens: positiveInteger(source.maxAnalysisTokens, DEFAULT_BUDGET.maxAnalysisTokens)
-    };
-  }
-
-  function normalizeTemplate(value) {
-    const normalized = text(value).toLowerCase().replace(/_/g, "-");
-    if (normalized === "trend") return "trends";
-    if (normalized === "pain-point") return "pain-points";
-    if (["competitors", "content-competitor", "content-competitors"].includes(normalized)) {
-      return "content-competitors";
-    }
-    if (normalized === "factcheck" || normalized === "fact-checking") return "fact-check";
-    return normalized || "pain-points";
-  }
-
-  function normalizePlatform(value) {
-    return text(value).toLowerCase();
-  }
-
-  function normalizePlatforms(value) {
-    return list(value).map(normalizePlatform).filter(Boolean);
-  }
-
-  function normalizeTimeRange(value) {
-    const source = isObject(value) ? value : {};
-    return {
-      from: text(source.from ?? source.start),
-      to: text(source.to ?? source.end),
-      timezone: text(source.timezone)
-    };
-  }
-
-  function normalizeQueriesByPlatform(value) {
-    if (!isObject(value)) return {};
-    return Object.entries(value).reduce((result, [platform, queries]) => {
-      const count = Array.isArray(queries) ? queries.length : nonNegativeNumber(queries);
-      if (count > 0) result[normalizePlatform(platform)] = count;
-      return result;
-    }, {});
-  }
-
-  function emptyBudgetUsage() {
-    return {
-      platforms: 0,
-      queriesByPlatform: {},
-      pages: 0,
-      details: 0,
-      durationMs: 0,
-      attachmentBytes: 0,
-      analysisTokens: 0
-    };
-  }
-
-  function normalizeBudgetUsage(value) {
-    const source = isObject(value) ? value : {};
-    return {
-      platforms: nonNegativeNumber(source.platforms),
-      queriesByPlatform: normalizeQueriesByPlatform(source.queriesByPlatform || source.queries),
-      pages: nonNegativeNumber(source.pages),
-      details: nonNegativeNumber(source.details),
-      durationMs: nonNegativeNumber(source.durationMs),
-      attachmentBytes: nonNegativeNumber(source.attachmentBytes),
-      analysisTokens: nonNegativeNumber(source.analysisTokens)
-    };
-  }
-
-  function normalizeCapabilities(capabilities) {
-    if (!isObject(capabilities)) return {};
-    const entries = Array.isArray(capabilities)
-      ? capabilities.map(item => [item?.platform, item])
-      : Object.entries(capabilities);
-    return entries.reduce((result, [platform, capability]) => {
-      const key = normalizePlatform(platform || capability?.platform);
-      if (!key || !isObject(capability)) return result;
-      result[key] = {
-        platform: key,
-        apiAvailable: capability.apiAvailable === true || capability.supportsApi === true,
-        apiConfigured: capability.apiConfigured === false
-          ? false
-          : capability.apiConfigured === true ? true : undefined,
-        browserAvailable: capability.browserAvailable !== false,
-        supportsSearch: capability.supportsSearch !== false,
-        minimumResults: positiveInteger(capability.minimumResults ?? capability.minResults, 0),
-        requiredFields: list(capability.requiredFields || capability.fields)
-      };
-      return result;
-    }, {});
-  }
-
-  function getPlanPlatforms(source) {
-    return normalizePlatforms(source.platforms || source.plan?.platforms);
-  }
-
-  function getRequestedQueries(source) {
-    return normalizeQueriesByPlatform(source.queriesByPlatform || source.queryBudget || source.queries);
-  }
-
-  function inspectPlanBudget(platforms, queriesByPlatform, budget) {
-    const exceeded = [];
-    if (platforms.length > budget.maxPlatforms) exceeded.push("platforms");
-    for (const [platform, count] of Object.entries(queriesByPlatform)) {
-      if (count > budget.maxQueriesPerPlatform) exceeded.push(`queries:${platform}`);
-    }
-    return exceeded;
-  }
-
-  function createResearchPlan(input = {}, capabilities = {}) {
-    const source = isObject(input) ? input : {};
-    const budget = normalizeBudget(source.budget);
-    const platforms = getPlanPlatforms(source);
-    const queriesByPlatform = getRequestedQueries(source);
-    const createdAt = nowIso();
-    const budgetExceeded = inspectPlanBudget(platforms, queriesByPlatform, budget);
-    const task = {
-      id: makeId(source.id),
-      topic: text(source.topic || source.objective || source.goal),
-      template: normalizeTemplate(source.template || source.researchType),
-      platforms,
-      queries: list(source.queries),
-      queriesByPlatform,
-      timeRange: normalizeTimeRange(source.timeRange),
-      region: text(source.region),
-      audience: text(source.audience),
-      budget,
-      budgetUsage: emptyBudgetUsage(),
-      approved: false,
-      status: budgetExceeded.length ? "budget_exceeded" : "awaiting_confirmation",
-      budgetCode: budgetExceeded.length ? "budget_exceeded" : "ok",
-      budgetExceeded,
-      capabilities: normalizeCapabilities(capabilities),
-      connectionModes: {},
-      results: [],
-      resultIds: [],
-      incompletePlatforms: platforms.slice(),
-      createdAt,
-      updatedAt: createdAt
-    };
-    return task;
-  }
-
-  function cloneTask(task) {
-    if (!isObject(task)) throw new TypeError("研究任务必须是对象");
-    return {
-      ...task,
-      platforms: normalizePlatforms(task.platforms),
-      queries: list(task.queries),
-      queriesByPlatform: normalizeQueriesByPlatform(task.queriesByPlatform),
-      budget: normalizeBudget(task.budget),
-      budgetUsage: normalizeBudgetUsage(task.budgetUsage || task.usage),
-      connectionModes: isObject(task.connectionModes) ? { ...task.connectionModes } : {},
-      results: Array.isArray(task.results) ? task.results.slice() : [],
-      resultIds: list(task.resultIds),
-      incompletePlatforms: normalizePlatforms(task.incompletePlatforms),
-      capabilities: normalizeCapabilities(task.capabilities)
-    };
-  }
-
-  function workflowError(code, message) {
-    const error = new Error(message);
-    error.code = code;
+  function budgetError(message) {
+    const error = new RangeError(`budget_exceeded: ${message}`);
+    error.code = 'budget_exceeded';
     return error;
   }
 
-  function assertNotCancelled(task) {
-    if (task.status === "cancelled") throw workflowError("TASK_CANCELLED", "研究任务已取消，不能继续推进");
-    if (task.status === "saved") throw workflowError("TASK_COMPLETED", "研究任务已保存，不能继续推进");
+  function assertActive(task) {
+    if (!task || task.status === 'cancelled' || task.status === 'saved' || task.status === 'partial-failure' || task.status === 'failed') {
+      throw new Error('任务已取消或终止，不能继续推进');
+    }
   }
 
   function assertApproved(task) {
-    assertNotCancelled(task);
-    if (task.approved !== true) {
-      throw workflowError("PLAN_NOT_CONFIRMED", "研究计划尚未确认，确认后才能开始搜索");
+    assertActive(task);
+    if (task.status === 'awaiting-plan-confirmation' || task.status === 'draft') {
+      throw new Error('研究计划尚未确认');
     }
+  }
+
+  function normalizePlatformList(values) {
+    return [...new Set(values.map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
+  }
+
+  function assertAtLeastOnePlatformReady(task, readyPlatforms) {
+    const planned = normalizePlatformList(task.platforms || []);
+    const ready = normalizePlatformList(readyPlatforms || []);
+    assertPreparedPlatformsBelongToPlan(planned, ready);
+    if (!ready.length) throw new Error('至少需要一个已准备的平台');
+    return ready;
+  }
+
+  function assertPreparedPlatformsBelongToPlan(plannedPlatforms, readyPlatforms) {
+    if (readyPlatforms.some(platform => !plannedPlatforms.includes(platform))) {
+      throw new Error('准备的平台不在已批准计划中');
+    }
+  }
+
+  function createResearchPlan(input = {}, capabilities = []) {
+    const source = input && typeof input === 'object' ? input : {};
+    const platforms = [...new Set((Array.isArray(source.platforms) ? source.platforms : [])
+      .map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
+    const queries = [...new Set((Array.isArray(source.queries) ? source.queries : [source.topic])
+      .map(value => String(value || '').trim()).filter(Boolean))];
+    const normalizedBudget = schema.normalizeResearchPlan({ budget: source.budget }).budget;
+    if (platforms.length > normalizedBudget.maxPlatforms) throw budgetError('平台数超出预算');
+    if (queries.length > normalizedBudget.maxQueriesPerPlatform) throw budgetError('每平台查询数超出预算');
+    const base = schema.createResearchTask({
+      id: source.id,
+      topic: source.topic,
+      template: source.template,
+      platforms,
+      queries,
+      connectionModes: source.connectionModes,
+      budget: source.budget,
+      status: 'awaiting-plan-confirmation',
+      plan: {
+        objective: source.topic,
+        researchType: source.template,
+        platformRoles: platforms.map(platform => ({ platform, role: '收集相关讨论与体验证据', queries })),
+        queries,
+        timeRange: source.timeRange,
+        region: source.region,
+        audience: source.audience,
+        filters: source.filters,
+        expectedResultCount: source.expectedResultCount,
+        evidenceRequirements: source.evidenceRequirements || ['保留原始结果链接', '区分事实、观点与推断'],
+        budget: source.budget,
+        stopConditions: source.stopConditions || ['达到任一预算上限', '用户取消任务']
+      }
+    });
+    const normalizedCapabilities = Array.isArray(capabilities)
+      ? capabilities.map(item => schema.normalizePlatformCapability(item))
+      : Object.entries(capabilities || {}).map(([platform, value]) => schema.normalizePlatformCapability({ ...value, platform }));
+    return {
+      ...base,
+      capabilities: normalizedCapabilities,
+      usage: EMPTY_USAGE()
+    };
   }
 
   function approveResearchPlan(task) {
-    const next = cloneTask(task);
-    assertNotCancelled(next);
-    if (next.status === "budget_exceeded" || next.budgetCode === "budget_exceeded") {
-      throw workflowError("BUDGET_EXCEEDED", "研究计划已超出预算，不能批准");
-    }
-    if (next.status !== "awaiting_confirmation") {
-      throw workflowError("INVALID_TRANSITION", "当前状态不能批准研究计划");
-    }
-    next.approved = true;
-    next.status = "preparing_platforms";
-    next.approvedAt = nowIso();
-    next.updatedAt = nowIso();
-    return next;
+    assertActive(task);
+    if (task.status !== 'awaiting-plan-confirmation') throw new Error('当前任务不在等待计划确认状态');
+    return { ...task, status: 'awaiting-platform-preparation' };
   }
 
-  function rejectResearchPlan(task, reason = "用户取消") {
-    const next = cloneTask(task);
-    assertNotCancelled(next);
-    if (TERMINAL_STATUSES.has(next.status)) {
-      throw workflowError("INVALID_TRANSITION", "当前状态不能取消");
-    }
-    next.status = "cancelled";
-    next.approved = false;
-    next.rejectionReason = text(reason) || "用户取消";
-    next.updatedAt = nowIso();
-    return next;
+  function rejectResearchPlan(task, reason = '') {
+    assertActive(task);
+    if (task.status !== 'awaiting-plan-confirmation') throw new Error('当前任务不在等待计划确认状态');
+    return { ...task, status: 'cancelled', rejectionReason: String(reason || '').trim() };
   }
 
-  function startResearchTask(task) {
-    const next = cloneTask(task);
-    assertApproved(next);
-    if (next.status === "awaiting_supplementary_confirmation") {
-      throw workflowError("SUPPLEMENTARY_CONFIRMATION_REQUIRED", "补搜尚未确认，不能直接开始搜索");
-    }
-    if (!["preparing_platforms", "paused"].includes(next.status)) {
-      throw workflowError("INVALID_TRANSITION", "当前状态不能开始搜索");
-    }
-    next.status = "searching";
-    next.updatedAt = nowIso();
-    return next;
-  }
-
-  function supplementaryRequestSource(request = {}) {
-    const source = isObject(request) ? request : {};
-    const nestedUsage = isObject(source.usage)
-      ? source.usage
-      : isObject(source.budgetImpact) ? source.budgetImpact : {};
-    const merged = { ...source, ...nestedUsage };
-    const requestedPlatforms = normalizePlatforms(merged.platforms || (merged.platform ? [merged.platform] : []));
-    if (Number(merged.queries) > 0 && !merged.platform && !merged.queriesByPlatform && requestedPlatforms.length === 1) {
-      merged.platform = requestedPlatforms[0];
-    }
-    return merged;
-  }
-
-  function validateSupplementaryRequest(task, request = {}) {
-    const source = supplementaryRequestSource(request);
-    const requestedPlatforms = normalizePlatforms(source.platforms || (source.platform ? [source.platform] : []));
-    const queryUsage = normalizeQueriesByPlatform(source.queriesByPlatform || source.queries);
-    const queryPlatforms = Object.keys(queryUsage).filter(platform => platform !== "__all__");
-    const allRequestedPlatforms = [...new Set([...requestedPlatforms, ...queryPlatforms])];
-    const timeRange = normalizeTimeRange(source.timeRange);
-    const currentTimeRange = normalizeTimeRange(task.timeRange);
-    const delta = usageToDelta(source);
-
-    if (!allRequestedPlatforms.length || allRequestedPlatforms.some(platform => !task.platforms.includes(platform))) {
-      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜平台必须来自已批准的平台" };
-    }
-    // 补搜只能复用主任务已批准的平台；平台预算只为新增平台保留，不能重复扣除。
-    delta.platforms = 0;
-    if ((timeRange.from || timeRange.to || timeRange.timezone)
-      && JSON.stringify(timeRange) !== JSON.stringify(currentTimeRange)) {
-      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜时间范围不能超出已批准范围" };
-    }
-    if (delta.queriesByPlatform.__all__ > 0) {
-      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜查询必须明确目标平台" };
-    }
-    const hasUsage = delta.platforms > 0
-      || Object.values(delta.queriesByPlatform).some(count => count > 0)
-      || delta.pages > 0
-      || delta.details > 0
-      || delta.durationMs > 0
-      || delta.attachmentBytes > 0
-      || delta.analysisTokens > 0;
-    if (!hasUsage) {
-      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜请求必须包含预算消耗" };
-    }
-    return { ok: true, source, delta };
-  }
-
-  function approveSupplementarySearch(task, request = {}) {
-    const current = cloneTask(task);
-    assertApproved(current);
-    if (current.status !== "awaiting_supplementary_confirmation") {
-      throw workflowError("INVALID_TRANSITION", "当前状态不能批准补搜");
-    }
-    const validation = validateSupplementaryRequest(current, request);
-    if (!validation.ok) throw workflowError(validation.code, validation.message);
-
-    const nextUsage = addUsage(current.budgetUsage, validation.delta);
-    const exceeded = findBudgetViolations(nextUsage, current.budget);
-    if (exceeded.length) return budgetResult(current, "budget_exceeded", nextUsage, exceeded);
-
-    const next = {
-      ...current,
-      budgetUsage: nextUsage,
-      supplementaryRequest: validation.source,
-      supplementaryApprovedAt: nowIso(),
-      status: "searching",
-      updatedAt: nowIso()
-    };
-    return budgetResult(next, "ok", nextUsage, []);
-  }
-
-  function transitionResearchTask(task, event) {
-    const next = cloneTask(task);
-    const eventName = text(isObject(event) ? event.type || event.event || event.name : event).toLowerCase();
-    assertNotCancelled(next);
-    if (eventName === "cancel" || eventName === "reject") return rejectResearchPlan(next, event.reason);
-    if (eventName === "approve" || eventName === "confirm_plan") return approveResearchPlan(next);
-    if (["start", "start_search", "search_started"].includes(eventName)) return startResearchTask(next);
-
-    if (eventName === "approve_supplementary") {
-      const request = isObject(event)
-        ? event.request || event.supplementaryRequest || next.supplementaryRequest
-        : next.supplementaryRequest;
-      return approveSupplementarySearch(next, request);
-    }
-
-    const transitions = {
-      pause: { from: ["searching"], to: "paused" },
-      resume: { from: ["paused"], to: "searching" },
-      platform_ready: { from: ["preparing_platforms"], to: "preparing_platforms" },
-      report_ready: { from: ["searching"], to: "report_ready" },
-      partial_failure: { from: ["searching"], to: "partial_failure" },
-      request_supplementary: { from: ["report_ready", "partial_failure"], to: "awaiting_supplementary_confirmation" },
-      save_requested: { from: ["report_ready", "partial_failure"], to: "awaiting_save" },
-      saved: { from: ["awaiting_save"], to: "saved" }
-    };
-    const transition = transitions[eventName];
-    if (!transition || !transition.from.includes(next.status)) {
-      throw workflowError("INVALID_TRANSITION", `不能从 ${next.status} 执行 ${eventName || "未知事件"}`);
-    }
-    next.status = transition.to;
-    if (eventName === "request_supplementary" && isObject(event)) {
-      const request = event.request || event.supplementaryRequest;
-      if (request) {
-        const validation = validateSupplementaryRequest(next, request);
-        if (!validation.ok) throw workflowError(validation.code, validation.message);
-        next.supplementaryRequest = validation.source;
+  function transitionResearchTask(task, event = {}) {
+    assertActive(task);
+    const type = typeof event === 'string' ? event : event.type;
+    const details = typeof event === 'object' && event ? event : {};
+    if (type === 'preparation_failed') {
+      if (task.status !== 'awaiting-platform-preparation') {
+        throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
       }
+      if ((task.preparedPlatforms || []).length) throw new Error('已有可用平台时不能标记准备失败');
+      return { ...task, status: 'failed' };
     }
-    next.updatedAt = nowIso();
-    return next;
-  }
-
-  function usageToDelta(usage = {}) {
-    const source = isObject(usage) ? usage : {};
-    const queriesByPlatform = normalizeQueriesByPlatform(
-      source.queriesByPlatform || (isObject(source.queries) ? source.queries : null)
-    );
-    if (!Object.keys(queriesByPlatform).length && Number(source.queries) > 0) {
-      const platform = normalizePlatform(source.platform) || "__all__";
-      queriesByPlatform[platform] = nonNegativeNumber(source.queries);
+    if (type === 'prepared') {
+      if (task.status !== 'awaiting-platform-preparation') {
+        throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+      }
+      const newlyReady = details.platforms || details.readyPlatforms || (details.platform ? [details.platform] : []);
+      if (!Array.isArray(newlyReady) || newlyReady.length === 0) throw new Error('prepared 事件必须提供已准备的平台');
+      const preparedPlatforms = normalizePlatformList([...(task.preparedPlatforms || []), ...newlyReady]);
+      assertPreparedPlatformsBelongToPlan(normalizePlatformList(task.platforms || []), preparedPlatforms);
+      return { ...task, preparedPlatforms };
     }
-    return {
-      platforms: Array.isArray(source.platforms) ? source.platforms.length : nonNegativeNumber(source.platforms),
-      queriesByPlatform,
-      pages: nonNegativeNumber(source.pages),
-      details: nonNegativeNumber(source.details),
-      durationMs: nonNegativeNumber(source.durationMs ?? source.timeMs),
-      attachmentBytes: nonNegativeNumber(source.attachmentBytes ?? source.attachmentsBytes),
-      analysisTokens: nonNegativeNumber(source.analysisTokens ?? source.tokens)
+    if (type === 'start') {
+      if (task.status !== 'awaiting-platform-preparation') {
+        throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+      }
+      assertApproved(task);
+      assertAtLeastOnePlatformReady(task, task.preparedPlatforms || []);
+      return { ...task, status: 'searching' };
+    }
+    if (type === 'cancel') {
+      const cancellableStatuses = new Set([
+        'awaiting-plan-confirmation', 'awaiting-platform-preparation', 'searching',
+        'report-ready', 'awaiting-refinement-confirmation', 'awaiting-save'
+      ]);
+      if (!cancellableStatuses.has(task.status)) throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+      return { ...task, status: 'cancelled' };
+    }
+    const transitions = {
+      finish: ['searching', 'report-ready'],
+      request_refinement: ['report-ready', 'awaiting-refinement-confirmation'],
+      confirm_refinement: ['awaiting-refinement-confirmation', 'searching'],
+      report_ready: ['searching', 'report-ready'],
+      request_save: ['report-ready', 'awaiting-save'],
+      save: ['awaiting-save', 'saved'],
+      partial_failure: ['searching', 'partial-failure']
     };
-  }
-
-  function addUsage(current, delta) {
-    const next = normalizeBudgetUsage(current);
-    next.platforms += delta.platforms;
-    for (const [platform, count] of Object.entries(delta.queriesByPlatform)) {
-      next.queriesByPlatform[platform] = (next.queriesByPlatform[platform] || 0) + count;
-    }
-    next.pages += delta.pages;
-    next.details += delta.details;
-    next.durationMs += delta.durationMs;
-    next.attachmentBytes += delta.attachmentBytes;
-    next.analysisTokens += delta.analysisTokens;
-    return next;
-  }
-
-  function findBudgetViolations(usage, budget) {
-    const exceeded = [];
-    if (usage.platforms > budget.maxPlatforms) exceeded.push("platforms");
-    for (const [platform, count] of Object.entries(usage.queriesByPlatform)) {
-      if (count > budget.maxQueriesPerPlatform) exceeded.push(`queries:${platform}`);
-    }
-    if (usage.pages > budget.maxPages) exceeded.push("pages");
-    if (usage.details > budget.maxDetails) exceeded.push("details");
-    if (usage.durationMs > budget.maxDurationMs) exceeded.push("durationMs");
-    if (usage.attachmentBytes > budget.maxAttachmentBytes) exceeded.push("attachmentBytes");
-    if (usage.analysisTokens > budget.maxAnalysisTokens) exceeded.push("analysisTokens");
-    return exceeded;
-  }
-
-  function budgetResult(task, code, usage, exceeded) {
-    const base = { ok: code === "ok", code, errorCode: code, task, usage };
-    if (code === "budget_exceeded") {
-      base.reason = "研究任务超过已批准预算";
-      base.exceeded = exceeded;
-    }
-    return Object.assign(base, task);
+    const transition = transitions[type];
+    if (!transition || task.status !== transition[0]) throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+    if (type === 'start' || type === 'confirm_refinement') assertApproved(task);
+    return { ...task, status: transition[1] };
   }
 
   function consumeResearchBudget(task, usage = {}) {
-    const current = cloneTask(task);
-    assertApproved(current);
-    const delta = usageToDelta(usage);
-    const nextUsage = addUsage(current.budgetUsage, delta);
-    const exceeded = findBudgetViolations(nextUsage, current.budget);
-    if (exceeded.length) return budgetResult(current, "budget_exceeded", nextUsage, exceeded);
-    const next = { ...current, budgetUsage: nextUsage, updatedAt: nowIso() };
-    return budgetResult(next, "ok", nextUsage, []);
+    assertApproved(task);
+    const budget = task.budget || {};
+    const current = task.usage || EMPTY_USAGE();
+    const integerMetrics = new Set(['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'attachmentBytes', 'analysisTokens']);
+    const metricFields = [...integerMetrics, 'durationMs'];
+    for (const field of metricFields) {
+      if (!Object.prototype.hasOwnProperty.call(usage, field)) continue;
+      const value = usage[field];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || (integerMetrics.has(field) && !Number.isInteger(value))) {
+        throw new TypeError(`${field} 必须是有限的非负${integerMetrics.has(field) ? '整数' : '数值'}`);
+      }
+    }
+    if (usage.queries !== undefined && usage.queriesPerPlatform !== undefined && usage.queries !== usage.queriesPerPlatform) {
+      throw new TypeError('queries 与 queriesPerPlatform 必须一致');
+    }
+    const queryMap = usage.queriesByPlatform ?? {};
+    if (!queryMap || typeof queryMap !== 'object' || Array.isArray(queryMap)) {
+      throw new TypeError('queriesByPlatform 必须是平台到查询数量的对象');
+    }
+    for (const [name, count] of Object.entries(queryMap)) {
+      if (!name.trim() || typeof count !== 'number' || !Number.isFinite(count) || count < 0 || !Number.isInteger(count)) {
+        throw new TypeError('queriesByPlatform 的平台和查询数量无效');
+      }
+    }
+    const platform = String(usage.platform || '').trim().toLowerCase();
+    const queryCount = usage.queries ?? usage.queriesPerPlatform ?? 0;
+    const queryMapEntries = Object.entries(queryMap).map(([name, count]) => [name.trim().toLowerCase(), count]);
+    if (queryCount > 0 && !platform) {
+      throw new TypeError('非零 queries 或 queriesPerPlatform 必须指定 platform；多平台查询请使用 queriesByPlatform');
+    }
+    if (usage.usedPlatforms !== undefined && !Array.isArray(usage.usedPlatforms)) {
+      throw new TypeError('usedPlatforms 必须是平台数组');
+    }
+    const usedPlatforms = normalizePlatformList([
+      ...(current.usedPlatforms || Object.keys(current.queriesByPlatform || {})),
+      ...(usage.usedPlatforms || []),
+      ...(platform ? [platform] : []),
+      ...queryMapEntries.map(([name]) => name)
+    ]);
+    const nextUsage = {
+      platforms: Math.max(Number(current.platforms || 0), usage.platforms || 0, usedPlatforms.length),
+      usedPlatforms,
+      queriesByPlatform: { ...(current.queriesByPlatform || {}) },
+      pages: Number(current.pages || 0) + Number(usage.pages || 0),
+      details: Number(current.details || 0) + Number(usage.details || 0),
+      durationMs: Number(current.durationMs || 0) + Number(usage.durationMs || 0),
+      attachmentBytes: Number(current.attachmentBytes || 0) + Number(usage.attachmentBytes || 0),
+      analysisTokens: Number(current.analysisTokens || 0) + Number(usage.analysisTokens || 0)
+    };
+    if (platform && queryCount) nextUsage.queriesByPlatform[platform] = Number(nextUsage.queriesByPlatform[platform] || 0) + queryCount;
+    for (const [name, count] of queryMapEntries) {
+      if (count) nextUsage.queriesByPlatform[name] = Number(nextUsage.queriesByPlatform[name] || 0) + count;
+    }
+    const checks = [
+      [nextUsage.platforms, budget.maxPlatforms, '平台数'],
+      [nextUsage.pages, budget.maxPages, '翻页数'],
+      [nextUsage.details, budget.maxDetails, '详情数'],
+      [nextUsage.durationMs, budget.maxDurationMs, '执行时间'],
+      [nextUsage.attachmentBytes, budget.maxAttachmentBytes, '附件大小'],
+      [nextUsage.analysisTokens, budget.maxAnalysisTokens, '模型分析 token 数']
+    ];
+    for (const [actual, limit, label] of checks) {
+      if (Number.isFinite(Number(actual)) && Number(actual) > Number(limit)) throw budgetError(`${label}超出预算`);
+    }
+    for (const [name, count] of Object.entries(nextUsage.queriesByPlatform)) {
+      if (count > Number(budget.maxQueriesPerPlatform)) throw budgetError(`平台 ${name} 的查询数超出预算`);
+    }
+    return { ...task, usage: nextUsage };
   }
 
-  function decideConnectionMode(platform, connection = {}, preference) {
-    const capability = isObject(platform) ? { ...platform, ...connection } : connection;
-    const apiAvailable = capability.apiAvailable === true
-      || capability.supportsApi === true
-      || capability.api?.available === true
-      || capability.status === "api-available";
-    const requested = text(preference || capability.connectionMode || "auto").toLowerCase();
-    if (requested === "browser") return "browser";
-    const apiConfigured = capability.apiConfigured !== false
-      && capability.api?.configured !== false
-      && capability.configured !== false;
-    const apiReady = apiAvailable && apiConfigured;
-    if (requested === "api") return apiReady ? "api" : "api_unavailable";
-    if (!apiReady) return "browser";
-    const failure = text(capability.lastErrorCategory || capability.errorCategory).toLowerCase();
-    if (["auth_failed", "authentication_failed", "timeout", "rate_limited"].includes(failure)) return "browser";
-    return "api";
+  function decideConnectionMode(platform, connection = {}, preference = 'auto') {
+    const choice = ['api', 'browser', 'auto'].includes(preference) ? preference : 'auto';
+    if (choice === 'browser') return 'browser';
+    const unavailableStatuses = new Set(['not-ready', 'needs-recheck', 'checking', 'failed', 'expired', 'restricted']);
+    const apiAvailable = connection.apiAvailable === true && !unavailableStatuses.has(connection.status);
+    if (choice === 'api') {
+      if (!apiAvailable) {
+        const error = new Error(`API unavailable: ${platform} 的 API 不可用或尚未准备`);
+        error.code = 'api_unavailable';
+        throw error;
+      }
+      return 'api';
+    }
+    return apiAvailable ? 'api' : 'browser';
   }
 
-  function resultItems(apiResult) {
-    if (Array.isArray(apiResult?.results)) return apiResult.results;
-    if (Array.isArray(apiResult?.items)) return apiResult.items;
-    if (Array.isArray(apiResult?.data)) return apiResult.data;
-    if (Array.isArray(apiResult?.data?.results)) return apiResult.data.results;
-    return null;
-  }
-
-  function shouldFallbackToBrowser(apiResult = {}, capability = {}, preference) {
-    if (text(preference).toLowerCase() === "api" || text(preference).toLowerCase() === "browser") return false;
-    const source = isObject(apiResult) ? apiResult : {};
-    const status = Number(source.status || source.statusCode);
-    const code = text(source.code || source.errorCode || source.errorCategory || source.status).toLowerCase();
-    if (status === 401 || status === 403 || status === 408 || status === 429 || status === 504) return true;
-    if (["auth_failed", "authentication_failed", "timeout", "rate_limited", "api_auth_failed", "api_timeout", "api_rate_limited"].some(item => code.includes(item))) return true;
-    if (source.ok === false || source.success === false) return true;
-    const items = resultItems(source);
-    if (items && items.length === 0) return true;
-    if (!items && (source.resultCount === 0 || source.count === 0)) return true;
-    const minimumResults = positiveInteger(capability.minimumResults ?? capability.minResults, 0);
-    if (items && minimumResults > 0 && items.length < minimumResults) return true;
-    const requiredFields = list(capability.requiredFields || capability.fields || ["title", "url"]);
-    if (items && requiredFields.length && items.some(item => requiredFields.some(field => !text(item?.[field])))) return true;
-    return false;
+  function shouldFallbackToBrowser(apiResult = {}, capability = {}) {
+    if (capability.preference && capability.preference !== 'auto') return false;
+    if (apiResult.ok === false || apiResult.error) return true;
+    const results = Array.isArray(apiResult) ? apiResult : Array.isArray(apiResult.results) ? apiResult.results : [];
+    if (!results.length) return true;
+    const minimum = Number(capability.minimumResults ?? capability.minResults ?? 1);
+    if (results.length < minimum) return true;
+    const fields = capability.requiredFields || capability.requiredResultFields || [];
+    return results.some(result => fields.some(field => result[field] === undefined || result[field] === null || result[field] === ''));
   }
 
   function canRequestSupplementarySearch(task, request = {}) {
     try {
-      const current = cloneTask(task);
-      assertApproved(current);
-      const hasConsumedBudget = current.budgetUsage.platforms > 0
-        || Object.values(current.budgetUsage.queriesByPlatform).some(count => count > 0)
-        || current.budgetUsage.pages > 0
-        || current.budgetUsage.details > 0;
-      const canSupplement = ["searching", "paused", "partial_failure", "report_ready", "awaiting_supplementary_confirmation"].includes(current.status)
-        || (current.status === "preparing_platforms" && hasConsumedBudget);
-      if (!canSupplement) return false;
-      const validation = validateSupplementaryRequest(current, request);
-      if (!validation.ok) return false;
-      const nextUsage = addUsage(current.budgetUsage, validation.delta);
-      return findBudgetViolations(nextUsage, current.budget).length === 0;
-    } catch {
-      return false;
+      assertActive(task);
+      if (task.status !== 'searching') return { allowed: false, reason: '补搜仅允许在 searching 状态申请' };
+      const hasPlatformArray = Object.prototype.hasOwnProperty.call(request, 'platforms');
+      if (hasPlatformArray && !Array.isArray(request.platforms)) throw new TypeError('platforms 必须是平台数组');
+      const requestedPlatforms = normalizePlatformList(hasPlatformArray
+        ? request.platforms
+        : request.platform ? [request.platform] : Object.keys(request.queriesByPlatform || {}));
+      const approvedPlatforms = new Set(normalizePlatformList(task.platforms || []));
+      if (requestedPlatforms.some(platform => !approvedPlatforms.has(platform))) {
+        return { allowed: false, reason: '补搜不能增加未批准的平台' };
+      }
+      if (request.platform && (requestedPlatforms.length !== 1 || String(request.platform).trim().toLowerCase() !== requestedPlatforms[0])) {
+        throw new TypeError('platform 必须与单平台请求一致');
+      }
+      const queryMap = request.queriesByPlatform;
+      if (queryMap !== undefined && (!queryMap || typeof queryMap !== 'object' || Array.isArray(queryMap))) {
+        throw new TypeError('queriesByPlatform 必须是平台到查询数量的对象');
+      }
+      const normalizedQueryMap = queryMap && Object.entries(queryMap).reduce((result, [name, count]) => {
+        const normalizedName = String(name).trim().toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(result, normalizedName)) throw new TypeError('queriesByPlatform 存在重复平台');
+        result[normalizedName] = count;
+        return result;
+      }, {});
+      if (requestedPlatforms.length > 1) {
+        if (!normalizedQueryMap || requestedPlatforms.some(platform => !Object.prototype.hasOwnProperty.call(normalizedQueryMap, platform)) ||
+          Object.keys(normalizedQueryMap).some(platform => !requestedPlatforms.includes(platform))) {
+          throw new TypeError('多平台补搜必须为每个平台提供 queriesByPlatform');
+        }
+      } else if (normalizedQueryMap && Object.keys(normalizedQueryMap).some(platform => !requestedPlatforms.includes(platform))) {
+        throw new TypeError('queriesByPlatform 包含未请求的平台');
+      }
+      const { platforms: ignoredPlatforms, ...requestedUsage } = request;
+      const normalizedUsage = {
+        ...requestedUsage,
+        usedPlatforms: requestedPlatforms,
+        ...(requestedPlatforms.length === 1 ? { platform: requestedPlatforms[0] } : {}),
+        ...(normalizedQueryMap ? { queriesByPlatform: normalizedQueryMap } : {})
+      };
+      const updated = consumeResearchBudget(task, normalizedUsage);
+      return { allowed: true, reason: '', usage: normalizedUsage, task: updated };
+    } catch (error) {
+      return { allowed: false, reason: error.code === 'budget_exceeded' ? error.code : error.message };
     }
   }
 
   return {
-    DEFAULT_BUDGET,
     createResearchPlan,
-    startResearchTask,
     approveResearchPlan,
     rejectResearchPlan,
     transitionResearchTask,
+    startResearchTask: task => {
+      assertApproved(task);
+      if (task.status !== 'awaiting-platform-preparation') throw new Error('任务尚未完成平台准备');
+      assertAtLeastOnePlatformReady(task, task.preparedPlatforms || []);
+      return { ...task, status: 'searching' };
+    },
     consumeResearchBudget,
-    approveSupplementarySearch,
     decideConnectionMode,
     shouldFallbackToBrowser,
-    canRequestSupplementarySearch,
-    ALLOWED_STATUSES
+    canRequestSupplementarySearch
   };
 });

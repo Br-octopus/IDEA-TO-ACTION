@@ -9,8 +9,20 @@ const build = packageJson.build;
 
 test('Electron 入口和生产包文件清单已锁定', () => {
   assert.equal(packageJson.main, 'electron/main.js');
-  for (const filePattern of ['electron/**/*', 'prototype/**/*', 'server/**/*', 'server.js', 'package.json']) {
-    assert.ok(build.files.includes(filePattern), `缺少打包文件：${filePattern}`);
+  assert.deepEqual(build.files, ['electron/**/*', 'prototype/**/*', 'server/**/*', 'server.js', 'package.json']);
+  for (const excluded of ['docs/**/*', 'tests/**/*', '.env', 'release/**/*']) {
+    assert.equal(build.files.includes(excluded), false, `不应打包：${excluded}`);
+  }
+});
+
+test('所有社媒研究运行时脚本均纳入 npm run check', () => {
+  for (const script of [
+    'prototype/social-research-prompts.js',
+    'prototype/social-research-schema.js',
+    'prototype/social-research-ui.js',
+    'prototype/social-research-workflow.js'
+  ]) {
+    assert.ok(packageJson.scripts.check.includes(`node --check ${script}`), `缺少语法检查：${script}`);
   }
 });
 

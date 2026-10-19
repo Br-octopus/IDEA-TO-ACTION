@@ -5,6 +5,7 @@ const test = require('node:test');
 const { startServer } = require('../server');
 const { MODEL_CODES, createModelClient, normalizeModelError } = require('../server/model-client');
 const { SEARCH_CODES, createSearchClient, normalizeResult } = require('../server/search-client');
+const { SOCIAL_API_CODES } = require('../server/social-api-client');
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) };
@@ -83,7 +84,7 @@ test('搜索未配置或失败时降级，成功结果最多五条且字段统�
 
 test('HTTP API 在未配置模型和搜索时仍返回可降级的 JSON', async t => {
   const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} } });
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   const modelResponse = await fetch(`${baseUrl}/api/model`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'test' }] }) });
   const model = await modelResponse.json();
@@ -95,6 +96,92 @@ test('HTTP API 在未配置模型和搜索时仍返回可降级的 JSON', async 
   assert.equal(searchResponse.status, 200);
   assert.equal(search.code, SEARCH_CODES.NOT_CONFIGURED);
   assert.deepEqual(search.results, []);
+});
+
+test('社媒 API 路由只接受白名单平台并返回标准化结果', async t => {
+  const server = await startServer({
+    port: 0,
+    host: '127.0.0.1',
+    config: { model: {}, search: {}, social: { reddit: { accessToken: 'server-only-secret', userAgent: 'linux:forward-step-test:v1.0 (by /u/test-contact)' } } },
+    socialFetchImpl: async (url, options) => {
+      assert.equal(new URL(url).origin, 'https://oauth.reddit.com');
+      assert.equal(options.headers.authorization, 'Bearer server-only-secret');
+      return response({ data: { children: [{ data: { title: '帖子', permalink: '/r/test/comments/1', selftext: '摘要', author: '用户' } }] } });
+    }
+  });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const search = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'reddit', query: '主题' })
+  });
+  const payload = await search.json();
+  assert.equal(search.status, 200);
+  assert.equal(payload.results[0].retrievalMethod, 'api');
+  assert.equal(payload.results[0].evidenceStatus, 'unverified');
+  assert.doesNotMatch(JSON.stringify(payload), /server-only-secret|authorization/i);
+
+  const unsupported = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'arbitrary', query: '主题' })
+  });
+  const unsupportedPayload = await unsupported.json();
+  assert.equal(unsupported.status, 400);
+  assert.equal(unsupportedPayload.code, SOCIAL_API_CODES.UNSUPPORTED_PLATFORM);
+  assert.doesNotMatch(JSON.stringify(unsupportedPayload), /server-only-secret|authorization/i);
+});
+
+test('服务端搜索参数校验和通用异常响应不会回显运行时错误', async t => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} } });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const invalidQuery = await fetch(`${baseUrl}/api/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 42 })
+  });
+  assert.equal(invalidQuery.status, 400);
+  assert.deepEqual(await invalidQuery.json(), { error: '缺少搜索词' });
+
+  const malformedJson = await fetch(`${baseUrl}/api/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{'
+  });
+  const errorPayload = await malformedJson.json();
+  assert.equal(malformedJson.status, 400);
+  assert.equal(errorPayload.code, 'INVALID_REQUEST');
+  assert.equal(errorPayload.message, '请求格式无效。');
+  assert.doesNotMatch(JSON.stringify(errorPayload), /请求不是有效 JSON|SyntaxError|Unexpected end/i);
+});
+
+test('社媒 API 路由限制查询长度和结果数量，且不将通用搜索配置当成平台 API', async t => {
+  const server = await startServer({
+    port: 0, host: '127.0.0.1',
+    config: { model: {}, search: { baseUrl: 'https://search.example', apiKey: 'generic-search-secret' }, social: {} },
+    socialFetchImpl: async () => { throw new Error('不应调用 fetch'); }
+  });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const tooLong = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'reddit', query: 'x'.repeat(501) })
+  });
+  assert.equal(tooLong.status, 400);
+
+  const invalidCount = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'reddit', query: '主题', maxResults: 999 })
+  });
+  assert.equal(invalidCount.status, 400);
+
+  const notConfigured = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'reddit', query: '主题' })
+  });
+  const payload = await notConfigured.json();
+  assert.equal(notConfigured.status, 503);
+  assert.equal(payload.code, SOCIAL_API_CODES.NOT_CONFIGURED);
+  assert.doesNotMatch(JSON.stringify(payload), /generic-search-secret|authorization/i);
+
+  const noPlatformApi = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'xiaohongshu', query: '主题' })
+  });
+  const noPlatformApiPayload = await noPlatformApi.json();
+  assert.equal(noPlatformApi.status, 501);
+  assert.equal(noPlatformApiPayload.code, SOCIAL_API_CODES.UNSUPPORTED_CAPABILITY);
 });
 
 test('搜索结果页面、远程结果 id 和发送上下文统一使用 url', () => {

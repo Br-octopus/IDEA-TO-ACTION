@@ -462,6 +462,18 @@
     return true;
   }
 
+  function sanitizeResearchBackupData(data) {
+    if (!storage || typeof storage.sanitizeResearchState !== "function") {
+      throw new Error("备份依赖的研究数据清洗模块未加载");
+    }
+    const sanitized = storage.sanitizeResearchState(data);
+    const result = { ...data };
+    for (const field of ["researchTasks", "platformConnections", "researchAttachments"]) {
+      if (Object.hasOwn(data, field)) result[field] = sanitized[field];
+    }
+    return result;
+  }
+
   function getBackupSummary(backup) {
     validateBackup(backup);
     return {
