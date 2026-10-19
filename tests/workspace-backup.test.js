@@ -230,12 +230,10 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   assert.equal(Object.hasOwn(backup.data, 'knowledgeMetadata'), true);
   assert.match(serialized, /项目业务 token/);
   assert.match(serialized, /项目业务 secret/);
-  assert.match(serialized, /项目业务 apiKey/);
   assert.match(serialized, /提示词业务 token/);
-  assert.match(serialized, /案例业务 apiKey/);
   assert.match(serialized, /参考业务 token/);
   assert.match(serialized, /参考业务 secret/);
-  assert.match(serialized, /参考业务 apiKey/);
+  assert.equal(serialized.includes('业务 apiKey'), false);
   assert.deepEqual(state.projects[0].apiKey, '项目业务 apiKey');
 
   const knowledgeBackup = createBackup(state, { scope: 'knowledge-base', now: exportedAt });
@@ -243,6 +241,38 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   for (const credential of credentials) {
     assert.equal(knowledgeSerialized.includes(credential), false, `资料库不应导出 ${credential}`);
   }
+});
+
+test('备份和恢复会递归拒绝所有本地凭证与未知敏感字段', () => {
+  const state = {
+    projects: [{
+      id: 'project-sensitive',
+      cookies: ['cookie-secret'],
+      sessionToken: 'session-secret',
+      profilePath: 'C:/private/profile',
+      authBlob: 'unknown-secret',
+      nested: { cookie: 'nested-cookie-secret', password: 'nested-password' }
+    }],
+    knowledgeEntries: [{
+      id: 'entry-sensitive',
+      title: '已保存资料',
+      metadata: { sessionToken: 'knowledge-session-secret', credential: 'knowledge-credential-secret' }
+    }]
+  };
+  const backup = createBackup(state, { scope: 'workspace', now: exportedAt });
+  const restored = replaceState({}, backup);
+  const knowledgeBackup = createBackup(state, { scope: 'knowledge-base', now: exportedAt });
+  const serialized = JSON.stringify({ backup, restored, knowledgeBackup });
+
+  for (const secret of [
+    'cookie-secret', 'session-secret', 'C:/private/profile', 'unknown-secret',
+    'nested-cookie-secret', 'nested-password', 'knowledge-session-secret',
+    'knowledge-credential-secret'
+  ]) {
+    assert.equal(serialized.includes(secret), false, `不得导出或恢复 ${secret}`);
+  }
+  assert.equal(restored.projects[0].nested.cookie, undefined);
+  assert.equal(restored.projects[0].nested.password, undefined);
 });
 
 test('references 凭证清洗后仍可替换和合并', () => {

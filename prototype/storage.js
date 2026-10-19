@@ -25,6 +25,11 @@
     "status", "suggestedLabel", "evidence", "lessons", "nextPrompt",
     "applicableWhen", "notApplicableWhen"
   ];
+  const STATE_FIELDS = [
+    "schemaVersion", "projects", "prompts", "references", "researchSelection",
+    "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters",
+    "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings"
+  ];
 
   function createEmptyState() {
     return {
@@ -80,13 +85,12 @@
         const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
         const currentIsBusinessField = options.preserveBusinessFields === true
           && path.length === 0
-          && ["token", "secret"].includes(normalized)
-          || options.preserveBusinessFields === true
-          && path.length === 0
-          && key === "apiKey";
+          && ["token", "secret"].includes(normalized);
         const currentMatchesPattern = /^(?:api|model|search|access|refresh|client|auth|bearer|private)(?:api)?(?:key|token|secret|credential)$/.test(normalized);
+        const currentIsSensitive = /(?:cookie|session|password|credential|authorization|profilepath|authblob)/.test(normalized)
+          || /(?:api|access|refresh|session|auth|bearer|client|private|model|search)(?:key|token|secret|credential)$/.test(normalized);
         return currentIsBusinessField
-          || (!credentialFields.has(normalized) && !currentMatchesPattern);
+          || (!credentialFields.has(normalized) && !currentMatchesPattern && !currentIsSensitive);
       })
       .map(([key, item]) => [key, stripModelKeys(item, options, [...path, key])]));
   }
@@ -297,9 +301,12 @@
     const source = input && typeof input === "object" ? input : {};
     const entries = normalizeKnowledgeEntries(source.knowledgeEntries);
     const researchState = sanitizeResearchState(source);
+    const knownState = stripModelKeys(source);
     const state = {
       ...createEmptyState(),
-      ...stripModelKeys(source),
+      ...Object.fromEntries(STATE_FIELDS
+        .filter(field => Object.hasOwn(knownState, field))
+        .map(field => [field, knownState[field]])),
       schemaVersion: 3,
       projects: Array.isArray(source.projects) ? stripModelKeys(source.projects).map(withProjectDefaults) : [],
       prompts: Array.isArray(source.prompts) ? stripModelKeys(source.prompts) : [],

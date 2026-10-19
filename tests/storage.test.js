@@ -641,6 +641,35 @@ test('项目和确认案例中的凭证字段会递归剔除', () => {
   assert.equal(JSON.stringify(confirmed).includes('review-token'), false);
 });
 
+test('迁移和保存会递归剔除 cookie、会话、配置路径及未知凭证字段', () => {
+  const input = {
+    projects: [{
+      id: 'p-sensitive',
+      cookies: ['cookie-secret'],
+      sessionToken: 'session-secret',
+      profilePath: 'C:/private/profile',
+      authBlob: 'unknown-secret',
+      nested: { cookie: 'nested-cookie-secret', password: 'nested-password' }
+    }]
+  };
+  const migrated = migrateState(input);
+  const storage = memoryStorage();
+  const saved = saveState(storage, input);
+  const serialized = storage.getItem(STORAGE_KEY);
+
+  for (const state of [migrated, saved]) {
+    assert.equal(state.projects[0].cookies, undefined);
+    assert.equal(state.projects[0].sessionToken, undefined);
+    assert.equal(state.projects[0].profilePath, undefined);
+    assert.equal(state.projects[0].authBlob, undefined);
+    assert.equal(state.projects[0].nested.cookie, undefined);
+    assert.equal(state.projects[0].nested.password, undefined);
+  }
+  for (const secret of ['cookie-secret', 'session-secret', 'C:/private/profile', 'unknown-secret', 'nested-cookie-secret', 'nested-password']) {
+    assert.equal(serialized.includes(secret), false);
+  }
+});
+
 test('按案例 id 去重重复确认', () => {
   const once = confirmCase(createEmptyState(), { id: 'same-id', result: '首次' }, true);
   const twice = confirmCase(once, { id: 'same-id', result: '重复' }, true);
