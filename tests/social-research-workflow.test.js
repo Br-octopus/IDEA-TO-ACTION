@@ -17,6 +17,11 @@ function makePlan(overrides = {}) {
   });
 }
 
+function startPreparedTask(task) {
+  const prepared = workflow.transitionResearchTask(task, { type: 'prepared', platforms: task.platforms });
+  return workflow.startResearchTask(prepared);
+}
+
 function expectBudgetExceeded(task, usage) {
   assert.throws(
     () => workflow.consumeResearchBudget(task, usage),
@@ -41,7 +46,7 @@ test('未批准不能开始或消耗搜索预算，批准后进入平台准备�
   assert.equal(approved.status, 'awaiting-platform-preparation');
   assert.equal(planned.status, 'awaiting-plan-confirmation');
   assert.throws(() => workflow.startResearchTask(approved), /平台.*准备/);
-  assert.equal(workflow.startResearchTask(approved, platforms).status, 'searching');
+  assert.throws(() => workflow.startResearchTask(approved, platforms), /平台.*准备/);
 });
 
 test('平台准备事件不能直接搜索，缺少任一平台时拒绝开始', () => {
@@ -51,11 +56,11 @@ test('平台准备事件不能直接搜索，缺少任一平台时拒绝开始',
   assert.deepEqual(partial.preparedPlatforms, platforms.slice(0, 2));
   assert.throws(() => workflow.startResearchTask(partial), /平台.*准备/);
   assert.throws(() => workflow.startResearchTask(approved, platforms.slice(0, 2)), /平台.*准备/);
-  const ready = workflow.transitionResearchTask(partial, { type: 'prepared', platforms: [platforms[2]] });
+  const ready = workflow.transitionResearchTask(partial, { type: 'prepared', platforms });
   assert.deepEqual(ready.preparedPlatforms, platforms);
   assert.equal(workflow.startResearchTask(ready).status, 'searching');
   assert.throws(() => workflow.transitionResearchTask(approved, { type: 'start' }), /平台.*准备/);
-  assert.equal(workflow.transitionResearchTask(approved, { type: 'start', platforms }).status, 'searching');
+  assert.throws(() => workflow.transitionResearchTask(approved, { type: 'start', platforms }), /平台.*准备/);
 });
 
 test('拒绝和取消后任务不可继续推进', () => {
@@ -76,7 +81,7 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
     () => makePlan({ queries: ['q1', 'q2', 'q3', 'q4', 'q5', 'q6'] }),
     error => error.code === 'budget_exceeded'
   );
-  const task = workflow.startResearchTask(workflow.approveResearchPlan(makePlan({
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
     budget: {
       maxPlatforms: 3,
       maxQueriesPerPlatform: 2,
@@ -85,7 +90,7 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
       maxDurationMs: 1000,
       maxAttachmentBytes: 100
     }
-  })), platforms);
+  })));
   const cases = [
     { platforms: 4 },
     { platform: 'reddit', queries: 3 },
@@ -97,6 +102,11 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
   ];
   const originalUsage = structuredClone(task.usage);
   for (const usage of cases) expectBudgetExceeded(task, usage);
+  assert.throws(
+    () => workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 0, queriesPerPlatform: 100 }),
+    TypeError
+  );
+  expectBudgetExceeded(task, { platform: 'reddit', queries: 3, queriesPerPlatform: 3 });
   assert.deepEqual(task.usage, originalUsage);
   const consumed = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 1 });
   assert.equal(consumed.usage.platforms, 1);
@@ -105,7 +115,7 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
 });
 
 test('预算计量拒绝非有限、负数和非整数值，且无效输入不修改旧任务', () => {
-  const task = workflow.startResearchTask(workflow.approveResearchPlan(makePlan()), platforms);
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan()));
   const invalidInputs = [];
   for (const field of ['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'durationMs', 'attachmentBytes', 'analysisTokens']) {
     invalidInputs.push({ [field]: NaN }, { [field]: Infinity }, { [field]: -1 });
@@ -122,9 +132,9 @@ test('预算计量拒绝非有限、负数和非整数值，且无效输入不�
 });
 
 test('补搜只允许在已批准预算剩余额度内进行', () => {
-  const task = workflow.startResearchTask(workflow.approveResearchPlan(makePlan({
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
     budget: { maxQueriesPerPlatform: 2 }
-  })), platforms);
+  })));
   assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, true);
   const used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 2 });
   assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'reddit', queries: 1 }).allowed, false);

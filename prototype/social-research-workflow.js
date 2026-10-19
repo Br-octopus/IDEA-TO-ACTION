@@ -127,8 +127,7 @@
         throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
       }
       assertApproved(task);
-      const readyPlatforms = details.platforms || details.readyPlatforms || task.preparedPlatforms || [];
-      assertAllPlatformsReady(task, readyPlatforms);
+      assertAllPlatformsReady(task, task.preparedPlatforms || []);
       return { ...task, status: 'searching' };
     }
     const transitions = {
@@ -159,6 +158,9 @@
       if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || (integerMetrics.has(field) && !Number.isInteger(value))) {
         throw new TypeError(`${field} 必须是有限的非负${integerMetrics.has(field) ? '整数' : '数值'}`);
       }
+    }
+    if (usage.queries !== undefined && usage.queriesPerPlatform !== undefined && usage.queries !== usage.queriesPerPlatform) {
+      throw new TypeError('queries 与 queriesPerPlatform 必须一致');
     }
     const platform = String(usage.platform || '').trim().toLowerCase();
     const queryCount = usage.queries ?? usage.queriesPerPlatform ?? 0;
@@ -235,10 +237,10 @@
     approveResearchPlan,
     rejectResearchPlan,
     transitionResearchTask,
-    startResearchTask: (task, readyPlatforms) => {
+    startResearchTask: task => {
       assertApproved(task);
       if (task.status !== 'awaiting-platform-preparation') throw new Error('任务尚未完成平台准备');
-      assertAllPlatformsReady(task, readyPlatforms === undefined ? task.preparedPlatforms : readyPlatforms);
+      assertAllPlatformsReady(task, task.preparedPlatforms || []);
       return { ...task, status: 'searching' };
     },
     consumeResearchBudget,
