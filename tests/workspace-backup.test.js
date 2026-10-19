@@ -177,6 +177,16 @@ function createState() {
   };
 }
 
+function assertNoKeys(value, keys) {
+  if (Array.isArray(value)) {
+    value.forEach(item => assertNoKeys(item, keys));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const key of keys) assert.equal(Object.hasOwn(value, key), false, `不应保留字段 ${key}`);
+  Object.values(value).forEach(item => assertNoKeys(item, keys));
+}
+
 test('完整工作区备份包含业务数据但不包含凭证', () => {
   const state = createState();
   const backup = createBackup(state, { scope: 'workspace', appVersion: '0.1.0', now: exportedAt });
@@ -228,20 +238,171 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   ];
   for (const credential of credentials) assert.equal(serialized.includes(credential), false, `不应导出 ${credential}`);
   assert.equal(Object.hasOwn(backup.data, 'knowledgeMetadata'), true);
-  assert.match(serialized, /项目业务 token/);
-  assert.match(serialized, /项目业务 secret/);
-  assert.match(serialized, /项目业务 apiKey/);
-  assert.match(serialized, /提示词业务 token/);
-  assert.match(serialized, /案例业务 apiKey/);
-  assert.match(serialized, /参考业务 token/);
-  assert.match(serialized, /参考业务 secret/);
-  assert.match(serialized, /参考业务 apiKey/);
+  for (const value of [
+    '项目业务 token', '项目业务 secret', '项目业务 apiKey',
+    '提示词业务 token', '案例业务 apiKey', '参考业务 token',
+    '参考业务 secret', '参考业务 apiKey'
+  ]) {
+    assert.equal(serialized.includes(value), false, `对象级字段不应导出 ${value}`);
+  }
   assert.deepEqual(state.projects[0].apiKey, '项目业务 apiKey');
 
   const knowledgeBackup = createBackup(state, { scope: 'knowledge-base', now: exportedAt });
   const knowledgeSerialized = JSON.stringify(knowledgeBackup);
   for (const credential of credentials) {
     assert.equal(knowledgeSerialized.includes(credential), false, `资料库不应导出 ${credential}`);
+  }
+});
+
+test('字段保留矩阵保留业务状态和元数据，丢弃未知嵌套字段与敏感字段', () => {
+  const backup = createBackup({
+    projects: [{
+      id: 'project-1',
+      steps: [{
+        id: 'step-1',
+        title: '步骤',
+        status: 'done',
+        result: '步骤结果',
+        unknownField: '不应保留',
+        apiKey: 'step-api-key'
+      }]
+    }],
+    prompts: [{
+      id: 'prompt-1',
+      text: '正文 token secret apiKey',
+      metadata: {
+        status: '已验证',
+        note: '元数据说明',
+        result: '元数据结果',
+        testedAt: exportedAt,
+        tags: ['计划'],
+        unknownField: '不应保留',
+        password: 'metadata-password'
+      }
+    }],
+    cases: [{
+      id: 'case-1',
+      result: '案例结果',
+      currentVersion: 2,
+      versionHistory: [{
+        version: 1,
+        status: '成功',
+        lessons: '历史经验',
+        changeNote: '历史变更',
+        unknownField: '不应保留',
+        secret: 'history-secret'
+      }]
+    }],
+    references: [{
+      id: 'reference-1',
+      title: '参考资料',
+      verification: {
+        status: 'verified',
+        note: '已核验',
+        unknownField: '不应保留',
+        apiKey: 'verification-api-key'
+      }
+    }],
+    knowledgeEntries: [{
+      id: 'entry-1',
+      title: '知识条目',
+      favorite: true,
+      pinned: true,
+      verificationStatus: 'user-confirmed',
+      userRating: 5,
+      metadata: { unknownField: '不应保留' }
+    }],
+    knowledgeMetadata: {
+      version: 2,
+      entryCount: 1,
+      nested: {
+        label: '资料统计',
+        note: '元数据备注',
+        unknownField: '不应保留',
+        apiKey: 'metadata-api-key'
+      },
+      unknownField: '不应保留'
+    }
+  }, { scope: 'workspace', now: exportedAt });
+
+  assert.deepEqual(backup.data.projects[0].steps[0], {
+    id: 'step-1', title: '步骤', status: 'done', result: '步骤结果'
+  });
+  assert.deepEqual(backup.data.prompts[0].metadata, {
+    status: '已验证', note: '元数据说明', result: '元数据结果',
+    testedAt: exportedAt, tags: ['计划']
+  });
+  assert.deepEqual(backup.data.cases[0].versionHistory[0], {
+    version: 1, status: '成功', lessons: '历史经验', changeNote: '历史变更'
+  });
+  assert.deepEqual(backup.data.references[0].verification, {
+    status: 'verified', note: '已核验'
+  });
+  assert.deepEqual(backup.data.knowledgeEntries[0], {
+    id: 'entry-1', title: '知识条目', favorite: true, pinned: true,
+    verificationStatus: 'user-confirmed', userRating: 5
+  });
+  assert.deepEqual(backup.data.knowledgeMetadata, {
+    version: 2, entryCount: 1, nested: { label: '资料统计', note: '元数据备注' }
+  });
+  assert.equal(backup.data.prompts[0].text, '正文 token secret apiKey');
+  assertNoKeys(backup, [
+    'apiKey', 'secret', 'token', 'password', 'unknownField'
+  ]);
+});
+
+test('替换和合并外部手工备份时清洗条目内敏感字段', () => {
+  const backup = createBackup({
+    projects: [{ id: 'project-1', steps: [{ id: 'step-1', title: '步骤' }] }],
+    prompts: [{ id: 'prompt-1', text: '正文保留 token' }],
+    cases: [{ id: 'case-1', result: '结果保留' }],
+    knowledgeEntries: [{ id: 'entry-1', title: '资料', verificationStatus: 'unverified' }],
+    references: [{ id: 'reference-1', title: '引用' }]
+  }, { scope: 'workspace', now: exportedAt });
+  Object.assign(backup.data.projects[0], {
+    apiKey: 'project-api-key', credential: 'project-credential',
+    cookies: ['project-cookie'], sessionToken: 'project-session',
+    password: 'project-password', profilePath: 'C:/private/profile',
+    privateToken: 'project-private-token'
+  });
+  Object.assign(backup.data.prompts[0], {
+    credential: 'prompt-credential', unknownSensitiveField: 'prompt-secret'
+  });
+  Object.assign(backup.data.cases[0], {
+    apiKey: 'case-api-key', authSecretValue: 'case-secret'
+  });
+  Object.assign(backup.data.knowledgeEntries[0], {
+    cookies: ['knowledge-cookie'], privateToken: 'knowledge-private-token'
+  });
+  Object.assign(backup.data.references[0], {
+    password: 'reference-password', profilePath: 'C:/reference/profile'
+  });
+  backup.data.researchTasks = [{ id: 'task-1', topic: '研究', apiKey: 'task-api-key', credential: 'task-credential' }];
+  backup.data.researchAttachments = [{ id: 'attachment-1', type: 'file', password: 'attachment-password' }];
+  backup.data.platformConnections = {
+    reddit: {
+      platform: 'reddit', status: 'ready', apiKey: 'connection-api-key',
+      credential: 'connection-credential', cookies: ['connection-cookie'],
+      sessionToken: 'connection-session', password: 'connection-password',
+      profilePath: 'C:/connection/profile', unknownSensitiveField: 'connection-secret'
+    }
+  };
+
+  const sensitiveKeys = [
+    'apiKey', 'credential', 'cookies', 'sessionToken', 'password',
+    'profilePath', 'privateToken', 'authSecretValue', 'unknownSensitiveField'
+  ];
+  const replaced = replaceState({}, backup);
+  const merged = mergeState({
+    projects: [], prompts: [], cases: [], knowledgeEntries: [], references: []
+  }, backup).state;
+
+  for (const state of [replaced, merged]) {
+    assertNoKeys(state, sensitiveKeys);
+    assert.equal(state.prompts[0].text, '正文保留 token');
+    assert.equal(state.cases[0].result, '结果保留');
+    assert.equal(state.researchTasks[0].topic, '研究');
+    assert.equal(state.researchAttachments[0].id, 'attachment-1');
   }
 });
 

@@ -89,10 +89,7 @@
     reuseDeferredAt: SCALAR,
     confirmed: SCALAR,
     confirmedAt: SCALAR,
-    result: SCALAR,
-    token: SCALAR,
-    secret: SCALAR,
-    apiKey: SCALAR
+    result: SCALAR
   };
 
   const CASE_VERSION_FIELDS = {
@@ -130,10 +127,7 @@
     time: SCALAR,
     webSearch: SCALAR,
     completed: LIST,
-    masterPrompt: SCALAR,
-    token: SCALAR,
-    secret: SCALAR,
-    apiKey: SCALAR
+    masterPrompt: SCALAR
   };
 
   const PROMPT_FIELDS = {
@@ -160,10 +154,7 @@
     domains: LIST,
     stages: LIST,
     keywords: LIST,
-    metadata: object(PROMPT_METADATA_FIELDS),
-    token: SCALAR,
-    secret: SCALAR,
-    apiKey: SCALAR
+    metadata: object(PROMPT_METADATA_FIELDS)
   };
 
   const REFERENCE_FIELDS = {
@@ -181,10 +172,7 @@
     updatedAt: SCALAR,
     date: SCALAR,
     verification: object(REFERENCE_VERIFICATION_FIELDS),
-    kind: SCALAR,
-    token: SCALAR,
-    secret: SCALAR,
-    apiKey: SCALAR
+    kind: SCALAR
   };
 
   const KNOWLEDGE_ENTRY_FIELDS = {
@@ -306,6 +294,16 @@
       Object.assign(sanitized, storage.sanitizeResearchState(source));
     }
     return sanitized;
+  }
+
+  function sanitizeBackupData(scope, data) {
+    const source = isObject(data) ? clone(data) : {};
+    const sanitizedState = sanitizeState(source);
+    const allowedFields = scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
+    return allowedFields.reduce((result, field) => {
+      if (Object.hasOwn(source, field)) result[field] = clone(sanitizedState[field]);
+      return result;
+    }, {});
   }
 
   function selectKnowledgeData(state) {
@@ -459,12 +457,9 @@
 
   function replaceState(currentState, backup) {
     validateBackup(backup);
-    const data = clone(backup.data);
+    const data = sanitizeBackupData(backup.scope, backup.data);
     if (backup.scope === "workspace") return data;
-    const current = isObject(currentState) ? clone(currentState) : {};
-    if (typeof storage.sanitizeResearchState === "function") {
-      Object.assign(current, storage.sanitizeResearchState(current));
-    }
+    const current = sanitizeState(currentState);
     return { ...current, ...data };
   }
 
@@ -529,11 +524,8 @@
 
   function mergeState(currentState, backup) {
     const collections = validateBackupStructure(backup);
-    const state = isObject(currentState) ? clone(currentState) : {};
-    if (typeof storage.sanitizeResearchState === "function") {
-      Object.assign(state, storage.sanitizeResearchState(state));
-    }
-    const data = backup.data;
+    const state = sanitizeState(currentState);
+    const data = sanitizeBackupData(backup.scope, backup.data);
     const report = {
       added: [],
       skipped: [],
