@@ -72,7 +72,7 @@
   }
 
   function buildPptSlideDraftPrompt(task, outline, sources = []) {
-    const prompt = `请根据待审核大纲生成逐页内容草稿；本阶段只写提示词要求的草稿内容，不制作或编辑最终 PPT、HTML 或图片。\n\n${taskContext(task)}\n\n【大纲状态】${value(object(outline).status, 'needs-review（默认未批准）')}\n【待审核大纲（仅供参考，非已批准文案）】\n${typeof outline === 'string' ? outline : JSON.stringify(object(outline), null, 2)}\n\n若大纲没有明确标记批准，必须将其视为未批准的结构建议；不得把标题或要点直接宣称为用户已确认的页面文案。先保留不确定项并给可编辑草稿。每页分成两个清楚独立的部分：“页面文案”（结论式标题、精简要点、视觉表达建议、来源 ID）和“演讲备注”（口头补充、解释和转场，不塞入页面正文）。遵循硬性页数和字数约束；偏好、页面语义承接及未设置单页字数上限的精简判断，沿用 PPT 工作流的 needs-review 状态，不得自行判定通过。区分事实、推断和待核实主张。`;
+    const prompt = `请根据待审核大纲生成逐页内容草稿；本阶段只写提示词要求的草稿内容，不制作或编辑最终 PPT、HTML 或图片。\n\n${taskContext(task)}\n\n【大纲状态】${value(object(outline).status, 'needs-review（默认未批准）')}\n【待审核大纲（仅供参考，非已批准文案）】\n${typeof outline === 'string' ? outline : JSON.stringify(object(outline), null, 2)}\n\n若大纲没有明确标记批准，必须将其视为未批准的结构建议；不得把标题或要点直接宣称为用户已确认的页面文案。先保留不确定项并给可编辑草稿。每页必须输出“页面文案”（结论式标题、精简要点、视觉表达建议、来源 ID）；仅在确有口头补充、解释或转场需要时提供“演讲备注”，且备注必须与页面文案分开，不能将备注当作页面正文。遵循硬性页数和字数约束；偏好、页面语义承接及未设置单页字数上限的精简判断，沿用 PPT 工作流的 needs-review 状态，不得自行判定通过。区分事实、推断和待核实主张。`;
     return appendSources(prompt, sources);
   }
 

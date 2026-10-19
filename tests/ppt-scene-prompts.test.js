@@ -37,6 +37,9 @@ test('页面草稿分开输出精简页面文案和演讲备注，并保留大�
 
   assert.match(prompt, /页面文案/);
   assert.match(prompt, /演讲备注/);
+  assert.match(prompt, /每页必须输出“页面文案”/);
+  assert.match(prompt, /仅在确有口头补充、解释或转场需要时提供“演讲备注”/);
+  assert.match(prompt, /备注必须与页面文案分开/);
   assert.match(prompt, /未批准|未经确认|尚未批准/);
   assert.match(prompt, /必须将其视为未批准|不得把.*直接宣称为.*已确认/);
 });
