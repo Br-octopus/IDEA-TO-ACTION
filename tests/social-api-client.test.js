@@ -8,7 +8,7 @@ const {
   normalizeSocialApiError
 } = require('../server/social-api-client');
 
-const redditConfig = { accessToken: 'reddit-secret' };
+const redditConfig = { accessToken: 'reddit-secret', userAgent: 'linux:forward-step-test:v1.0 (by /u/test-contact)' };
 const youtubeConfig = { apiKey: 'youtube-secret' };
 
 function response(body, status = 200, contentType = 'application/json') {
@@ -24,7 +24,7 @@ test('平台白名单说明 API 可用性、配置要求、上限与实际能力
   const definitions = listSocialPlatformDefinitions();
   assert.deepEqual(definitions.map(item => item.platform), ['xiaohongshu', 'reddit', 'youtube']);
   assert.equal(definitions.find(item => item.platform === 'xiaohongshu').apiAvailable, false);
-  assert.deepEqual(definitions.find(item => item.platform === 'reddit').requiredConfig, ['accessToken']);
+  assert.deepEqual(definitions.find(item => item.platform === 'reddit').requiredConfig, ['accessToken', 'userAgent']);
   assert.deepEqual(definitions.find(item => item.platform === 'youtube').requiredConfig, ['apiKey']);
   assert.ok(definitions.filter(item => item.apiAvailable).every(item => Number.isInteger(item.maxResults) && item.maxResults > 0));
   assert.equal(definitions.find(item => item.platform === 'xiaohongshu').maxResults, 0);
@@ -46,6 +46,7 @@ test('Reddit 搜索成功后统一结果字段并限制返回数量', async () =
   const results = await client.search('主题', { maxResults: 2 });
   assert.equal(new URL(requested.url).origin, 'https://oauth.reddit.com');
   assert.equal(requested.options.headers.authorization, 'Bearer reddit-secret');
+  assert.equal(requested.options.headers['user-agent'], redditConfig.userAgent);
   assert.ok(Array.isArray(results));
   assert.equal(results.length, 2);
   assert.doesNotMatch(JSON.stringify(results), /reddit-secret|authorization/i);
@@ -95,12 +96,52 @@ test('未配置、非 JSON、认证、限流、上游、超时和空结果均返
   assert.equal((await timeout.search('test')).code, SOCIAL_API_CODES.TIMEOUT);
 });
 
+test('Reddit User-Agent 必须由配置提供且拒绝换行注入', async () => {
+  const invalidValues = [undefined, '', '   ', 'linux:app:v1 (by /u/contact)\r\nX-Injected: yes'];
+  for (const userAgent of invalidValues) {
+    let called = false;
+    const client = createSocialApiClient({
+      platform: 'reddit', config: { ...redditConfig, userAgent },
+      fetchImpl: async () => { called = true; throw new Error('不应发起请求'); }
+    });
+    const result = await client.search('test');
+    assert.equal(client.configured, false);
+    assert.equal(called, false);
+    assert.equal(result.code, SOCIAL_API_CODES.NOT_CONFIGURED);
+    assert.doesNotMatch(JSON.stringify(result), /X-Injected|\/u\/contact/i);
+  }
+});
+
 test('不完整条目被丢弃，来源平台不匹配按稳定错误处理', async () => {
   const partial = normalizeApiSocialResult('reddit', { title: '', permalink: '', selftext: '仅有正文' });
   assert.equal(partial, null);
   assert.throws(() => normalizeApiSocialResult('reddit', { platform: 'youtube', title: '错平台' }), error => error.code === SOCIAL_API_CODES.PLATFORM_MISMATCH);
   const client = createSocialApiClient({ platform: 'reddit', config: redditConfig, fetchImpl: async () => response({ data: { children: [{ platform: 'youtube', data: { title: '错平台', permalink: '/r/x' } }] } }) });
-  assert.equal((await client.search('test')).code, SOCIAL_API_CODES.PLATFORM_MISMATCH);
+  assert.equal((await client.search('test')).code, SOCIAL_API_CODES.INVALID_RESPONSE);
+});
+
+test('单条异常 Reddit 记录不会丢弃同批有效结果，越界时间戳安全处理', async () => {
+  const client = createSocialApiClient({
+    platform: 'reddit', config: redditConfig,
+    fetchImpl: async () => response({ data: { children: [
+      null,
+      { data: { title: '时间越界但内容可用', permalink: '/r/test/comments/invalid-date', created_utc: 1e100 } },
+      { data: { title: '有效记录', permalink: '/r/test/comments/valid', created_utc: 1792000000 } }
+    ] } })
+  });
+  const results = await client.search('主题');
+  assert.ok(Array.isArray(results));
+  assert.equal(results.length, 2);
+  assert.equal(results[0].publishedAt, '');
+  assert.equal(results[1].title, '有效记录');
+});
+
+test('全部记录无效时返回稳定 INVALID_RESPONSE', async () => {
+  const client = createSocialApiClient({
+    platform: 'reddit', config: redditConfig,
+    fetchImpl: async () => response({ data: { children: [null, { data: { title: '缺链接' } }] } })
+  });
+  assert.equal((await client.search('主题')).code, SOCIAL_API_CODES.INVALID_RESPONSE);
 });
 
 test('错误规范化不保留原始错误、凭证或请求头', () => {

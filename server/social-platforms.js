@@ -7,7 +7,7 @@ const PLATFORM_DEFINITIONS = Object.freeze([
   }),
   Object.freeze({
     platform: 'reddit', displayName: 'Reddit', apiAvailable: true,
-    requiredConfig: ['accessToken'], maxResults: 5,
+    requiredConfig: ['accessToken', 'userAgent'], maxResults: 5,
     supportedFields: ['url', 'title', 'author', 'publishedAt', 'summary', 'publicMetrics.likes', 'publicMetrics.comments'],
     supportsSearch: true, supportsDetail: false, supportsComments: false,
     endpoint: 'https://oauth.reddit.com/search.json'

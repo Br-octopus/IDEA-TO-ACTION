@@ -43,9 +43,20 @@ function normalizeSocialApiError(error = {}) {
   return { code, message: ERROR_MESSAGES[code] };
 }
 
+function isValidRedditUserAgent(value) {
+  if (typeof value !== 'string') return false;
+  const userAgent = value.trim();
+  return Boolean(userAgent)
+    && !/[\r\n]/.test(userAgent)
+    && /^[^:\s]+:[^:\s]+:[^()\s]+ \(by [^()\s]+\)$/.test(userAgent);
+}
+
 function normalizeApiSocialResult(platform, item = {}, query = '') {
   const definition = getSocialPlatformDefinition(platform);
   if (!definition) throw Object.assign(new Error(), { code: SOCIAL_API_CODES.UNSUPPORTED_PLATFORM });
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw Object.assign(new Error(), { code: SOCIAL_API_CODES.INVALID_RESPONSE });
+  }
   const reportedPlatform = String(item.platform || item.platformId || item.data?.platform || item.data?.platformId || '').toLowerCase();
   if (reportedPlatform && reportedPlatform !== platform) throw Object.assign(new Error(), { code: SOCIAL_API_CODES.PLATFORM_MISMATCH });
   let url = '';
@@ -61,7 +72,9 @@ function normalizeApiSocialResult(platform, item = {}, query = '') {
     if (permalink.startsWith('/')) url = `https://www.reddit.com${permalink}`;
     else if (permalink.startsWith('https://www.reddit.com/')) url = permalink;
     author = String(data.author || '').trim();
-    publishedAt = Number.isFinite(Number(data.created_utc)) ? new Date(Number(data.created_utc) * 1000).toISOString() : '';
+    const createdAtSeconds = data.created_utc == null || data.created_utc === '' ? NaN : Number(data.created_utc);
+    const createdAt = Number.isFinite(createdAtSeconds) ? new Date(createdAtSeconds * 1000) : null;
+    publishedAt = createdAt && Number.isFinite(createdAt.getTime()) ? createdAt.toISOString() : '';
     summary = String(data.selftext || '').trim();
     publicMetrics = {
       ...(Number.isFinite(Number(data.score)) && Number(data.score) >= 0 ? { likes: Number(data.score) } : {}),
@@ -93,7 +106,9 @@ function responseItems(platform, data) {
 function createSocialApiClient({ platform, config = {}, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const definition = getSocialPlatformDefinition(platform);
   const unsupported = !definition || !definition.apiAvailable;
-  const configured = !unsupported && definition.requiredConfig.every(key => Boolean(config?.[key]));
+  const configured = !unsupported
+    && definition.requiredConfig.every(key => Boolean(config?.[key]))
+    && (platform !== 'reddit' || isValidRedditUserAgent(config?.userAgent));
 
   async function search(query, options = {}) {
     if (!definition) return { ...normalizeSocialApiError({ code: SOCIAL_API_CODES.UNSUPPORTED_PLATFORM }), results: [] };
@@ -112,7 +127,7 @@ function createSocialApiClient({ platform, config = {}, fetchImpl = globalThis.f
       endpoint.searchParams.set('maxResults', String(maximum));
     }
     const headers = platform === 'reddit'
-      ? { authorization: `Bearer ${config.accessToken}`, 'user-agent': 'ForwardStep/1.0' }
+      ? { authorization: `Bearer ${config.accessToken}`, 'user-agent': config.userAgent.trim() }
       : { 'x-goog-api-key': config.apiKey };
     const controller = new AbortController();
     const duration = Math.min(MAX_TIMEOUT_MS, Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
@@ -130,8 +145,19 @@ function createSocialApiClient({ platform, config = {}, fetchImpl = globalThis.f
           data = raw ? JSON.parse(raw) : {};
         }
       } catch { return { ...normalizeSocialApiError({ code: SOCIAL_API_CODES.INVALID_RESPONSE }), results: [] }; }
-      const results = responseItems(platform, data).map(item => normalizeApiSocialResult(platform, item, query)).filter(Boolean).slice(0, maximum);
-      if (!results.length) return { ...normalizeSocialApiError({ code: SOCIAL_API_CODES.EMPTY_RESULTS }), results: [] };
+      const items = responseItems(platform, data);
+      const results = [];
+      for (const item of items) {
+        try {
+          const result = normalizeApiSocialResult(platform, item, query);
+          if (result) results.push(result);
+        } catch {}
+        if (results.length >= maximum) break;
+      }
+      if (!results.length) {
+        const code = items.length > 0 ? SOCIAL_API_CODES.INVALID_RESPONSE : SOCIAL_API_CODES.EMPTY_RESULTS;
+        return { ...normalizeSocialApiError({ code }), results: [] };
+      }
       return results;
     } catch (error) {
       return { ...normalizeSocialApiError(error), results: [] };

@@ -21,7 +21,10 @@ const ENV_CONFIG = {
     apiKey: process.env.SEARCH_API_KEY || ''
   },
   social: {
-    reddit: { accessToken: process.env.REDDIT_ACCESS_TOKEN || '' },
+    reddit: {
+      accessToken: process.env.REDDIT_ACCESS_TOKEN || '',
+      userAgent: process.env.REDDIT_USER_AGENT || ''
+    },
     youtube: { apiKey: process.env.YOUTUBE_API_KEY || '' }
   }
 };
@@ -82,7 +85,7 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
     }
     if (req.method === 'POST' && requestUrl.pathname === '/api/search') {
       const body = await readBody(req);
-      if (!body.query?.trim()) return sendJson(res, 400, { error: '缺少搜索词' });
+      if (typeof body?.query !== 'string' || !body.query.trim()) return sendJson(res, 400, { error: '缺少搜索词' });
       return sendJson(res, 200, await searchClient.search(body.query.trim(), body.options));
     }
     if (req.method === 'GET' && requestUrl.pathname === '/api/social/platforms') {
@@ -136,7 +139,7 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
       res.destroy(error);
       return;
     }
-    return sendJson(res, 500, { error: error.message || '服务发生未知错误' });
+    return sendJson(res, 500, { code: 'INTERNAL_ERROR', message: '服务发生未知错误。' });
   }
   });
 }

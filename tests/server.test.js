@@ -102,7 +102,7 @@ test('社媒 API 路由只接受白名单平台并返回标准化结果', async 
   const server = await startServer({
     port: 0,
     host: '127.0.0.1',
-    config: { model: {}, search: {}, social: { reddit: { accessToken: 'server-only-secret' } } },
+    config: { model: {}, search: {}, social: { reddit: { accessToken: 'server-only-secret', userAgent: 'linux:forward-step-test:v1.0 (by /u/test-contact)' } } },
     socialFetchImpl: async (url, options) => {
       assert.equal(new URL(url).origin, 'https://oauth.reddit.com');
       assert.equal(options.headers.authorization, 'Bearer server-only-secret');
@@ -127,6 +127,27 @@ test('社媒 API 路由只接受白名单平台并返回标准化结果', async 
   assert.equal(unsupported.status, 400);
   assert.equal(unsupportedPayload.code, SOCIAL_API_CODES.UNSUPPORTED_PLATFORM);
   assert.doesNotMatch(JSON.stringify(unsupportedPayload), /server-only-secret|authorization/i);
+});
+
+test('服务端搜索参数校验和通用异常响应不会回显运行时错误', async t => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} } });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const invalidQuery = await fetch(`${baseUrl}/api/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 42 })
+  });
+  assert.equal(invalidQuery.status, 400);
+  assert.deepEqual(await invalidQuery.json(), { error: '缺少搜索词' });
+
+  const malformedJson = await fetch(`${baseUrl}/api/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{'
+  });
+  const errorPayload = await malformedJson.json();
+  assert.equal(malformedJson.status, 500);
+  assert.equal(errorPayload.code, 'INTERNAL_ERROR');
+  assert.equal(errorPayload.message, '服务发生未知错误。');
+  assert.doesNotMatch(JSON.stringify(errorPayload), /请求不是有效 JSON|SyntaxError|Unexpected end/i);
 });
 
 test('社媒 API 路由限制查询长度和结果数量，且不将通用搜索配置当成平台 API', async t => {
