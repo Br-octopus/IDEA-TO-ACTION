@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const {
   PPT_ROUTES,
   createPptBrief,
-  normalizePptDraft
+  normalizePptDraft,
+  normalizePptScene
 } = require('../prototype/ppt-scene-schema.js');
 
 test('brief 保留目标、材料用途、受众和约束，并提供稳定默认值', () => {
@@ -73,6 +74,30 @@ test('草稿规范化输出稳定字段并拒绝无效页码和敏感字段', ()
   assert.throws(() => normalizePptDraft({ slides: [{ page: -1 }] }), /页码/);
   assert.throws(() => normalizePptDraft({ slides: [{ page: true }] }), /页码/);
   assert.throws(() => normalizePptDraft({ slides: [{ page: 9007199254740992 }] }), /页码/);
+});
+
+test('场景白名单持久化阶段、大纲核对、路线、来源摘要和逐页处理原因', () => {
+  const scene = normalizePptScene({
+    brief: { idea: '客服流程', route: 'html-final' },
+    status: 'needs-review', stage: 'outline-review', outlineStatus: 'approved',
+    route: { selected: 'html-final', recommended: 'native-ppt' },
+    sources: [{ id: 'source-1', title: '流程手册', url: 'https://example.test/guide', summary: '分流说明', content: '附件原文不得保存', apiKey: 'secret' }],
+    outline: { title: '流程故事', storyLine: '识别后再分流', rationale: '按 5 分钟说明规划', reviewSummary: '覆盖主要路径', reviewIssues: ['补充升级依据'], slides: [{ id: 'o1', page: 1, title: '识别问题', claim: '先核实紧急程度', sourceIds: ['source-1'], evidenceStatus: 'cited' }] },
+    draft: { title: '客服分流', slides: [{ id: 's1', page: 1, title: '已替代页面', disposition: 'deleted', deleteReason: '新流程不再使用此步骤', body: ['旧步骤'], originalAttachmentBody: '不得保存' }] },
+    credentials: { token: 'private' }, originalAttachmentBody: '私有附件原文'
+  });
+
+  assert.equal(scene.stage, 'outline-review');
+  assert.equal(scene.outlineStatus, 'approved');
+  assert.equal(scene.route.selected, 'html-final');
+  assert.equal(scene.sources[0].summary, '分流说明');
+  assert.equal(scene.outline.slides[0].evidenceStatus, 'cited');
+  assert.equal(scene.draft.slides[0].disposition, 'deleted');
+  assert.equal(scene.draft.slides[0].deleteReason, '新流程不再使用此步骤');
+  const serialized = JSON.stringify(scene);
+  for (const secret of ['附件原文不得保存', 'secret', '私有附件原文', '不得保存', 'private']) assert.equal(serialized.includes(secret), false);
+  assert.throws(() => normalizePptScene({ stage: 'unknown-stage' }), /阶段/);
+  assert.throws(() => normalizePptScene({ route: { selected: 'unknown-route' } }), /路线/);
 });
 
 test('列表只规范化上限范围内的条目，超出部分的无效值不影响结果', () => {

@@ -7,6 +7,8 @@
     "undecided", "native-ppt", "image-rebuild", "html-final", "html-to-ppt"
   ]);
   const MATERIAL_ROLES = new Set(["content", "style", "both"]);
+  const SCENE_STAGES = new Set(["brief", "materials", "outline", "outline-review", "slides", "route-prompt"]);
+  const EVIDENCE_STATUSES = new Set(["cited", "needs-verification", "inference"]);
 
   function isObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -117,10 +119,16 @@
       page,
       title: text(input.title, `第 ${page} 页标题`, 200),
       purpose: text(input.purpose, `第 ${page} 页职责`),
+      claim: text(input.claim, `第 ${page} 页主张`),
+      transition: text(input.transition, `第 ${page} 页承接`),
       body,
       visualDescription: text(input.visualDescription, `第 ${page} 页视觉说明`),
       speakerNotes: text(input.speakerNotes, `第 ${page} 页演讲备注`, 2000),
-      sourceIds: sourceIdList(input.sourceIds, `第 ${page} 页来源 ID`, 30)
+      sourceIds: sourceIdList(input.sourceIds, `第 ${page} 页来源 ID`, 30),
+      suggestedSourceIds: sourceIdList(input.suggestedSourceIds, `第 ${page} 页建议来源 ID`, 30),
+      evidenceStatus: EVIDENCE_STATUSES.has(input.evidenceStatus) ? input.evidenceStatus : "needs-verification",
+      disposition: ["keep", "edit", "deleted"].includes(input.disposition) ? input.disposition : "keep",
+      deleteReason: text(input.deleteReason, `第 ${page} 页删除原因`, 500)
     };
   }
 
@@ -135,8 +143,38 @@
 
   function normalizePptScene(input = {}) {
     if (!isObject(input)) throw new TypeError("PPT 场景必须是对象");
+    if (input.stage !== undefined && !SCENE_STAGES.has(input.stage)) throw new TypeError(`阶段无效：${input.stage}`);
+    const routeInput = input.route && isObject(input.route) ? input.route : {};
+    if (routeInput.selected !== undefined) normalizeRoute(routeInput.selected);
+    if (routeInput.recommended !== undefined) normalizeRoute(routeInput.recommended);
+    const sources = Array.isArray(input.sources) ? input.sources.slice(0, 50).filter(isObject).map((source, index) => ({
+      id: text(source.id, `来源[${index}].id`, 120),
+      title: text(source.title, `来源[${index}].title`, 200),
+      url: text(source.url, `来源[${index}].url`, 1000),
+      summary: text(source.summary, `来源[${index}].summary`, 1200),
+      date: text(source.date, `来源[${index}].date`, 80),
+      verificationStatus: text(source.verificationStatus, `来源[${index}].verificationStatus`, 80)
+    })) : [];
+    const outlineInput = isObject(input.outline) ? input.outline : {};
+    const outlineSlides = Array.isArray(outlineInput.slides) ? outlineInput.slides.slice(0, 100).map(normalizeSlide) : [];
     return {
       brief: createPptBrief(input.brief),
+      status: ["draft", "needs-review", "ready", "error"].includes(input.status) ? input.status : "draft",
+      stage: input.stage || "brief",
+      outlineStatus: ["draft", "needs-review", "approved"].includes(input.outlineStatus) ? input.outlineStatus : "draft",
+      route: {
+        selected: normalizeRoute(routeInput.selected),
+        recommended: normalizeRoute(routeInput.recommended)
+      },
+      sources,
+      outline: {
+        title: text(outlineInput.title, "大纲标题", 200),
+        storyLine: text(outlineInput.storyLine, "故事线", 2000),
+        rationale: text(outlineInput.rationale, "页数估算理由", 2000),
+        reviewSummary: text(outlineInput.reviewSummary, "大纲核对总结", 1200),
+        reviewIssues: textList(outlineInput.reviewIssues, "大纲问题", 30),
+        slides: outlineSlides
+      },
       draft: normalizePptDraft(input.draft)
     };
   }

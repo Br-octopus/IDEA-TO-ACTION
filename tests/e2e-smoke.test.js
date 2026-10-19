@@ -170,7 +170,7 @@ test('发送面板接入安全预览并保留编辑与失败状态契约', () =>
   assert.match(app, /syncUneditedSendText\(\)/, '资料变更后必须同步重建未编辑文本');
   assert.match(app, /send-preview-confirm"\)\.disabled\s*=\s*!serviceConfig\.model\?\.configured/);
   assert.match(app, /sendDraft\.confirmedRisk/);
-  assert.match(app, /if \(succeeded\) closeSendPanel\(\);/);
+  assert.match(app, /if \(succeeded\) closeSendPanel\(\{ cancelled: false \}\);/);
   assert.match(app, /近似 token/);
   assert.match(app, /高风险/);
   assert.match(app, /确认高风险内容后再发送/);
@@ -372,4 +372,28 @@ test('社媒研究工作区备份可恢复摘要报告和附件元数据且不�
   for (const secret of ['task-secret', 'C:/private/profile', 'C:/private/storage', 'C:/private/profile-directory', 'cookie-secret', 'session-secret', 'api-secret', 'password-secret', 'attachment-secret']) {
     assert.equal(serialized.includes(secret), false, `备份不应包含 ${secret}`);
   }
+});
+
+test('PPT 规划工作台从提示词 Agent 入口加载并保持文件输出边界', () => {
+  const sceneUi = fs.readFileSync(path.join(root, 'prototype', 'ppt-scene-ui.js'), 'utf8');
+  const retrieverIndex = html.indexOf('src="/prototype/retriever.js"');
+  const schemaIndex = html.indexOf('src="/prototype/ppt-scene-schema.js"');
+  const workflowIndex = html.indexOf('src="/prototype/ppt-scene-workflow.js"');
+  const promptsIndex = html.indexOf('src="/prototype/ppt-scene-prompts.js"');
+  const coordinatorIndex = html.indexOf('src="/prototype/ppt-scene-coordinator.js"');
+  const uiIndex = html.indexOf('src="/prototype/ppt-scene-ui.js"');
+  const appIndex = html.indexOf('src="/prototype/app.js"');
+  assert.ok(schemaIndex >= 0 && schemaIndex < coordinatorIndex, 'PPT schema 必须先于 coordinator 加载');
+  assert.ok(retrieverIndex >= 0 && retrieverIndex < coordinatorIndex, '资料检索器必须先于 coordinator 加载');
+  assert.ok(workflowIndex >= 0 && workflowIndex < coordinatorIndex, 'PPT workflow 必须先于 coordinator 加载');
+  assert.ok(promptsIndex >= 0 && promptsIndex < coordinatorIndex, 'PPT prompts 必须先于 coordinator 加载');
+  assert.ok(coordinatorIndex < uiIndex && uiIndex < appIndex, 'coordinator、UI、app 必须按顺序加载');
+  assert.match(html, /id="ppt-scene-root"/);
+  assert.match(app, /createPptSceneCoordinator\(/);
+  assert.match(app, /createPptSceneUI\(/);
+  assert.match(app, /searchWeb/);
+  assert.match(app, /searchLocalSources/);
+  assert.match(app, /createSocialResearchPlan/);
+  assert.match(sceneUi, /normalizePptScene/);
+  assert.doesNotMatch(app, /writeFile|saveAs\(|createPresentation|pptxgen/i, '规划工作台不能写入最终演示文稿或成品文件');
 });

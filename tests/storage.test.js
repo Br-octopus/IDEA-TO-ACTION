@@ -227,7 +227,7 @@ test('Agent 澄清和拒绝联网决定在持久化、迁移及重载后保留',
   assert.equal(restored.stage, 'plan');
 });
 
-test('PPT 场景只持久化规范化 brief 和草稿字段', () => {
+test('PPT 场景持久化扩展白名单并丢弃附件原文与凭证', () => {
   const storage = memoryStorage();
   const saved = saveState(storage, {
     promptAgentTasks: [{
@@ -239,8 +239,12 @@ test('PPT 场景只持久化规范化 brief 和草稿字段', () => {
           materials: [{ id: 'f1', role: 'both', kind: 'pptx', body: '原文件正文不应保存' }],
           apiKey: 'ppt-secret'
         },
-        draft: { title: '流程', slides: [{ id: 's1', title: '分流', body: ['立即处理'] }], unknown: 'drop-me' },
-        unknown: 'drop-me-too'
+        status: 'needs-review', stage: 'outline-review', outlineStatus: 'approved',
+        route: { selected: 'native-ppt', recommended: 'native-ppt' },
+        sources: [{ id: 'source-1', title: '流程手册', summary: '已核对分流步骤', content: '附件原文不可保存', apiKey: 'source-secret' }],
+        outline: { title: '客服流程', storyLine: '先识别再分流', reviewSummary: '覆盖主要路径', slides: [{ id: 'o1', page: 1, title: '识别', claim: '先判断紧急度', sourceIds: ['source-1'], evidenceStatus: 'cited' }] },
+        draft: { title: '流程', slides: [{ id: 's1', title: '分流', body: ['立即处理'], disposition: 'deleted', deleteReason: '改用新流程', originalAttachmentBody: '不得持久化' }], unknown: 'drop-me' },
+        unknown: 'drop-me-too', originalAttachmentBody: '私有附件原文'
       }
     }]
   });
@@ -253,8 +257,20 @@ test('PPT 场景只持久化规范化 brief 和草稿字段', () => {
   assert.equal(loaded.brief.apiKey, undefined);
   assert.equal(loaded.brief.materials[0].body, undefined);
   assert.equal(loaded.draft.unknown, undefined);
+  assert.equal(loaded.draft.slides[0].disposition, 'deleted');
+  assert.equal(loaded.draft.slides[0].deleteReason, '改用新流程');
+  assert.equal(loaded.outline.storyLine, '先识别再分流');
+  assert.equal(loaded.outline.slides[0].evidenceStatus, 'cited');
+  assert.equal(loaded.sources[0].summary, '已核对分流步骤');
+  assert.equal(loaded.status, 'needs-review');
+  assert.equal(loaded.stage, 'outline-review');
+  assert.equal(loaded.outlineStatus, 'approved');
+  assert.equal(loaded.route.selected, 'native-ppt');
   assert.equal(loaded.unknown, undefined);
   assert.equal(serialized.includes('ppt-secret'), false);
+  assert.equal(serialized.includes('source-secret'), false);
+  assert.equal(serialized.includes('附件原文不可保存'), false);
+  assert.equal(serialized.includes('私有附件原文'), false);
   assert.equal(serialized.includes('原文件正文不应保存'), false);
   assert.equal(serialized.includes('drop-me'), false);
 });
