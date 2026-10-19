@@ -1,30 +1,7 @@
 const { normalizeSocialResult } = require('../prototype/social-research-schema.js');
 
-const PLATFORM_CONFIG = Object.freeze({
-  xiaohongshu: {
-    searchUrl: query => `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(query)}`,
-    loginScript: 'xiaohongshu.login',
-    searchScript: 'xiaohongshu.search'
-  },
-  reddit: {
-    searchUrl: query => `https://www.reddit.com/search/?q=${encodeURIComponent(query)}`,
-    loginScript: 'reddit.login',
-    searchScript: 'reddit.search'
-  },
-  youtube: {
-    searchUrl: query => `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
-    loginScript: 'youtube.login',
-    searchScript: 'youtube.search'
-  }
-});
-const RESULT_HOSTS = Object.freeze({
-  xiaohongshu: new Set(['www.xiaohongshu.com', 'xiaohongshu.com']),
-  reddit: new Set(['www.reddit.com', 'reddit.com']),
-  youtube: new Set(['www.youtube.com', 'youtube.com'])
-});
-
-// 选择器只覆盖当前稳定的语义标记和页面结构；平台改版时明确报错，不猜测空结果。
-const PAGE_SCRIPTS = {
+// 页面结构会变化；只有可识别容器和明确空结果标记时才报告搜索受支持。
+const PAGE_SCRIPTS = Object.freeze({
   'xiaohongshu.login': () => {
     const loggedIn = Boolean(document.querySelector('[class*="user"], [class*="avatar"], a[href*="/user/profile/"]'));
     const loginPrompt = Boolean(document.querySelector('[class*="login"], button[class*="login"]'));
@@ -32,7 +9,10 @@ const PAGE_SCRIPTS = {
   },
   'xiaohongshu.search': () => {
     const cards = [...document.querySelectorAll('section.note-item, [class*="note-item"]')];
-    if (!cards.length && !document.querySelector('[class*="search-result"], [class*="result-list"]')) return { supported: false };
+    const container = document.querySelector('[class*="search-result"], [class*="result-list"]');
+    const empty = document.querySelector('[class*="empty"], [class*="no-result"]');
+    if (!cards.length && empty) return { supported: true, items: [] };
+    if (!cards.length || !container) return { supported: false };
     return { supported: true, items: cards.map(card => ({
       title: card.querySelector('[class*="title"]')?.innerText?.trim(),
       url: card.querySelector('a[href]')?.href,
@@ -47,7 +27,10 @@ const PAGE_SCRIPTS = {
   },
   'reddit.search': () => {
     const cards = [...document.querySelectorAll('shreddit-post, [data-testid="search-post-unit"]')];
-    if (!cards.length && !document.querySelector('faceplate-partial, [data-testid*="search"]')) return { supported: false };
+    const container = document.querySelector('faceplate-partial, [data-testid*="search"]');
+    const empty = document.querySelector('faceplate-empty-state, [data-testid*="empty"], [class*="no-results"]');
+    if (!cards.length && empty) return { supported: true, items: [] };
+    if (!cards.length || !container) return { supported: false };
     return { supported: true, items: cards.map(card => ({
       title: card.getAttribute('post-title') || card.querySelector('a[slot="title"], h3')?.innerText?.trim(),
       url: card.getAttribute('permalink') || card.querySelector('a[href*="/comments/"]')?.href,
@@ -62,7 +45,10 @@ const PAGE_SCRIPTS = {
   },
   'youtube.search': () => {
     const cards = [...document.querySelectorAll('ytd-video-renderer')];
-    if (!cards.length && !document.querySelector('ytd-search[has-results], #section-list')) return { supported: false };
+    const container = document.querySelector('ytd-search[has-results], #section-list');
+    const empty = document.querySelector('ytd-message-renderer, #zero-results');
+    if (!cards.length && empty) return { supported: true, items: [] };
+    if (!cards.length || !container) return { supported: false };
     return { supported: true, items: cards.map(card => ({
       title: card.querySelector('#video-title')?.textContent?.trim(),
       url: card.querySelector('#video-title')?.href,
@@ -70,7 +56,27 @@ const PAGE_SCRIPTS = {
       summary: card.querySelector('#description-text')?.textContent?.trim()
     })) };
   }
-};
+});
+
+const PLATFORM_CONFIG = Object.freeze({
+  xiaohongshu: {
+    searchUrl: query => `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(query)}`,
+    loginScript: 'xiaohongshu.login', searchScript: 'xiaohongshu.search'
+  },
+  reddit: {
+    searchUrl: query => `https://www.reddit.com/search/?q=${encodeURIComponent(query)}`,
+    loginScript: 'reddit.login', searchScript: 'reddit.search'
+  },
+  youtube: {
+    searchUrl: query => `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+    loginScript: 'youtube.login', searchScript: 'youtube.search'
+  }
+});
+const RESULT_HOSTS = Object.freeze({
+  xiaohongshu: new Set(['www.xiaohongshu.com', 'xiaohongshu.com']),
+  reddit: new Set(['www.reddit.com', 'reddit.com']),
+  youtube: new Set(['www.youtube.com', 'youtube.com'])
+});
 
 function unsupported(operation) {
   return { status: 'unsupported', operation, code: 'UNSUPPORTED' };
@@ -78,9 +84,6 @@ function unsupported(operation) {
 
 function createBrowserPlatformAdapters({ manager, waitForNavigation = async () => {}, now = () => new Date().toISOString() }) {
   if (!manager) throw new TypeError('manager 为必需依赖');
-  if (typeof manager.registerReadOnlyScript === 'function') {
-    for (const [name, script] of Object.entries(PAGE_SCRIPTS)) manager.registerReadOnlyScript(name, script);
-  }
 
   return Object.freeze(Object.fromEntries(Object.entries(PLATFORM_CONFIG).map(([platform, config]) => {
     let sessionId = '';
@@ -91,7 +94,8 @@ function createBrowserPlatformAdapters({ manager, waitForNavigation = async () =
           return { status: 'adapter-error', code: 'UNSUPPORTED_PAGE', message: `${platform} 页面结构暂不支持` };
         }
         return { status: 'ok', data: result };
-      } catch {
+      } catch (error) {
+        if (error.code === 'SESSION_CLOSED') return { status: 'closed', code: 'SESSION_CLOSED' };
         return { status: 'adapter-error', code: 'PAGE_READ_FAILED', message: `${platform} 页面读取失败` };
       }
     }
@@ -109,9 +113,12 @@ function createBrowserPlatformAdapters({ manager, waitForNavigation = async () =
         const startUrl = config.searchUrl(normalizedQuery);
         try {
           const navigation = await manager.navigateSession(sessionId, startUrl);
-          if (navigation.status === 'timeout') return { status: 'timeout', platform, results: [] };
+          if (navigation.status === 'closed') return { status: 'closed', code: 'SESSION_CLOSED', platform, results: [] };
+          if (navigation.status === 'timeout') return { status: 'timeout', code: 'NAVIGATION_TIMEOUT', platform, results: [] };
           await waitForNavigation(platform);
-        } catch {
+        } catch (error) {
+          if (error.code === 'SESSION_CLOSED') return { status: 'closed', code: 'SESSION_CLOSED', platform, results: [] };
+          if (error.code === 'NAVIGATION_TIMEOUT') return { status: 'timeout', code: 'NAVIGATION_TIMEOUT', platform, results: [] };
           return { status: 'adapter-error', code: 'NAVIGATION_FAILED', platform, results: [] };
         }
         const response = await read(config.searchScript, {});
@@ -143,4 +150,8 @@ function createBrowserPlatformAdapters({ manager, waitForNavigation = async () =
   })));
 }
 
-module.exports = { createBrowserPlatformAdapters, PLATFORM_CONFIG, PAGE_SCRIPTS };
+module.exports = {
+  createBrowserPlatformAdapters,
+  PLATFORM_CONFIG,
+  PAGE_SCRIPTS
+};

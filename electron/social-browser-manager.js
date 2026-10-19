@@ -5,6 +5,7 @@ const PLATFORM_HOSTS = Object.freeze({
 });
 const NAVIGATION_TIMEOUT_MS = 15000;
 const PROFILE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const READ_ONLY_SCRIPTS = Object.freeze(new Map(Object.entries(require('./social-browser-adapters.js').PAGE_SCRIPTS)));
 
 function validateProfile(platform, profileId) {
   if (!Object.hasOwn(PLATFORM_HOSTS, platform)) throw new TypeError('不支持的平台');
@@ -30,19 +31,11 @@ function validatePlatformUrl(platform, value) {
 function createSocialBrowserManager({ BrowserWindow, session, app, now = () => new Date().toISOString(), navigationTimeoutMs = NAVIGATION_TIMEOUT_MS }) {
   if (!BrowserWindow || !session || !app) throw new TypeError('BrowserWindow、session 和 app 为必需依赖');
   const sessions = new Map();
-  const registeredScripts = new Map();
 
   function getRecord(sessionId) {
     const record = sessions.get(sessionId);
     if (!record) throw Object.assign(new Error('浏览器会话不存在'), { code: 'SESSION_NOT_FOUND' });
     return record;
-  }
-
-  function registerReadOnlyScript(scriptName, script) {
-    if (typeof scriptName !== 'string' || !/^[a-z][a-zA-Z0-9.:-]{0,79}$/.test(scriptName) || typeof script !== 'function') {
-      throw new TypeError('只读脚本注册参数无效');
-    }
-    registeredScripts.set(scriptName, script);
   }
 
   async function openPlatformSession({ platform, profileId, startUrl }) {
@@ -67,6 +60,7 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
     sessions.set(sessionId, record);
     window.on?.('closed', () => {
       record.status = 'closed';
+      record.errorCode = 'SESSION_CLOSED';
       record.updatedAt = now();
       record.window = null;
     });
@@ -98,6 +92,7 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
     const url = validatePlatformUrl(record.platform, value);
     if (!record.window || record.window.isDestroyed?.()) {
       record.status = 'closed';
+      record.errorCode = 'SESSION_CLOSED';
       return publicStatus(record);
     }
     record.status = 'navigating';
@@ -113,9 +108,11 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
       record.currentUrl = url;
       record.status = 'ready';
     } catch (error) {
-      record.status = error.code === 'NAVIGATION_TIMEOUT' ? 'timeout' : 'failed';
-      record.errorCode = record.status === 'timeout' ? 'NAVIGATION_TIMEOUT' : 'NAVIGATION_FAILED';
-      throw Object.assign(new Error(record.status === 'timeout' ? '页面导航超时' : '页面导航失败'), { code: record.errorCode });
+      const closed = !record.window || record.window.isDestroyed?.() || error.code === 'SESSION_CLOSED';
+      record.status = closed ? 'closed' : error.code === 'NAVIGATION_TIMEOUT' ? 'timeout' : 'failed';
+      record.errorCode = closed ? 'SESSION_CLOSED' : record.status === 'timeout' ? 'NAVIGATION_TIMEOUT' : 'NAVIGATION_FAILED';
+      const message = closed ? '浏览器会话已关闭' : record.status === 'timeout' ? '页面导航超时' : '页面导航失败';
+      throw Object.assign(new Error(message), { code: record.errorCode });
     } finally {
       clearTimeout(timeout);
     }
@@ -129,7 +126,7 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
 
   async function executeReadOnlyScript(sessionId, scriptName, args = {}) {
     const record = getRecord(sessionId);
-    const script = registeredScripts.get(scriptName);
+    const script = READ_ONLY_SCRIPTS.get(scriptName);
     if (!script) throw Object.assign(new Error('未注册的只读脚本'), { code: 'SCRIPT_NOT_ALLOWED' });
     if (!record.window || record.window.isDestroyed?.()) throw Object.assign(new Error('浏览器会话已关闭'), { code: 'SESSION_CLOSED' });
     const safeArgs = JSON.stringify(args ?? {});
@@ -142,6 +139,7 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
     if (!record) return { sessionId, status: 'closed' };
     if (record.window && !record.window.isDestroyed?.()) record.window.close();
     record.status = 'closed';
+    record.errorCode = 'SESSION_CLOSED';
     record.window = null;
     record.updatedAt = now();
     return publicStatus(record);
@@ -160,7 +158,7 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
 
   return Object.freeze({
     openPlatformSession, navigateSession, getSessionStatus, executeReadOnlyScript,
-    closeSession, clearPlatformProfile, registerReadOnlyScript
+    closeSession, clearPlatformProfile
   });
 }
 

@@ -1,22 +1,21 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createBrowserPlatformAdapters } = require('../electron/social-browser-adapters');
+const vm = require('node:vm');
+const { createBrowserPlatformAdapters, PAGE_SCRIPTS } = require('../electron/social-browser-adapters');
 
 function createAdapterHarness({ scripts = {} } = {}) {
-  const registered = new Map();
   const navigations = [];
   const manager = {
-    registerReadOnlyScript: (name, script) => registered.set(name, script),
     navigateSession: async (sessionId, url) => { navigations.push({ sessionId, url }); return { status: 'ready' }; },
     executeReadOnlyScript: async (_sessionId, name) => scripts[name]
   };
-  return { adapters: createBrowserPlatformAdapters({ manager, now: () => '2026-10-19T00:00:00.000Z' }), registered, navigations };
+  return { adapters: createBrowserPlatformAdapters({ manager, now: () => '2026-10-19T00:00:00.000Z' }), manager, navigations };
 }
 
-test('三平台都注册固定登录检查与搜索脚本', () => {
-  const { adapters, registered } = createAdapterHarness();
+test('三平台适配器只使用 manager 固定脚本名，不注册可执行代码', () => {
+  const { adapters, manager } = createAdapterHarness();
   assert.deepEqual(Object.keys(adapters), ['xiaohongshu', 'reddit', 'youtube']);
-  assert.equal(registered.size, 6);
+  assert.equal(manager.registerReadOnlyScript, undefined);
   for (const adapter of Object.values(adapters)) {
     assert.equal(typeof adapter.checkReady, 'function');
     assert.equal(typeof adapter.search, 'function');
@@ -58,9 +57,42 @@ test('三平台搜索结果只保留 schema 标准字段并标记 browser/unveri
     assert.equal(response.results[0].platform, platform);
     assert.equal(response.results[0].retrievalMethod, 'browser');
     assert.equal(response.results[0].evidenceStatus, 'unverified');
+    assert.equal(response.results[0].capturedAt, '2026-10-19T00:00:00.000Z');
     assert.deepEqual(response.results[0].searchQueries, ['主题 query']);
     assert.equal(response.results[0].html, undefined);
     assert.match(navigations[0].url, /%E4%B8%BB%E9%A2%98%20query/);
+  }
+});
+
+test('各平台存在结果容器但卡片选择器失配时标记 unsupported', () => {
+  const cases = [
+    ['xiaohongshu.search', '[class*="search-result"]'],
+    ['reddit.search', 'faceplate-partial'],
+    ['youtube.search', '#section-list']
+  ];
+  for (const [scriptName, containerSelector] of cases) {
+    const document = {
+      querySelectorAll: () => [],
+      querySelector: selector => selector.split(', ').includes(containerSelector) ? {} : null
+    };
+    const result = vm.runInNewContext(`(${PAGE_SCRIPTS[scriptName].toString()})()`, { document });
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), { supported: false }, scriptName);
+  }
+});
+
+test('已知空结果标记允许返回受支持的空列表', () => {
+  const cases = [
+    ['xiaohongshu.search', '[class*="no-result"]'],
+    ['reddit.search', '[data-testid*="empty"]'],
+    ['youtube.search', 'ytd-message-renderer']
+  ];
+  for (const [scriptName, emptySelector] of cases) {
+    const document = {
+      querySelectorAll: () => [],
+      querySelector: selector => selector.split(', ').includes(emptySelector) ? {} : null
+    };
+    const result = vm.runInNewContext(`(${PAGE_SCRIPTS[scriptName].toString()})()`, { document });
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), { supported: true, items: [] }, scriptName);
   }
 });
 
@@ -84,4 +116,15 @@ test('拒绝空查询和跨平台结果 URL', async () => {
   await assert.rejects(adapter.search('   '), /不能为空/);
   const result = await adapter.search('test');
   assert.equal(result.results.length, 0);
+});
+
+test('导航超时和会话关闭保留稳定状态码', async () => {
+  for (const [code, expectedStatus] of [['NAVIGATION_TIMEOUT', 'timeout'], ['SESSION_CLOSED', 'closed']]) {
+    const harness = createAdapterHarness();
+    harness.adapters.reddit.attachSession('reddit:profile');
+    harness.manager.navigateSession = async () => { throw Object.assign(new Error('navigation'), { code }); };
+    const response = await harness.adapters.reddit.search('query');
+    assert.equal(response.status, expectedStatus);
+    assert.equal(response.code, code);
+  }
 });

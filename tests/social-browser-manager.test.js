@@ -64,12 +64,15 @@ test('关闭窗口和按指定 profile 清理只触及该 profile', async () => 
   const { manager, partitions, windows, cleared } = createHarness();
   await manager.openPlatformSession({ platform: 'reddit', profileId: 'one', startUrl: 'https://reddit.com/' });
   await manager.openPlatformSession({ platform: 'reddit', profileId: 'two', startUrl: 'https://reddit.com/' });
-  windows[0].close();
-  assert.equal(manager.getSessionStatus('reddit:one').status, 'closed');
   await manager.clearPlatformProfile('reddit', 'two');
   assert.equal(windows[1].destroyed, true);
   assert.deepEqual(cleared, ['storage', 'cache']);
   assert.deepEqual(partitions.slice(-1), ['persist:forward-step-social-reddit-two']);
+  assert.equal(manager.getSessionStatus('reddit:one').status, 'ready');
+  const otherProfile = await manager.navigateSession('reddit:one', 'https://reddit.com/search/?q=still-open');
+  assert.equal(otherProfile.status, 'ready');
+  assert.equal(windows[0].url, 'https://reddit.com/search/?q=still-open');
+  assert.equal(manager.getSessionStatus('reddit:two').status, 'closed');
 });
 
 test('导航超时会标记 timeout 并对调用方返回稳定错误', async () => {
@@ -79,22 +82,38 @@ test('导航超时会标记 timeout 并对调用方返回稳定错误', async ()
   assert.equal(manager.getSessionStatus('reddit:slow').status, 'timeout');
 });
 
-test('拒绝非白名单 URL、路径型 profile 与未注册脚本', async () => {
+test('拒绝非白名单 URL、路径型 profile 与非固定脚本名', async () => {
   const { manager } = createHarness();
-  await assert.rejects(manager.openPlatformSession({ platform: 'reddit', profileId: 'x', startUrl: 'https://evil.example/' }), /白名单/);
+  for (const startUrl of [
+    'http://reddit.com/',
+    'https://www.youtube.com/',
+    'https://user:pass@reddit.com/'
+  ]) {
+    await assert.rejects(manager.openPlatformSession({ platform: 'reddit', profileId: 'x', startUrl }), /白名单/);
+  }
   await assert.rejects(manager.openPlatformSession({ platform: 'reddit', profileId: '../secret', startUrl: 'https://reddit.com/' }), /稳定标识/);
   const opened = await manager.openPlatformSession({ platform: 'reddit', profileId: 'ok', startUrl: 'https://reddit.com/' });
+  assert.equal(manager.registerReadOnlyScript, undefined);
   await assert.rejects(manager.executeReadOnlyScript(opened.sessionId, 'alert(1)', {}), error => error.code === 'SCRIPT_NOT_ALLOWED');
+  await assert.rejects(manager.executeReadOnlyScript(opened.sessionId, 'reddit.search.extra', {}), error => error.code === 'SCRIPT_NOT_ALLOWED');
 });
 
-test('只执行注册的固定脚本并以 JSON 数据传入参数', async () => {
+test('固定只读脚本使用 JSON 参数；任意函数不能加入执行白名单', async () => {
   const { manager, windows } = createHarness();
   const opened = await manager.openPlatformSession({ platform: 'reddit', profileId: 'safe', startUrl: 'https://reddit.com/' });
   let source;
   windows[0].webContents.executeJavaScript = async value => { source = value; return 'ok'; };
-  manager.registerReadOnlyScript('reddit.search', args => document.title + args.query);
   assert.equal(await manager.executeReadOnlyScript(opened.sessionId, 'reddit.search', { query: '"); alert(1);//' }), 'ok');
-  assert.match(source, /reddit\.search|document\.title/);
+  assert.match(source, /document\.querySelectorAll/);
   assert.doesNotMatch(source.slice(0, source.indexOf('JSON.parse')), /alert\(1\)/);
   assert.match(source, /JSON\.parse/);
+  assert.equal(manager.registerReadOnlyScript, undefined);
+});
+
+test('窗口关闭后只读脚本返回稳定 SESSION_CLOSED', async () => {
+  const { manager, windows } = createHarness();
+  const opened = await manager.openPlatformSession({ platform: 'youtube', profileId: 'closed', startUrl: 'https://youtube.com/' });
+  windows[0].close();
+  assert.equal(manager.getSessionStatus(opened.sessionId).status, 'closed');
+  await assert.rejects(manager.executeReadOnlyScript(opened.sessionId, 'youtube.search'), error => error.code === 'SESSION_CLOSED');
 });
