@@ -138,6 +138,14 @@
       assertAtLeastOnePlatformReady(task, task.preparedPlatforms || []);
       return { ...task, status: 'searching' };
     }
+    if (type === 'cancel') {
+      const cancellableStatuses = new Set([
+        'awaiting-plan-confirmation', 'awaiting-platform-preparation', 'searching',
+        'report-ready', 'awaiting-refinement-confirmation', 'awaiting-save'
+      ]);
+      if (!cancellableStatuses.has(task.status)) throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);
+      return { ...task, status: 'cancelled' };
+    }
     const transitions = {
       finish: ['searching', 'report-ready'],
       request_refinement: ['report-ready', 'awaiting-refinement-confirmation'],
@@ -145,8 +153,7 @@
       report_ready: ['searching', 'report-ready'],
       request_save: ['report-ready', 'awaiting-save'],
       save: ['awaiting-save', 'saved'],
-      partial_failure: ['searching', 'partial-failure'],
-      cancel: [task.status, 'cancelled']
+      partial_failure: ['searching', 'partial-failure']
     };
     const transition = transitions[type];
     if (!transition || task.status !== transition[0]) throw new Error(`不允许的研究任务状态迁移: ${task.status} -> ${type}`);

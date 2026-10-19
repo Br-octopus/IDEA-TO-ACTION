@@ -285,6 +285,18 @@
       failureReason: text(source.failureReason),
       reportError: text(source.reportError),
       budget: normalizeBudget(source.budget),
+      usage: isObject(source.usage) ? {
+        platforms: nonNegativeInteger(source.usage.platforms),
+        usedPlatforms: listValue(source.usage.usedPlatforms),
+        queriesByPlatform: isObject(source.usage.queriesByPlatform)
+          ? Object.fromEntries(Object.entries(source.usage.queriesByPlatform).map(([platform, count]) => [text(platform).toLowerCase(), nonNegativeInteger(count)]).filter(([platform]) => platform))
+          : {},
+        pages: nonNegativeInteger(source.usage.pages),
+        details: nonNegativeInteger(source.usage.details),
+        durationMs: Math.max(0, Number.isFinite(Number(source.usage.durationMs)) ? Number(source.usage.durationMs) : 0),
+        attachmentBytes: nonNegativeInteger(source.usage.attachmentBytes),
+        analysisTokens: nonNegativeInteger(source.usage.analysisTokens)
+      } : { platforms: 0, usedPlatforms: [], queriesByPlatform: {}, pages: 0, details: 0, durationMs: 0, attachmentBytes: 0, analysisTokens: 0 },
       queries: listValue(source.queries),
       resultIds,
       results,

@@ -42,7 +42,19 @@ test('UI 调用与 preload 一致的平台 API 签名，并把计划生命周期
     'desktopApi.social.openLogin(platform, id)',
     'desktopApi.social.check(platform, id)',
     'desktopApi.social.clearProfile(platform, id)',
-    'coordinator.createPlan(', 'coordinator.confirmPlan(task.id)', 'coordinator.run(task.id)',
+    'coordinator.createPlan(', 'coordinator.confirmPlan(task.id)', 'coordinator.run(task.id, { onEvent:',
     'coordinator.cancel(task.id)', 'coordinator.saveSelected(task.id, ids)'
   ]) assert.ok(source.includes(signature), `缺少 UI 事件接线 ${signature}`);
+});
+
+test('运行控制包含暂停/继续、运行中取消和实时执行上下文', () => {
+  const html = fs.readFileSync(path.join(root, 'prototype/index.html'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'prototype/social-research-ui.js'), 'utf8');
+  for (const id of ['social-research-pause', 'social-research-progress-detail']) {
+    assert.ok(html.includes(`id="${id}"`), `缺少运行控制入口 ${id}`);
+  }
+  for (const signature of ['coordinator.pause(task.id)', 'coordinator.resume(task.id)', 'onEvent:', 'platform-start', 'query-start', 'result-count', 'platform-finish']) {
+    assert.ok(source.includes(signature), `缺少实时控制或进度接线 ${signature}`);
+  }
+  assert.ok(source.includes('["awaiting-plan-confirmation", "awaiting-platform-preparation", "searching"]'), '运行中应允许请求取消');
 });

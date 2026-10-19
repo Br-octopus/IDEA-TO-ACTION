@@ -27,6 +27,9 @@
     let activeTaskId = "";
     let checking = new Set();
     let running = false;
+    let paused = false;
+    let cancellationRequested = false;
+    let liveProgress = null;
     let selectedResultIds = new Set();
 
     function profileId(platform) { return `social-research-${platform}`; }
@@ -69,8 +72,16 @@
           && (item.connection.browserReady || item.connection.browserPrepared || item.connection.apiConfigured));
       });
       $("social-research-plan-confirm").disabled = task.status !== "awaiting-plan-confirmation" || !ready || running;
-      $("social-research-cancel").disabled = !["awaiting-plan-confirmation", "awaiting-platform-preparation"].includes(task.status) || running;
-      setStatus(`${task.status}${ready ? " · 平台准备完成" : " · 先检查所选平台"}`);
+      $("social-research-pause").disabled = !running || cancellationRequested;
+      $("social-research-pause").textContent = paused ? "继续" : "暂停";
+      $("social-research-cancel").disabled = cancellationRequested || !["awaiting-plan-confirmation", "awaiting-platform-preparation", "searching"].includes(task.status);
+      if (running && liveProgress) {
+        const platform = names[liveProgress.platform] || liveProgress.platform || "";
+        const mode = { auto: "自动回退", api: "API", browser: "真实浏览器" }[liveProgress.mode] || liveProgress.mode || "待确定";
+        $("social-research-progress-detail").textContent = `${paused ? "已暂停" : "执行中"} · ${platform} · ${mode} · 查询：${liveProgress.query || "等待查询"} · 已收集 ${liveProgress.resultCount || 0} 条`;
+      }
+      if (!running) $("social-research-progress-detail").textContent = "";
+      if (!running && !["cancelled", "awaiting-save", "partial-failure", "failed"].includes(task.status)) setStatus(`${task.status}${ready ? " · 平台准备完成" : " · 先检查所选平台"}`);
     }
 
     function renderResults(task) {
@@ -151,17 +162,45 @@
       })) { setStatus("请先检查所有所选平台。"); return; }
       try {
         await coordinator.confirmPlan(task.id);
-        running = true; $("social-research-progress").style.width = "20%"; render(); setStatus("已确认计划，正在检查平台并执行只读研究…");
-        const result = await coordinator.run(task.id);
-        running = false; $("social-research-progress").style.width = result.status === "awaiting-save" ? "100%" : "60%"; render();
-        setStatus(`研究结束：${result.status} · ${result.results?.length || 0} 条结果${Object.keys(result.platformErrors || {}).length ? " · 部分平台未完成" : ""}`);
-      } catch (error) { running = false; render(); setStatus(error.message || "研究执行失败"); }
+        running = true; paused = false; cancellationRequested = false; liveProgress = null;
+        let completedQueries = 0;
+        $("social-research-progress").style.width = "0%";
+        $("social-research-progress-detail").textContent = "正在检查平台…";
+        render(); setStatus("已确认计划，正在检查平台；取消将在当前平台/查询请求完成后生效。");
+        const result = await coordinator.run(task.id, { onEvent: event => {
+          liveProgress = { ...liveProgress, ...event };
+          if (event.type === "platform-start") liveProgress.query = "等待查询";
+          if (event.type === "query-start") liveProgress.query = event.query;
+          if (event.type === "platform-finish") liveProgress.query = "平台完成";
+          if (event.type === "result-count") completedQueries += 1;
+          const plannedQueries = Math.max(1, (task.platforms || []).reduce((sum, platform) => sum + (task.plan.platformRoles.find(role => role.platform === platform)?.queries?.length || 1), 0));
+          $("social-research-progress").style.width = `${Math.min(95, Math.round(completedQueries / plannedQueries * 95))}%`;
+          render();
+        } });
+        running = false; paused = false; cancellationRequested = false;
+        $("social-research-progress").style.width = result.status === "awaiting-save" ? "100%" : result.status === "cancelled" ? "0%" : "60%";
+        render();
+        setStatus(result.status === "cancelled" ? "已取消：当前请求结束后停止，未完成结果已丢弃。" : `研究结束：${result.status} · ${result.results?.length || 0} 条结果${Object.keys(result.platformErrors || {}).length ? " · 部分平台未完成" : ""}`);
+      } catch (error) { running = false; paused = false; cancellationRequested = false; render(); setStatus(error.message || "研究执行失败"); }
     }
     function cancelTask() {
       const task = currentTask();
       if (!task) return;
-      try { coordinator.cancel(task.id); render(); setStatus("研究计划已取消，未开始搜索。"); }
+      try {
+        coordinator.cancel(task.id);
+        if (running) { cancellationRequested = true; render(); setStatus("已请求取消，将在当前平台/查询请求完成后生效；未完成结果不会保留或生成报告。"); }
+        else { render(); setStatus("研究计划已取消，未开始搜索。"); }
+      }
       catch (error) { setStatus(error.message || "当前阶段不能取消"); }
+    }
+    function togglePause() {
+      const task = currentTask();
+      if (!task || !running || cancellationRequested) return;
+      try {
+        if (paused) { coordinator.resume(task.id); paused = false; setStatus("已继续研究。"); }
+        else { coordinator.pause(task.id); paused = true; setStatus("已暂停；当前平台/查询请求完成后等待继续，不会继续消耗预算。"); }
+        render();
+      } catch (error) { setStatus(error.message || "无法更改运行状态"); }
     }
     function saveSelection() {
       const task = currentTask(); if (!task) return;
@@ -173,6 +212,7 @@
     $("social-research-entry").addEventListener("submit", createPlan);
     $("social-platform-refresh").addEventListener("click", () => refreshPlatforms().catch(error => setStatus(error.message)));
     $("social-research-plan-confirm").addEventListener("click", confirmAndRun);
+    $("social-research-pause").addEventListener("click", togglePause);
     $("social-research-cancel").addEventListener("click", cancelTask);
     $("social-research-save-selection").addEventListener("click", saveSelection);
     $("social-platform-cards").addEventListener("click", event => {

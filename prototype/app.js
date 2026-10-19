@@ -22,6 +22,7 @@
         throw new TypeError("研究协调器需要 desktopApi.requestModel 和 desktopApi.social");
       }
       let state = storage.migrateState(initialState || storage.createEmptyState());
+      const activeRuns = new Map();
       const persist = () => {
         state = typeof persistState === "function" ? persistState(state) || state
           : typeof localStorage !== "undefined" ? storage.saveState(localStorage, state)
@@ -87,17 +88,64 @@
       const cancel = taskId => {
         const task = findTask(taskId);
         if (!task) throw new Error("研究任务不存在");
-        return updateTask(workflow.rejectResearchPlan(task, "用户取消"));
+        const activeRun = activeRuns.get(taskId);
+        if (activeRun) {
+          activeRun.cancelRequested = true;
+          activeRun.paused = false;
+          activeRun.resume();
+          return task;
+        }
+        if (task.status === "awaiting-plan-confirmation") return updateTask(workflow.rejectResearchPlan(task, "用户取消"));
+        const cancelled = workflow.transitionResearchTask(task, { type: "cancel" });
+        return updateTask({ ...cancelled, rejectionReason: "用户取消" });
       };
-      const run = async taskId => {
+      const pause = taskId => {
+        const activeRun = activeRuns.get(taskId);
+        if (!activeRun) throw new Error("研究任务当前未运行");
+        activeRun.paused = true;
+        return findTask(taskId);
+      };
+      const resume = taskId => {
+        const activeRun = activeRuns.get(taskId);
+        if (!activeRun) throw new Error("研究任务当前未运行");
+        activeRun.paused = false;
+        activeRun.resume();
+        return findTask(taskId);
+      };
+      const run = async (taskId, { onEvent } = {}) => {
         const current = findTask(taskId);
         if (!current) throw new Error("研究任务不存在");
         if (current.status !== "awaiting-platform-preparation") throw new Error("研究任务不在可运行的准备状态");
+        let wakeResume;
+        const activeRun = {
+          paused: false,
+          cancelRequested: false,
+          resume: () => { if (wakeResume) { wakeResume(); wakeResume = null; } },
+          emit: event => { if (typeof onEvent === "function") { try { onEvent(event); } catch {} } }
+        };
+        activeRuns.set(taskId, activeRun);
+        const checkpoint = async () => {
+          if (activeRun.cancelRequested) return false;
+          while (activeRun.paused && !activeRun.cancelRequested) {
+            await new Promise(resolve => { wakeResume = resolve; });
+          }
+          return !activeRun.cancelRequested;
+        };
+        const finishCancelled = taskToCancel => {
+          const cancelled = workflow.transitionResearchTask(taskToCancel, { type: "cancel" });
+          return updateTask({
+            ...cancelled,
+            results: [], resultIds: [], report: null, reportId: "",
+            rejectionReason: "用户取消（在当前平台/查询请求完成后生效，未完成结果已丢弃）"
+          });
+        };
         let task = current;
         const prepared = [];
         const platformErrors = {};
         const capabilities = {};
+        try {
         for (const platform of task.platforms) {
+          if (!await checkpoint()) return finishCancelled(task);
           try {
             const capability = await desktopApi.social.check(platform, task.profileId || task.id);
             if (capability && (capability.status === "failed" || capability.status === "restricted" || capability.status === "not-ready")) throw new Error(`${platform} 平台未准备完成`);
@@ -107,6 +155,7 @@
             platformErrors[platform] = { message: error.message || "平台检查失败" };
           }
         }
+        if (!await checkpoint()) return finishCancelled(task);
         if (prepared.length) task = workflow.transitionResearchTask(task, { type: "prepared", platforms: prepared });
         if (prepared.length === 0 || task.platforms.length === 0) {
           task = workflow.transitionResearchTask(task, { type: "preparation_failed" });
@@ -123,28 +172,39 @@
         updateTask(task);
         const results = [];
         for (const platform of prepared) {
+          if (!await checkpoint()) return finishCancelled(task);
           const preference = task.connectionModes?.[platform] || "auto";
           const capability = capabilities[platform] || (task.capabilities || []).find(item => item.platform === platform) || {};
           let mode;
           try {
             mode = workflow.decideConnectionMode(platform, capability, preference);
-            const query = task.plan.platformRoles.find(item => item.platform === platform)?.queries?.[0] || task.queries[0] || task.plan.queries[0];
-            let response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
-            if (preference === "auto" && mode === "api" && workflow.shouldFallbackToBrowser(response, { preference, minimumResults: 1 })) {
-              mode = "browser";
-              response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
+            activeRun.emit({ type: "platform-start", taskId, platform, mode, resultCount: results.length });
+            const roleQueries = task.plan.platformRoles.find(item => item.platform === platform)?.queries || [];
+            const queries = [...new Set((roleQueries.length ? roleQueries : task.queries.length ? task.queries : task.plan.queries).slice(0, task.budget?.maxQueriesPerPlatform || 1))];
+            for (const query of queries) {
+              if (!await checkpoint()) return finishCancelled(task);
+              activeRun.emit({ type: "query-start", taskId, platform, mode, query, resultCount: results.length });
+              let response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
+              if (preference === "auto" && mode === "api" && workflow.shouldFallbackToBrowser(response, { preference, minimumResults: 1 })) {
+                mode = "browser";
+                response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
+              }
+              if (activeRun.cancelRequested) return finishCancelled(task);
+              if (response?.status === "error") throw Object.assign(new Error(response.message || "平台搜索失败"), { code: response.code });
+              const items = Array.isArray(response) ? response : response?.results || [];
+              const retrievalMethod = response?.retrievalMethod || (mode === "browser" ? "browser" : mode === "api" ? "api" : "browser");
+              const normalized = retriever.dedupeResearchResults(items).map(item => schema.normalizeSocialResult({ ...item, platform, retrievalMethod, searchQueries: [...(item.searchQueries || []), query] }));
+              results.push(...normalized);
+              task = workflow.consumeResearchBudget(task, { platform, queries: 1, pages: 1, details: normalized.length });
+              updateTask({ ...task, results, resultIds: results.map(item => item.id) });
+              activeRun.emit({ type: "result-count", taskId, platform, mode, query, resultCount: results.length });
             }
-            if (response?.status === "error") throw Object.assign(new Error(response.message || "平台搜索失败"), { code: response.code });
-            const items = Array.isArray(response) ? response : response?.results || [];
-            const retrievalMethod = response?.retrievalMethod || (mode === "browser" ? "browser" : mode === "api" ? "api" : "browser");
-            const normalized = retriever.dedupeResearchResults(items).map(item => schema.normalizeSocialResult({ ...item, platform, retrievalMethod }));
-            results.push(...normalized);
-            task = workflow.consumeResearchBudget(task, { platform, queries: 1, pages: 1, details: normalized.length });
-            updateTask({ ...task, results, resultIds: results.map(item => item.id) });
+            activeRun.emit({ type: "platform-finish", taskId, platform, mode, resultCount: results.length });
           } catch (error) {
             platformErrors[platform] = { message: error.message || "平台执行失败" };
           }
         }
+        if (!await checkpoint()) return finishCancelled(task);
         let reportRaw;
         try {
           reportRaw = await requestModel("report", prompts.buildResearchReportPrompt({ ...task, results }, results));
@@ -158,6 +218,7 @@
             reportError: error.message || "研究报告生成失败"
           });
         }
+        if (!await checkpoint()) return finishCancelled(task);
         const generatedReport = parseModel(reportRaw, { summary: "", resultIds: results.map(item => item.id) });
         const errorNotes = Object.entries(platformErrors).map(([platform, error]) => `${platform} 平台执行失败，需核验：${error.message}`);
         const verificationItems = Array.isArray(generatedReport.needsVerification)
@@ -172,6 +233,9 @@
         task = workflow.transitionResearchTask(task, "request_save");
         task = { ...task, results, resultIds: results.map(item => item.id), report: normalizedReport, reportId: `${task.id}-report`, platformErrors };
         return { ...updateTask(task), platformErrors };
+        } finally {
+          activeRuns.delete(taskId);
+        }
       };
       const saveSelected = (taskId, selectedResultIds) => {
         const task = findTask(taskId);
@@ -185,7 +249,7 @@
         next = findTask(taskId);
         return next;
       };
-      return { createPlan, confirmPlan, cancel, run, saveSelected, getState: () => state };
+      return { createPlan, confirmPlan, cancel, pause, resume, run, saveSelected, getState: () => state };
     };
   }
 })(typeof globalThis === "undefined" ? this : globalThis);
