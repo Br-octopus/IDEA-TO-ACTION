@@ -24,5 +24,11 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
     saveAttachment: payload => ipcRenderer.invoke('research:save-attachment', payload),
     readAttachment: id => ipcRenderer.invoke('research:read-attachment', id),
     deleteAttachment: id => ipcRenderer.invoke('research:delete-attachment', id)
+  }),
+  promptAgentSources: Object.freeze({
+    selectDirectory: () => ipcRenderer.invoke('prompt-agent-sources:select-directory'),
+    listAuthorized: () => ipcRenderer.invoke('prompt-agent-sources:list-authorized'),
+    refreshIndex: id => ipcRenderer.invoke('prompt-agent-sources:refresh-index', id),
+    removeAuthorization: id => ipcRenderer.invoke('prompt-agent-sources:remove-authorization', id)
   })
 }));
