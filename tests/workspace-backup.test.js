@@ -294,6 +294,113 @@ test('空 workspace 备份包含合法的选择和筛选状态，knowledge-base 
   assert.deepEqual(knowledgeBackup.data.knowledgeMetadata, {});
 });
 
+test('完整工作区备份保留研究任务报告结果选择和附件元数据，但不保留连接凭证', () => {
+  const state = {
+    researchTasks: [{
+      id: 'task-1',
+      topic: '独立开发者记账工具',
+      status: 'report-ready',
+      results: [{ id: 'result-1', url: 'https://example.test/post', summary: '结果摘要' }],
+      report: { coreFindings: ['高频痛点'] },
+      selectedResultIds: ['result-1'],
+      apiKey: 'task-secret'
+    }],
+    platformConnections: {
+      reddit: {
+        platform: 'reddit',
+        status: 'ready',
+        apiKey: 'api-secret',
+        credential: 'credential-secret',
+        cookies: ['cookie-secret'],
+        sessionToken: 'session-secret',
+        password: 'password-secret',
+        profilePath: 'C:/private/profile'
+      }
+    },
+    researchAttachments: [{
+      id: 'attachment-1',
+      type: 'screenshot',
+      size: 12,
+      sourceResultId: 'result-1',
+      relativePath: 'research/a.png',
+      savedAt: '2026-10-19T08:00:00.000Z',
+      password: 'attachment-secret'
+    }]
+  };
+
+  const backup = createBackup(state, { scope: 'workspace', now: exportedAt });
+  const restored = replaceState({}, backup);
+  const serialized = JSON.stringify(backup);
+
+  assert.equal(validateBackup(backup), true);
+  assert.equal(backup.data.researchTasks[0].report.coreFindings[0], '高频痛点');
+  assert.deepEqual(backup.data.researchTasks[0].selectedResultIds, ['result-1']);
+  assert.deepEqual(backup.data.researchAttachments[0], {
+    id: 'attachment-1',
+    type: 'screenshot',
+    size: 12,
+    sourceResultId: 'result-1',
+    relativePath: 'research/a.png',
+    savedAt: '2026-10-19T08:00:00.000Z'
+  });
+  assert.equal(backup.data.platformConnections.reddit.status, 'needs-recheck');
+  assert.deepEqual(restored.researchTasks, backup.data.researchTasks);
+  for (const secret of [
+    'task-secret', 'api-secret', 'credential-secret', 'cookie-secret',
+    'session-secret', 'password-secret', 'C:/private/profile', 'attachment-secret'
+  ]) {
+    assert.equal(serialized.includes(secret), false, `不应备份 ${secret}`);
+  }
+});
+
+test('资料库备份不带研究任务和平台连接，只保留已保存资料', () => {
+  const backup = createBackup({
+    researchTasks: [{ id: 'task-1', topic: '临时研究' }],
+    platformConnections: { reddit: { status: 'ready', apiKey: 'secret' } },
+    researchAttachments: [{
+      id: 'attachment-1', type: 'screenshot', size: 1,
+      sourceResultId: 'result-1', relativePath: 'research/a.png', savedAt: exportedAt
+    }],
+    knowledgeEntries: [{ id: 'entry-1', title: '已保存研究资料', sourceKind: 'research' }],
+    cases: []
+  }, { scope: 'knowledge-base', now: exportedAt });
+
+  assert.equal(Object.hasOwn(backup.data, 'researchTasks'), false);
+  assert.equal(Object.hasOwn(backup.data, 'platformConnections'), false);
+  assert.equal(Object.hasOwn(backup.data, 'researchAttachments'), false);
+  assert.deepEqual(backup.data.knowledgeEntries.map(entry => entry.title), ['已保存研究资料']);
+  assert.equal(JSON.stringify(backup).includes('secret'), false);
+});
+
+test('恢复和合并现有工作区时也会清洗当前研究连接中的凭证', () => {
+  const backup = createBackup({ knowledgeEntries: [], cases: [] }, {
+    scope: 'knowledge-base',
+    now: exportedAt
+  });
+  const currentState = {
+    platformConnections: {
+      reddit: {
+        platform: 'reddit',
+        apiKey: 'current-api-secret',
+        cookies: ['current-cookie-secret'],
+        status: 'ready'
+      }
+    },
+    researchTasks: [{ id: 'task-1', topic: '保留任务', password: 'current-password-secret' }]
+  };
+
+  const replaced = replaceState(currentState, backup);
+  const merged = mergeState(currentState, backup).state;
+
+  for (const result of [replaced, merged]) {
+    const serialized = JSON.stringify(result);
+    assert.equal(serialized.includes('current-api-secret'), false);
+    assert.equal(serialized.includes('current-cookie-secret'), false);
+    assert.equal(serialized.includes('current-password-secret'), false);
+    assert.equal(result.platformConnections.reddit.status, 'needs-recheck');
+  }
+});
+
 test('knowledge-base 拒绝 workspace 选择筛选状态和未知字段', () => {
   for (const field of [
     'knowledgeSelection', 'knowledgeFilters', 'caseFilters', 'filterState',

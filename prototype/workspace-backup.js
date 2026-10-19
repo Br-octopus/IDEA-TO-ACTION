@@ -13,11 +13,13 @@
   const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
   const WORKSPACE_DATA_FIELDS = [
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
-    "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata"
+    "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata",
+    "researchTasks", "platformConnections", "researchAttachments"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeMetadata"
   ];
+  const RESEARCH_COLLECTIONS = ["researchTasks", "researchAttachments"];
   const BACKUP_CREDENTIAL_FIELDS = [
     "authorization", "password", "credentials", "accessToken", "refresh_token",
     "clientSecret", "client_secret", "modelKey", "modelApiKey", "model_api_key",
@@ -48,6 +50,9 @@
         });
       }
     }
+    if (typeof storage.sanitizeResearchState === "function") {
+      Object.assign(sanitized, storage.sanitizeResearchState(source));
+    }
     return sanitized;
   }
 
@@ -76,14 +81,18 @@
     data.knowledgeSelection = Array.isArray(state.knowledgeSelection) ? clone(state.knowledgeSelection) : [];
     data.cases = Array.isArray(state.cases) ? clone(state.cases) : [];
     data.knowledgeFilters = isObject(state.knowledgeFilters) ? clone(state.knowledgeFilters) : {};
+    data.researchTasks = Array.isArray(state.researchTasks) ? clone(state.researchTasks) : [];
+    data.platformConnections = isObject(state.platformConnections) ? clone(state.platformConnections) : {};
+    data.researchAttachments = Array.isArray(state.researchAttachments) ? clone(state.researchAttachments) : [];
     return data;
   }
 
   function countData(data) {
-    return ["projects", "prompts", "cases", "knowledgeEntries", "references"]
+    return ["projects", "prompts", "cases", "knowledgeEntries", "references", ...RESEARCH_COLLECTIONS]
       .filter(field => Array.isArray(data[field]))
       .reduce((counts, field) => {
-        counts[field] = data[field].length;
+        // 旧备份摘要不包含新增研究集合的零计数，保持旧调用方的结构兼容。
+        if (!RESEARCH_COLLECTIONS.includes(field) || data[field].length > 0) counts[field] = data[field].length;
         return counts;
       }, {});
   }
@@ -147,7 +156,7 @@
     const collections = value.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
     const allowedDataFields = value.scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
     validateAllowedKeys(value.data, allowedDataFields, "数据");
-    validateAllowedKeys(value.counts, collections, "统计");
+    validateAllowedKeys(value.counts, [...collections, ...RESEARCH_COLLECTIONS], "统计");
     collections.forEach(field => {
       if (!Array.isArray(value.data[field])) throw new TypeError(`备份核心数据无效：${field}`);
     });
@@ -156,6 +165,15 @@
       validateSelection(value.data, "knowledgeSelection");
       validateSelection(value.data, "researchSelection");
       if (!isObject(value.data.knowledgeFilters)) throw new TypeError("备份筛选状态无效：knowledgeFilters");
+      if (Object.hasOwn(value.data, "researchTasks") && !Array.isArray(value.data.researchTasks)) {
+        throw new TypeError("备份核心数据无效：researchTasks");
+      }
+      if (Object.hasOwn(value.data, "researchAttachments") && !Array.isArray(value.data.researchAttachments)) {
+        throw new TypeError("备份核心数据无效：researchAttachments");
+      }
+      if (Object.hasOwn(value.data, "platformConnections") && !isObject(value.data.platformConnections)) {
+        throw new TypeError("备份平台连接状态无效：platformConnections");
+      }
     } else if (!isObject(value.data.knowledgeMetadata)) {
       throw new TypeError("备份资料元数据无效：knowledgeMetadata");
     }
@@ -172,6 +190,9 @@
   function validateBackup(value) {
     const collections = validateBackupStructure(value);
     collections.forEach(field => validateCollection(value.data, field));
+    for (const field of RESEARCH_COLLECTIONS) {
+      if (Array.isArray(value.data[field])) validateCollection(value.data, field);
+    }
     return true;
   }
 
@@ -188,7 +209,11 @@
     validateBackup(backup);
     const data = clone(backup.data);
     if (backup.scope === "workspace") return data;
-    return { ...(isObject(currentState) ? clone(currentState) : {}), ...data };
+    const current = isObject(currentState) ? clone(currentState) : {};
+    if (typeof storage.sanitizeResearchState === "function") {
+      Object.assign(current, storage.sanitizeResearchState(current));
+    }
+    return { ...current, ...data };
   }
 
   function mergeCollection(currentItems, incomingItems, report, collection) {
@@ -253,6 +278,9 @@
   function mergeState(currentState, backup) {
     const collections = validateBackupStructure(backup);
     const state = isObject(currentState) ? clone(currentState) : {};
+    if (typeof storage.sanitizeResearchState === "function") {
+      Object.assign(state, storage.sanitizeResearchState(state));
+    }
     const data = backup.data;
     const report = {
       added: [],
@@ -266,6 +294,11 @@
     };
 
     for (const field of collections) {
+      if (Array.isArray(data[field])) {
+        state[field] = mergeCollection(state[field], data[field], report, field);
+      }
+    }
+    for (const field of RESEARCH_COLLECTIONS) {
       if (Array.isArray(data[field])) {
         state[field] = mergeCollection(state[field], data[field], report, field);
       }

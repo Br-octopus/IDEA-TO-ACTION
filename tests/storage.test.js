@@ -134,6 +134,65 @@ test('旧版状态迁移后拥有知识条目集合', () => {
   assert.deepEqual(state.knowledgeEntries, []);
 });
 
+test('空状态包含研究任务、平台连接和附件集合', () => {
+  const state = createEmptyState();
+
+  assert.deepEqual(state.researchTasks, []);
+  assert.deepEqual(state.platformConnections, {});
+  assert.deepEqual(state.researchAttachments, []);
+});
+
+test('研究状态迁移和保存使用白名单并剔除平台敏感字段', () => {
+  const storage = memoryStorage();
+  const state = saveState(storage, {
+    ...createEmptyState(),
+    researchTasks: [{
+      id: 'task-1',
+      topic: '研究主题',
+      status: 'draft',
+      results: [{ id: 'result-1', url: 'https://example.test', summary: '摘要' }],
+      apiKey: 'task-secret',
+      unknownField: 'task-unknown'
+    }],
+    platformConnections: {
+      reddit: {
+        platform: 'reddit',
+        status: 'ready',
+        apiKey: 'api-secret',
+        credential: 'credential-secret',
+        cookie: 'cookie-secret',
+        cookies: ['cookies-secret'],
+        sessionToken: 'session-secret',
+        password: 'password-secret',
+        profilePath: 'C:/private/profile',
+        unknownField: 'unknown-secret'
+      }
+    },
+    researchAttachments: [{
+      id: 'attachment-1',
+      type: 'screenshot',
+      size: 12,
+      sourceResultId: 'result-1',
+      relativePath: 'research/a.png',
+      savedAt: '2026-10-19T08:00:00.000Z',
+      extra: '不应保留'
+    }]
+  });
+  const serialized = storage.getItem(STORAGE_KEY);
+
+  assert.equal(state.researchTasks[0].unknownField, undefined);
+  assert.equal(state.platformConnections.reddit.status, 'needs-recheck');
+  assert.equal(state.platformConnections.reddit.apiKey, undefined);
+  assert.equal(state.researchAttachments[0].extra, undefined);
+  for (const secret of [
+    'task-secret', 'api-secret', 'credential-secret', 'cookie-secret',
+    'cookies-secret', 'session-secret', 'password-secret', 'C:/private/profile',
+    'unknown-secret'
+  ]) {
+    assert.equal(serialized.includes(secret), false, `不应持久化 ${secret}`);
+  }
+});
+
 test('旧的已确认案例迁移后补齐 v1 版本元数据', () => {
   const before = Date.now();
   const state = migrateState({

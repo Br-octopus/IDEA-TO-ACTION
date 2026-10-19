@@ -8,6 +8,11 @@
     : typeof globalThis === "undefined"
       ? null
       : globalThis.ForwardStepKnowledgeSchema;
+  const socialResearchSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./social-research-schema.js")
+    : typeof globalThis === "undefined"
+      ? null
+      : globalThis.ForwardStepSocialResearchSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
@@ -30,7 +35,10 @@
       researchSelection: [],
       knowledgeEntries: [],
       knowledgeSelection: [],
-      cases: []
+      cases: [],
+      researchTasks: [],
+      platformConnections: {},
+      researchAttachments: []
     };
   }
 
@@ -274,9 +282,21 @@
       .filter(item => item.id);
   }
 
+  function sanitizeResearchState(state) {
+    if (!socialResearchSchema || typeof socialResearchSchema.sanitizeResearchState !== "function") {
+      return {
+        researchTasks: [],
+        platformConnections: {},
+        researchAttachments: []
+      };
+    }
+    return socialResearchSchema.sanitizeResearchState(state);
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const entries = normalizeKnowledgeEntries(source.knowledgeEntries);
+    const researchState = sanitizeResearchState(source);
     const state = {
       ...createEmptyState(),
       ...stripModelKeys(source),
@@ -302,7 +322,8 @@
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)
           .map(migrateConfirmedCase)
-        : []
+        : [],
+      ...researchState
     };
     return state;
   }
@@ -514,5 +535,5 @@
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });
