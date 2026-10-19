@@ -531,6 +531,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   let persistenceBlocked = false;
   let state;
+  let socialResearchUI = null;
   try {
     const loaded = loadState();
     state = loaded.state;
@@ -578,6 +579,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (view === "plans") renderPlans();
     if (view === "library") renderLibrary();
     if (view === "references") refreshKnowledgeView();
+    if (view === "prompt-agent") window.ForwardStepPromptAgentUIController?.render();
   }
   document.querySelectorAll("[data-view]").forEach(node => node.addEventListener("click", () => go(node.dataset.view)));
   if (window.ForwardStepSocialResearchCoordinator && window.ForwardStepSocialResearchUI && desktopApi?.social) {
@@ -586,9 +588,116 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       initialState: state,
       persistState(nextState) { state = saveState(localStorage, nextState); return state; }
     });
-    window.ForwardStepSocialResearchUI.createSocialResearchUI({
+    socialResearchUI = window.ForwardStepSocialResearchUI.createSocialResearchUI({
       document, desktopApi, coordinator, getState: () => state,
       persistState(nextState) { state = saveState(localStorage, nextState); return state; }
+    });
+  }
+  if (window.ForwardStepPromptAgentCoordinator && window.ForwardStepPromptAgentUI) {
+    const promptAgentCoordinator = window.ForwardStepPromptAgentCoordinator.createPromptAgentCoordinator({
+      getState: () => state,
+      requestModel: payload => window.ForwardStepPromptAgentModelRequest(payload),
+      searchWeb: async query => {
+        if (desktopApi?.requestSearch) return desktopApi.requestSearch({ query, options: { maxResults: 5 } });
+        const response = await fetch("/api/search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, options: { maxResults: 5 } }) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "搜索请求失败");
+        return data;
+      },
+      searchLocalSources: async query => {
+        const api = desktopApi?.promptAgentSources;
+        if (!api?.listAuthorized || !api.searchIndex) return [];
+        const saved = await api.listAuthorized();
+        const grants = saved.authorizations || [];
+        const results = [];
+        for (const grant of grants) {
+          if (!grant.enabled || grant.unavailable) continue;
+          try {
+            await api.refreshIndex(grant.id);
+            const found = await api.searchIndex(grant.id, query, {});
+            for (const file of found.files || []) results.push({ ...file, id: `local:${grant.id}:${file.id}`, type: file.type || "local-source-document", sourceType: "授权本地目录", relativePath: file.relativePath, excerpt: file.excerpt, fragments: file.fragments });
+          } catch (error) {
+            console.warn("提示词 Agent 本地资料检索未完成", error?.message || error);
+          }
+        }
+        return results.slice(0, 12);
+      },
+      createSocialResearchPlan: async scope => {
+        if (!socialResearchUI?.createPlanFromPromptAgent) throw new Error("社媒研究工作台尚未就绪");
+        go("social-research");
+        return socialResearchUI.createPlanFromPromptAgent(scope);
+      }
+    });
+    window.ForwardStepPromptAgentUIController = window.ForwardStepPromptAgentUI.createPromptAgentUI({
+      document,
+      coordinator: promptAgentCoordinator,
+      getState: () => state,
+      persistState(nextState) { state = saveState(localStorage, nextState); return state; },
+      requestModel: prompt => window.ForwardStepPromptAgentModelRequest({ messages: [{ role: "user", content: prompt }] }),
+      copyText,
+      navigate: go,
+      notify: toast,
+      addSource: async () => {
+        const api = desktopApi?.promptAgentSources;
+        if (!api?.selectDirectory) throw new Error("本地目录授权仅在 Windows 桌面版可用");
+        const source = await api.selectDirectory();
+        if (!source) return;
+        await api.refreshIndex(source.id);
+        const metadata = window.ForwardStepPromptAgentSchema.normalizePromptAgentSource({ ...source, permission: "read", enabled: source.enabled === true });
+        state.promptAgentSources = [metadata, ...(state.promptAgentSources || []).filter(item => item.id !== metadata.id)];
+        persist();
+      },
+      listSources: async () => {
+        const api = desktopApi?.promptAgentSources;
+        if (!api?.listAuthorized) return [];
+        const result = await api.listAuthorized();
+        return (result.authorizations || []).map(source => window.ForwardStepPromptAgentSchema.normalizePromptAgentSource({ ...source, permission: "read", enabled: source.enabled === true }));
+      },
+      setSourceEnabled: async (id, enabled) => {
+        if (!desktopApi?.promptAgentSources?.setAuthorizationEnabled) throw new Error("本地目录授权仅在 Windows 桌面版可管理");
+        await desktopApi?.promptAgentSources?.setAuthorizationEnabled(id, enabled);
+        state.promptAgentSources = (state.promptAgentSources || []).map(source => source.id === id ? { ...source, enabled } : source);
+        persist();
+      },
+      removeSource: async id => {
+        if (!desktopApi?.promptAgentSources?.removeAuthorization) throw new Error("本地目录授权仅在 Windows 桌面版可管理");
+        await desktopApi?.promptAgentSources?.removeAuthorization(id);
+        state.promptAgentSources = (state.promptAgentSources || []).filter(source => source.id !== id);
+        persist();
+      },
+      saveCase: ({ task, externalResult, feedback, label, lessons }) => {
+        const reviewedCase = {
+          id: `prompt-agent-${task.id}`,
+          domain: task.target || "通用",
+          taskType: task.type,
+          goal: task.goal,
+          preserveItems: task.preserveItems || [],
+          before: task.currentState || "未提供",
+          after: externalResult,
+          externalResult,
+          userFeedback: feedback,
+          dimensions: [task.type, task.target].filter(Boolean),
+          evidence: [
+            ...(task.review?.evidence || []),
+            `成功标准：${(task.successCriteria || []).join("；")}`,
+            `必须保留：${(task.preserveItems || []).join("；") || "未指定"}`,
+            `复盘分析：${String(lessons || "").slice(0, 1200)}`,
+            `结果片段：${externalResult.slice(0, 500)}`,
+            `用户反馈：${feedback}`
+          ],
+          suggestedLabel: label,
+          status: label,
+          lessons: String(lessons || "").slice(0, 3000),
+          nextPrompt: String(lessons || "").slice(0, 3000),
+          applicableWhen: task.goal,
+          notApplicableWhen: "仅适用于目标、约束和输入相近的情况"
+        };
+        state = state.cases.some(item => item.id === reviewedCase.id && item.confirmed === true)
+          ? updateCase(state, { ...reviewedCase, changeNote: `用户确认提示词 Agent 复盘：${label} · ${new Date().toISOString()}` })
+          : confirmCase(state, reviewedCase, true);
+        if (!persist()) throw new Error("案例未能保存到本机");
+        knowledgeEntries = getKnowledgeIndex();
+      }
     });
   }
   document.querySelectorAll(".domain").forEach(button => button.addEventListener("click", () => {
@@ -721,7 +830,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     toast("本次梳理已保存，目标指令已更新");
   });
   document.getElementById("copy-master").addEventListener("click", () => { const p = getActiveProject(); if (p) copyText(withSelectedReferences(p.masterPrompt)); });
-  async function requestModel(prompt) {
+  async function requestModel(prompt, onSuccess, onFailure) {
     const result = document.getElementById("model-result");
     const output = document.getElementById("model-result-text");
     result.hidden = false;
@@ -736,17 +845,21 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       }
       if (data.code) {
         output.textContent = data.message || "模型暂不可用。你仍可以复制上方指令，交给其他 AI。";
+        onFailure?.(new Error(output.textContent));
         return false;
       }
       const text = typeof data.text === "string" ? data.text.trim() : "";
       if (!text) {
         output.textContent = "模型没有返回可用内容。你仍可以复制上方指令，交给其他 AI。";
+        onFailure?.(new Error(output.textContent));
         return false;
       }
       output.textContent = text;
+      onSuccess?.(text);
       return true;
     } catch (error) {
       output.textContent = `暂时无法调用内置模型：${error.message}。你仍可以复制上方指令，交给其他 AI。`;
+      onFailure?.(error);
       return false;
     }
   }
@@ -783,10 +896,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     document.getElementById("send-preview-confirm").hidden = !serviceConfig.model?.configured;
     document.getElementById("send-preview-copy").textContent = serviceConfig.model?.configured ? "复制文本" : "仅复制文本";
   }
-  function openSendPanel(prompt) {
+  function openSendPanel(prompt, handlers = {}) {
     if (!prompt) return;
-    const references = selectedReferences();
-    const knowledgeEntries = selectedKnowledgeEntries();
+    const references = handlers.includeReferences === false ? [] : selectedReferences();
+    const knowledgeEntries = handlers.includeReferences === false ? [] : selectedKnowledgeEntries();
     sendDraft = {
       basePrompt: String(prompt),
       references,
@@ -795,13 +908,44 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       renderedText: appendKnowledgeContext(withSelectedReferences(prompt), knowledgeEntries),
       userEdited: false,
       confirmedRisk: false,
-      sending: false
+      sending: false,
+      onModelResult: handlers.onModelResult,
+      onModelError: handlers.onModelError,
+      onCancel: handlers.onCancel
     };
     sendDraft.renderedText = buildSendContent().text;
     renderSendPanel();
     document.getElementById("send-preview").hidden = false;
+    return sendDraft;
   }
-  function closeSendPanel() {
+  window.ForwardStepPromptAgentModelRequest = ({ messages, signal } = {}) => new Promise((resolve, reject) => {
+    const prompt = Array.isArray(messages) ? messages.map(item => String(item?.content || "")).join("\n\n") : "";
+    if (!prompt.trim()) { reject(new Error("模型请求内容为空")); return; }
+    if (signal?.aborted) { reject(new Error("请求已取消")); return; }
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      callback(value);
+    };
+    const draft = openSendPanel(prompt, {
+      includeReferences: false,
+      onModelResult: text => finish(resolve, text),
+      onModelError: error => {
+        toast(`模型暂时未返回结果：${error.message}。可在发送预览中重试或取消。`);
+        finish(reject, error);
+      },
+      onCancel: error => finish(reject, error)
+    });
+    const onAbort = () => {
+      if (sendDraft === draft) closeSendPanel();
+      finish(reject, new Error("模型请求已取消"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  function closeSendPanel(options = {}) {
+    if (options.cancelled !== false && sendDraft?.onCancel) sendDraft.onCancel(new Error("用户取消发送"));
     sendDraft = null;
     document.getElementById("send-preview").hidden = true;
   }
@@ -841,10 +985,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     }
     draft.sending = true;
     renderSendSafety(report);
-    const succeeded = await requestModel(text);
+    const succeeded = await requestModel(text, draft.onModelResult, draft.onModelError);
     draft.sending = false;
     if (sendDraft !== draft) return;
-    if (succeeded) closeSendPanel();
+    if (succeeded) closeSendPanel({ cancelled: false });
     else renderSendSafety(buildSendReport(buildSendContent().segments));
   });
   document.getElementById("preview-master").addEventListener("click", () => { const p = getActiveProject(); if (p) openSendPanel(p.masterPrompt); });

@@ -19,6 +19,12 @@
         }
         return knowledgeSearch.searchKnowledge(entries, query, options);
       },
+      async searchPromptAgentMaterials(entries, query, options = {}) {
+        if (typeof knowledgeSearch.selectPromptAgentEntries === "function") {
+          return knowledgeSearch.selectPromptAgentEntries(entries, query, options);
+        }
+        return this.search(entries, query, options);
+      },
       status() {
         return { mode, fallback };
       }

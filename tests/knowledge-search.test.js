@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const {
   collectKnowledgeEntries,
   searchKnowledge,
+  selectPromptAgentEntries,
   buildKnowledgeContext
 } = require('../prototype/knowledge-search.js');
 const { toKnowledgeEntry } = require('../prototype/research-catalog.js');
@@ -288,6 +289,30 @@ test('中文查询优先返回标题和关键词命中的资料', () => {
   assert.equal(result[0].id, 'writing');
   assert.ok(result[0].score > 0);
   assert.ok(result[0].matchedFields.includes('keywords'));
+});
+
+test('Prompt Agent 检索遍历超过通用搜索窗口的候选，并优先选择适用条件命中的资料', () => {
+  const entries = collectKnowledgeEntries({
+    knowledgeEntries: [
+      ...Array.from({ length: 28 }, (_, index) => ({
+        id: `generic-${index}`, type: 'manual-note', title: `CSV 通用资料 ${index}`,
+        summary: '一般导入说明', verificationStatus: 'unverified'
+      })),
+      {
+        id: 'condition-match', type: 'manual-note', title: '具体边界说明',
+        summary: '特殊场景记录', applicableCases: ['适用于 CSV 数据导入'],
+        limitations: '仅适用于 CSV 数据导入场景', verificationStatus: 'source-reviewed'
+      }
+    ]
+  });
+  const normalized = entries.find(item => item.id === 'condition-match');
+  assert.equal(normalized.applicableConditions, undefined);
+  assert.deepEqual(normalized.applicableCases, ['适用于 CSV 数据导入']);
+
+  const result = selectPromptAgentEntries(entries, 'CSV', { limit: 3 });
+
+  assert.ok(entries.findIndex(item => item.id === 'condition-match') > 20);
+  assert.equal(result[0].id, 'condition-match');
 });
 
 test('搜索结果明确记录命中的查询词', () => {

@@ -613,6 +613,33 @@ test('资料库备份不带研究任务和平台连接，只保留已保存资�
   assert.equal(JSON.stringify(backup).includes('secret'), false);
 });
 
+test('工作区备份保留 Agent 摘要、确认案例和授权元数据并排除索引与原文', () => {
+  const backup = createBackup({
+    promptAgentTasks: [{
+      id: 'agent-task-1', type: 'optimize-prompt', goal: '优化提示词',
+      facts: ['目标已确认'], researchBudget: { maxQueries: 3, apiToken: 'nested-agent-credential' },
+      review: { label: '成功', confirmed: true }
+    }],
+    cases: [{ id: 'case-agent-1', confirmed: true, suggestedLabel: '成功', externalResult: '用户确认的案例结果' }],
+    promptAgentSources: [{ id: 'source-1', label: '项目资料', permission: 'read', enabled: true,
+      absolutePath: 'C:/private/project', indexContent: 'indexed file contents' }],
+    promptAgentIndex: [{ content: 'derived index contents' }],
+    unsavedAttachments: [{ name: 'draft.png', data: 'unsaved image' }],
+    apiKey: 'credential-value',
+    originalArticle: 'raw external article text'
+  }, { scope: 'workspace', now: exportedAt });
+
+  const serialized = JSON.stringify(backup);
+  assert.equal(backup.data.promptAgentTasks[0].review.label, '成功');
+  assert.equal(backup.data.cases[0].confirmed, true);
+  assert.deepEqual(backup.data.promptAgentSources, [
+    { id: 'source-1', label: '项目资料', permission: 'read', enabled: true }
+  ]);
+  for (const excluded of ['indexed file contents', 'derived index contents', 'unsaved image', 'credential-value', 'nested-agent-credential', 'raw external article text', 'C:/private/project']) {
+    assert.equal(serialized.includes(excluded), false, `备份不应包含 ${excluded}`);
+  }
+});
+
 test('恢复和合并现有工作区时也会清洗当前研究连接中的凭证', () => {
   const backup = createBackup({ knowledgeEntries: [], cases: [] }, {
     scope: 'knowledge-base',

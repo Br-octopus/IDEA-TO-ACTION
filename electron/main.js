@@ -9,6 +9,7 @@ const { createSocialBrowserManager } = require(path.join(__dirname, 'social-brow
 const { createBrowserPlatformAdapters } = require(path.join(__dirname, 'social-browser-adapters.js'));
 const { createSocialApiClient, listSocialPlatformDefinitions } = require(path.join(__dirname, '..', 'server', 'social-api-client.js'));
 const { createSocialAttachmentStore } = require(path.join(__dirname, 'social-attachment-store.js'));
+const { createPromptAgentSources } = require(path.join(__dirname, 'prompt-agent-sources.js'));
 
 const DEV_PAGE_URL = process.env.DESKTOP_SERVICE_URL || 'http://127.0.0.1:4173';
 const SERVER_SHUTDOWN_TIMEOUT_MS = 2000;
@@ -448,6 +449,7 @@ ipcMain.handle('backup:list', async () => getBackupStore().listBackups());
 ipcMain.handle('backup:read', async (_event, filename) => getBackupStore().readBackup(filename));
 
 registerSocialHandlers();
+createPromptAgentSources({ fs, path, userDataPath: app.getPath('userData'), dialog, ipcMain });
 
 app.whenReady().then(() => createWindow()).catch(reportStartupError);
 

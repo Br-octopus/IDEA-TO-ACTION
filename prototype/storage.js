@@ -13,6 +13,11 @@
     : typeof globalThis === "undefined"
       ? null
       : globalThis.ForwardStepSocialResearchSchema;
+  const promptAgentSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./prompt-agent-schema.js")
+    : typeof globalThis === "undefined"
+      ? null
+      : globalThis.ForwardStepPromptAgentSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
@@ -28,7 +33,8 @@
   const STATE_FIELDS = [
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters",
-    "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings"
+    "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings",
+    "promptAgentTasks", "promptAgentSources"
   ];
 
   function createEmptyState() {
@@ -43,7 +49,9 @@
       cases: [],
       researchTasks: [],
       platformConnections: {},
-      researchAttachments: []
+      researchAttachments: [],
+      promptAgentTasks: [],
+      promptAgentSources: []
     };
   }
 
@@ -321,6 +329,13 @@
     return socialResearchSchema.sanitizeResearchState(state);
   }
 
+  function sanitizePromptAgentState(state) {
+    if (!promptAgentSchema || typeof promptAgentSchema.sanitizePromptAgentState !== "function") {
+      return { promptAgentTasks: [], promptAgentSources: [] };
+    }
+    return promptAgentSchema.sanitizePromptAgentState(state);
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const knowledgeEntries = normalizeKnowledgeEntries(source.knowledgeEntries);
@@ -348,6 +363,7 @@
           .filter(item => item && item.confirmed === true)
           .map(migrateConfirmedCase)
         : [],
+      ...sanitizePromptAgentState(stripModelKeys(source)),
       ...researchState
     };
     return state;
@@ -590,5 +606,5 @@
   }
 
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, sanitizePromptAgentState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

@@ -248,6 +248,25 @@
     });
     refreshPlatforms().catch(error => setStatus(`平台列表读取失败：${error.message}`));
     render();
-    return { refreshPlatforms, render, getActiveTaskId: () => activeTaskId };
+    return {
+      refreshPlatforms,
+      render,
+      getActiveTaskId: () => activeTaskId,
+      async createPlanFromPromptAgent(input = {}) {
+        const task = await coordinator.createPlan({
+          topic: String(input.topic || input.objective || '').trim(),
+          template: 'fact-check',
+          platforms: Array.isArray(input.platforms) ? input.platforms : ['reddit', 'youtube'],
+          queries: Array.isArray(input.queries) ? input.queries : [],
+          budget: input.budget && typeof input.budget === 'object' ? input.budget : undefined,
+          connectionModes: {}
+        });
+        activeTaskId = task.id;
+        selectedResultIds.clear();
+        render();
+        setStatus('提示词 Agent 已转交研究目标；请检查社媒研究计划和预算并确认。');
+        return task;
+      }
+    };
   }
 })(typeof globalThis === "undefined" ? this : globalThis);
