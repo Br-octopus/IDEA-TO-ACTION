@@ -52,14 +52,14 @@ function makeSocial(overrides = {}) {
   return social;
 }
 
-function makeHarness({ social, model, initialState } = {}) {
+function makeHarness({ social, model, initialState, persistState } = {}) {
   const saves = [];
   const api = {
     social: social || makeSocial(),
     requestModel: (model || makeModelClient()).requestModel,
     saveState(state) { saves.push(structuredClone(state)); return state; }
   };
-  return { coordinator: createSocialResearchCoordinator({ desktopApi: api, initialState: initialState || storage.createEmptyState() }), saves, api };
+  return { coordinator: createSocialResearchCoordinator({ desktopApi: api, initialState: initialState || storage.createEmptyState(), persistState: persistState || (state => { saves.push(structuredClone(state)); return state; }) }), saves, api };
 }
 
 async function prepareAndRun(harness, input = {}) {
@@ -243,7 +243,7 @@ test('执行过程发送平台、查询、结果数和平台完成事件', async
   await harness.coordinator.run(task.id, { onEvent: event => events.push(event) });
 
   assert.deepEqual(events.map(event => event.type), [
-    'platform-start', 'query-start', 'result-count', 'query-start', 'result-count', 'platform-finish'
+    'platform-start', 'query-start', 'result-count', 'query-start', 'result-count', 'platform-finish', 'report-start'
   ]);
   assert.equal(events[0].platform, 'reddit');
   assert.equal(events[1].query, '词一');
@@ -299,4 +299,81 @@ test('运行中取消在安全边界生效，丢弃结果并跳过报告和保�
   assert.equal(model.calls.some(call => call.purpose === 'report'), false);
   assert.equal(harness.coordinator.getState().knowledgeEntries.length, 0);
   assert.throws(() => harness.coordinator.saveSelected(task.id, ['unfinished-result']), /尚未进入保存阶段/);
+});
+
+test('报告请求发出前通知进度；请求中取消会在返回后丢弃报告和结果', async () => {
+  let releaseReport;
+  const model = makeModelClient();
+  const originalRequest = model.requestModel;
+  model.requestModel = async input => input.options?.purpose === 'report'
+    ? new Promise(resolve => { releaseReport = resolve; })
+    : originalRequest(input);
+  const harness = makeHarness({ model });
+  const task = await harness.coordinator.createPlan({ topic: '报告阶段取消', template: 'trends', platforms: ['reddit'] });
+  await harness.coordinator.confirmPlan(task.id);
+  const events = [];
+  const run = harness.coordinator.run(task.id, { onEvent: event => events.push(event) });
+  while (!releaseReport) await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(events.at(-1).type, 'report-start');
+  assert.equal(harness.coordinator.getState().researchTasks[0].status, 'searching');
+  harness.coordinator.cancel(task.id);
+  releaseReport(JSON.stringify({ summary: '不应保留的报告', resultIds: ['reddit-1'] }));
+  const cancelled = await run;
+
+  assert.equal(cancelled.status, 'cancelled');
+  assert.deepEqual(cancelled.results, []);
+  assert.equal(cancelled.report.summary, '');
+  assert.equal(harness.coordinator.getState().researchTasks[0].report.summary, '');
+  assert.equal(harness.coordinator.getState().knowledgeEntries.length, 0);
+  assert.equal(cancelled.failureReason, '用户取消（在当前请求完成后生效，未完成结果已丢弃）');
+});
+
+test('报告请求期间重复 run 被拒绝，活动运行不会被覆盖', async () => {
+  let releaseSearch;
+  const social = makeSocial({ reddit: { search: async () => new Promise(resolve => { releaseSearch = resolve; }) } });
+  const harness = makeHarness({ social });
+  const task = await harness.coordinator.createPlan({ topic: '阻止重复运行', template: 'trends', platforms: ['reddit'] });
+  await harness.coordinator.confirmPlan(task.id);
+  const run = harness.coordinator.run(task.id);
+  while (!releaseSearch) await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(() => harness.coordinator.run(task.id), /已在运行/);
+  harness.coordinator.cancel(task.id);
+  releaseSearch([{ id: 'discard-me', platform: 'reddit', url: 'https://reddit.example/1' }]);
+  assert.equal((await run).status, 'cancelled');
+});
+
+test('意外持久化异常和预算超限会持久化 partial-failure 错误', async () => {
+  let failSearchingPersist = true;
+  const persistedStates = [];
+  const persistenceHarness = makeHarness({ persistState(state) {
+    if (failSearchingPersist && state.researchTasks.some(task => task.status === 'searching')) {
+      failSearchingPersist = false;
+      throw new Error('写入失败');
+    }
+    persistedStates.push(structuredClone(state));
+    return state;
+  } });
+  const persistenceTask = await persistenceHarness.coordinator.createPlan({ topic: '持久化异常', template: 'trends', platforms: ['reddit'] });
+  await persistenceHarness.coordinator.confirmPlan(persistenceTask.id);
+  const persistenceFailure = await persistenceHarness.coordinator.run(persistenceTask.id);
+  assert.equal(persistenceFailure.status, 'partial-failure');
+  assert.equal(persistenceFailure.reportError, '写入失败');
+  assert.equal(persistenceHarness.coordinator.getState().researchTasks[0].status, 'partial-failure');
+  assert.equal(persistedStates.at(-1).researchTasks[0].status, 'partial-failure');
+  assert.equal(persistedStates.at(-1).researchTasks[0].reportError, '写入失败');
+
+  const social = makeSocial({ reddit: { search: async () => [
+    { id: 'reddit-1', platform: 'reddit', url: 'https://reddit.example/1' },
+    { id: 'reddit-2', platform: 'reddit', url: 'https://reddit.example/2' }
+  ] } });
+  const budgetHarness = makeHarness({ social });
+  const budgetTask = await budgetHarness.coordinator.createPlan({
+    topic: '预算异常', template: 'trends', platforms: ['reddit'], budget: { maxDetails: 1 }
+  });
+  await budgetHarness.coordinator.confirmPlan(budgetTask.id);
+  const budgetFailure = await budgetHarness.coordinator.run(budgetTask.id);
+  assert.equal(budgetFailure.status, 'partial-failure');
+  assert.match(budgetFailure.reportError, /budget_exceeded|详情数超出预算/);
+  assert.equal(budgetHarness.coordinator.getState().researchTasks[0].status, 'partial-failure');
 });

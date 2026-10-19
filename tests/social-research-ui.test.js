@@ -58,3 +58,11 @@ test('运行控制包含暂停/继续、运行中取消和实时执行上下文'
   }
   assert.ok(source.includes('["awaiting-plan-confirmation", "awaiting-platform-preparation", "searching"]'), '运行中应允许请求取消');
 });
+
+test('报告生成期间明确说明取消边界，禁用暂停并保留取消入口', () => {
+  const source = fs.readFileSync(path.join(root, 'prototype/social-research-ui.js'), 'utf8');
+  assert.ok(source.includes('event.type === "report-start"'), '收到报告开始事件后应切换报告生成状态');
+  assert.ok(source.includes('正在生成报告；取消将在当前模型请求完成后生效'), '报告阶段应说明取消延迟到模型请求完成');
+  assert.ok(source.includes('|| reportGenerating'), '模型请求期间应禁用暂停');
+  assert.ok(source.includes('coordinator.cancel(task.id)'), '报告生成期间仍通过现有入口允许取消');
+});

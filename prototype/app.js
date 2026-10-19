@@ -115,6 +115,7 @@
       const run = async (taskId, { onEvent } = {}) => {
         const current = findTask(taskId);
         if (!current) throw new Error("研究任务不存在");
+        if (activeRuns.has(taskId)) throw new Error("研究任务已在运行");
         if (current.status !== "awaiting-platform-preparation") throw new Error("研究任务不在可运行的准备状态");
         let wakeResume;
         const activeRun = {
@@ -136,7 +137,7 @@
           return updateTask({
             ...cancelled,
             results: [], resultIds: [], report: null, reportId: "",
-            rejectionReason: "用户取消（在当前平台/查询请求完成后生效，未完成结果已丢弃）"
+            failureReason: "用户取消（在当前请求完成后生效，未完成结果已丢弃）"
           });
         };
         let task = current;
@@ -201,9 +202,12 @@
             }
             activeRun.emit({ type: "platform-finish", taskId, platform, mode, resultCount: results.length });
           } catch (error) {
+            if (error.code === "budget_exceeded") throw error;
             platformErrors[platform] = { message: error.message || "平台执行失败" };
           }
         }
+        if (!await checkpoint()) return finishCancelled(task);
+        activeRun.emit({ type: "report-start", taskId, resultCount: results.length });
         if (!await checkpoint()) return finishCancelled(task);
         let reportRaw;
         try {
@@ -233,6 +237,21 @@
         task = workflow.transitionResearchTask(task, "request_save");
         task = { ...task, results, resultIds: results.map(item => item.id), report: normalizedReport, reportId: `${task.id}-report`, platformErrors };
         return { ...updateTask(task), platformErrors };
+        } catch (error) {
+          const latest = findTask(taskId);
+          if (activeRun.cancelRequested && latest?.status === "searching") return finishCancelled(latest);
+          if (latest?.status === "searching") {
+            const failed = workflow.transitionResearchTask(latest, { type: "partial_failure" });
+            return updateTask({
+              ...failed,
+              results: [],
+              resultIds: [],
+              report: null,
+              reportId: "",
+              reportError: error.message || "研究执行异常"
+            });
+          }
+          throw error;
         } finally {
           activeRuns.delete(taskId);
         }

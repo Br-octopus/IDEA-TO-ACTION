@@ -29,6 +29,7 @@
     let running = false;
     let paused = false;
     let cancellationRequested = false;
+    let reportGenerating = false;
     let liveProgress = null;
     let selectedResultIds = new Set();
 
@@ -72,10 +73,12 @@
           && (item.connection.browserReady || item.connection.browserPrepared || item.connection.apiConfigured));
       });
       $("social-research-plan-confirm").disabled = task.status !== "awaiting-plan-confirmation" || !ready || running;
-      $("social-research-pause").disabled = !running || cancellationRequested;
+      $("social-research-pause").disabled = !running || cancellationRequested || reportGenerating;
       $("social-research-pause").textContent = paused ? "继续" : "暂停";
       $("social-research-cancel").disabled = cancellationRequested || !["awaiting-plan-confirmation", "awaiting-platform-preparation", "searching"].includes(task.status);
-      if (running && liveProgress) {
+      if (running && reportGenerating) {
+        $("social-research-progress-detail").textContent = "正在生成报告；取消将在当前模型请求完成后生效";
+      } else if (running && liveProgress) {
         const platform = names[liveProgress.platform] || liveProgress.platform || "";
         const mode = { auto: "自动回退", api: "API", browser: "真实浏览器" }[liveProgress.mode] || liveProgress.mode || "待确定";
         $("social-research-progress-detail").textContent = `${paused ? "已暂停" : "执行中"} · ${platform} · ${mode} · 查询：${liveProgress.query || "等待查询"} · 已收集 ${liveProgress.resultCount || 0} 条`;
@@ -162,12 +165,16 @@
       })) { setStatus("请先检查所有所选平台。"); return; }
       try {
         await coordinator.confirmPlan(task.id);
-        running = true; paused = false; cancellationRequested = false; liveProgress = null;
+        running = true; paused = false; cancellationRequested = false; reportGenerating = false; liveProgress = null;
         let completedQueries = 0;
         $("social-research-progress").style.width = "0%";
         $("social-research-progress-detail").textContent = "正在检查平台…";
         render(); setStatus("已确认计划，正在检查平台；取消将在当前平台/查询请求完成后生效。");
         const result = await coordinator.run(task.id, { onEvent: event => {
+          if (event.type === "report-start") {
+            reportGenerating = true;
+            setStatus("正在生成报告；取消将在当前模型请求完成后生效");
+          }
           liveProgress = { ...liveProgress, ...event };
           if (event.type === "platform-start") liveProgress.query = "等待查询";
           if (event.type === "query-start") liveProgress.query = event.query;
@@ -177,18 +184,20 @@
           $("social-research-progress").style.width = `${Math.min(95, Math.round(completedQueries / plannedQueries * 95))}%`;
           render();
         } });
-        running = false; paused = false; cancellationRequested = false;
+        running = false; paused = false; cancellationRequested = false; reportGenerating = false;
         $("social-research-progress").style.width = result.status === "awaiting-save" ? "100%" : result.status === "cancelled" ? "0%" : "60%";
         render();
         setStatus(result.status === "cancelled" ? "已取消：当前请求结束后停止，未完成结果已丢弃。" : `研究结束：${result.status} · ${result.results?.length || 0} 条结果${Object.keys(result.platformErrors || {}).length ? " · 部分平台未完成" : ""}`);
-      } catch (error) { running = false; paused = false; cancellationRequested = false; render(); setStatus(error.message || "研究执行失败"); }
+      } catch (error) { running = false; paused = false; cancellationRequested = false; reportGenerating = false; render(); setStatus(error.message || "研究执行失败"); }
     }
     function cancelTask() {
       const task = currentTask();
       if (!task) return;
       try {
         coordinator.cancel(task.id);
-        if (running) { cancellationRequested = true; render(); setStatus("已请求取消，将在当前平台/查询请求完成后生效；未完成结果不会保留或生成报告。"); }
+        if (running) { cancellationRequested = true; render(); setStatus(reportGenerating
+          ? "正在生成报告；取消将在当前模型请求完成后生效，返回结果将丢弃。"
+          : "已请求取消，将在当前平台/查询请求完成后生效；未完成结果不会保留或生成报告。"); }
         else { render(); setStatus("研究计划已取消，未开始搜索。"); }
       }
       catch (error) { setStatus(error.message || "当前阶段不能取消"); }
