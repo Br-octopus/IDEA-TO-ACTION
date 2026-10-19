@@ -116,7 +116,7 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
   }
 });
 
-test('资料选择迁移去重并限制为最多三条', () => {
+test('资料选择迁移去重并限制为最多五条', () => {
   const state = migrateState({ researchSelection: [catalog[0].id, 'stale-reference', catalog[1].id, catalog[0].id, catalog[2].id, catalog[3].id] });
   assert.deepEqual(state.researchSelection, [catalog[0].id, catalog[1].id, catalog[2].id]);
   assert.deepEqual(state.knowledgeSelection, [catalog[0].id, catalog[1].id, catalog[2].id]);
@@ -159,6 +159,282 @@ test('旧版状态迁移后拥有知识条目集合', () => {
   const state = migrateState({ schemaVersion: 2, projects: [], prompts: [], cases: [] });
   assert.equal(state.schemaVersion, 3);
   assert.deepEqual(state.knowledgeEntries, []);
+});
+
+test('空状态包含研究任务、平台连接和附件集合', () => {
+  const state = createEmptyState();
+
+  assert.deepEqual(state.researchTasks, []);
+  assert.deepEqual(state.platformConnections, {});
+  assert.deepEqual(state.researchAttachments, []);
+});
+
+test('研究状态迁移和保存使用白名单并剔除平台敏感字段', () => {
+  const storage = memoryStorage();
+  const state = saveState(storage, {
+    ...createEmptyState(),
+    researchTasks: [{
+      id: 'task-1',
+      topic: '研究主题',
+      status: 'draft',
+      results: [{ id: 'result-1', url: 'https://example.test', summary: '摘要' }],
+      apiKey: 'task-secret',
+      unknownField: 'task-unknown'
+    }],
+    platformConnections: {
+      reddit: {
+        platform: 'reddit',
+        status: 'ready',
+        apiKey: 'api-secret',
+        credential: 'credential-secret',
+        cookie: 'cookie-secret',
+        cookies: ['cookies-secret'],
+        sessionToken: 'session-secret',
+        password: 'password-secret',
+        profilePath: 'C:/private/profile',
+        unknownField: 'unknown-secret'
+      }
+    },
+    researchAttachments: [{
+      id: 'attachment-1',
+      type: 'screenshot',
+      size: 12,
+      sourceResultId: 'result-1',
+      relativePath: 'research/a.png',
+      savedAt: '2026-10-19T08:00:00.000Z',
+      extra: '不应保留'
+    }]
+  });
+  const serialized = storage.getItem(STORAGE_KEY);
+
+  assert.equal(state.researchTasks[0].unknownField, undefined);
+  assert.equal(state.platformConnections.reddit.status, 'needs-recheck');
+  assert.equal(state.platformConnections.reddit.apiKey, undefined);
+  assert.equal(state.researchAttachments[0].extra, undefined);
+  for (const secret of [
+    'task-secret', 'api-secret', 'credential-secret', 'cookie-secret',
+    'cookies-secret', 'session-secret', 'password-secret', 'C:/private/profile',
+    'unknown-secret'
+  ]) {
+    assert.equal(serialized.includes(secret), false, `不应持久化 ${secret}`);
+  }
+});
+
+test('旧的已确认案例迁移后补齐 v1 版本元数据', () => {
+  const before = Date.now();
+  const state = migrateState({
+    cases: [
+      {
+        id: 'legacy-case',
+        confirmed: true,
+        status: '失败',
+        evidence: ['旧证据'],
+        lessons: '旧经验',
+        createdAt: '2026-10-10T00:00:00.000Z',
+        confirmedAt: '2026-10-11T00:00:00.000Z'
+      },
+      {
+        id: 'created-at-case',
+        confirmed: true,
+        status: '成功',
+        createdAt: '2026-10-12T00:00:00.000Z'
+      },
+      {
+        id: 'current-time-case',
+        confirmed: true,
+        status: '待验证'
+      }
+    ]
+  });
+  const after = Date.now();
+  const migrated = state.cases[0];
+
+  assert.equal(migrated.currentVersion, 1);
+  assert.equal(migrated.versionHistory.length, 1);
+  assert.equal(migrated.versionHistory[0].version, 1);
+  assert.equal(migrated.versionHistory[0].status, '失败');
+  assert.deepEqual(migrated.versionHistory[0].evidence, ['旧证据']);
+  assert.equal(migrated.reviewCount, 1);
+  assert.equal(migrated.lastReviewedAt, '2026-10-11T00:00:00.000Z');
+
+  assert.equal(state.cases[1].lastReviewedAt, '2026-10-12T00:00:00.000Z');
+  const currentTime = Date.parse(state.cases[2].lastReviewedAt);
+  assert.equal(Number.isNaN(currentTime), false);
+  assert.ok(currentTime >= before && currentTime <= after);
+});
+
+test('已有有效案例版本历史的迁移不会重复覆盖版本元数据', () => {
+  const versionHistory = [
+    {
+      version: 1,
+      status: '失败',
+      suggestedLabel: '初始结论',
+      evidence: ['初始证据'],
+      lessons: '初始经验',
+      nextPrompt: '初始下一条提示词',
+      applicableWhen: ['初始适用场景'],
+      notApplicableWhen: ['初始不适用场景'],
+      changeNote: '初始版本'
+    },
+    {
+      version: 2,
+      status: '成功',
+      suggestedLabel: '当前结论',
+      evidence: ['补充证据'],
+      lessons: '当前经验',
+      nextPrompt: '当前下一条提示词',
+      applicableWhen: ['当前适用场景'],
+      notApplicableWhen: ['当前不适用场景'],
+      changeNote: '补充版本'
+    }
+  ];
+  const state = migrateState({
+    cases: [{
+      id: 'versioned-case',
+      confirmed: true,
+      status: '成功',
+      suggestedLabel: '当前结论',
+      evidence: ['补充证据'],
+      lessons: '当前经验',
+      nextPrompt: '当前下一条提示词',
+      applicableWhen: ['当前适用场景'],
+      notApplicableWhen: ['当前不适用场景'],
+      currentVersion: 2,
+      versionHistory,
+      reviewCount: 3,
+      lastReviewedAt: '2026-10-12T00:00:00.000Z',
+      createdAt: '2026-10-10T00:00:00.000Z'
+    }]
+  });
+  const migrated = state.cases[0];
+
+  assert.equal(migrated.currentVersion, 2);
+  assert.deepEqual(migrated.versionHistory, versionHistory);
+  assert.equal(migrated.reviewCount, 3);
+  assert.equal(migrated.lastReviewedAt, '2026-10-12T00:00:00.000Z');
+});
+
+test('最新版本快照业务字段与当前案例不一致时迁移为一致的 v1', () => {
+  const state = migrateState({
+    cases: [{
+      id: 'stale-latest-version',
+      confirmed: true,
+      currentVersion: 2,
+      status: '成功',
+      suggestedLabel: '当前结论',
+      evidence: ['当前证据'],
+      lessons: '当前经验',
+      nextPrompt: '当前下一条提示词',
+      applicableWhen: ['当前适用场景'],
+      notApplicableWhen: ['当前不适用场景'],
+      versionHistory: [
+        {
+          version: 1,
+          status: '失败',
+          suggestedLabel: '初始结论',
+          evidence: ['初始证据'],
+          lessons: '初始经验',
+          nextPrompt: '初始下一条提示词',
+          applicableWhen: ['初始适用场景'],
+          notApplicableWhen: ['初始不适用场景']
+        },
+        {
+          version: 2,
+          status: '失败',
+          suggestedLabel: '过期结论',
+          evidence: ['过期证据'],
+          lessons: '过期经验',
+          nextPrompt: '过期下一条提示词',
+          applicableWhen: ['过期适用场景'],
+          notApplicableWhen: ['过期不适用场景']
+        }
+      ],
+      reviewCount: 2,
+      lastReviewedAt: '2026-10-12T00:00:00.000Z',
+      confirmedAt: '2026-10-13T00:00:00.000Z'
+    }]
+  });
+  const migrated = state.cases[0];
+
+  assert.equal(migrated.currentVersion, 1);
+  assert.equal(migrated.versionHistory.length, 1);
+  for (const field of [
+    'status', 'suggestedLabel', 'evidence', 'lessons', 'nextPrompt',
+    'applicableWhen', 'notApplicableWhen'
+  ]) {
+    assert.deepEqual(migrated.versionHistory[0][field], migrated[field], field);
+  }
+  assert.equal(migrated.reviewCount, 1);
+  assert.equal(migrated.lastReviewedAt, '2026-10-13T00:00:00.000Z');
+});
+
+test('不完整或不一致的案例版本历史迁移为一致的 v1 元数据', () => {
+  const state = migrateState({
+    cases: [
+      {
+        id: 'wrong-current-version',
+        confirmed: true,
+        currentVersion: 3,
+        versionHistory: [{ version: 1, status: '失败' }],
+        reviewCount: 2,
+        lastReviewedAt: '2026-10-12T00:00:00.000Z',
+        status: '成功',
+        lessons: '保留当前经验',
+        confirmedAt: '2026-10-13T00:00:00.000Z'
+      },
+      {
+        id: 'non-contiguous-history',
+        confirmed: true,
+        currentVersion: 3,
+        versionHistory: [
+          { version: 1, status: '失败' },
+          { version: 3, status: '成功' }
+        ],
+        reviewCount: 2,
+        lastReviewedAt: '2026-10-12T00:00:00.000Z',
+        status: '成功',
+        confirmedAt: '2026-10-14T00:00:00.000Z'
+      },
+      {
+        id: 'empty-review-count',
+        confirmed: true,
+        currentVersion: 2,
+        versionHistory: [
+          { version: 1, status: '失败' },
+          { version: 2, status: '成功' }
+        ],
+        reviewCount: 0,
+        lastReviewedAt: '2026-10-12T00:00:00.000Z',
+        status: '成功',
+        createdAt: '2026-10-15T00:00:00.000Z'
+      },
+      {
+        id: 'empty-last-reviewed-at',
+        confirmed: true,
+        currentVersion: 2,
+        versionHistory: [
+          { version: 1, status: '失败' },
+          { version: 2, status: '成功' }
+        ],
+        reviewCount: 2,
+        lastReviewedAt: '',
+        status: '成功',
+        createdAt: '2026-10-16T00:00:00.000Z'
+      }
+    ]
+  });
+
+  for (const migrated of state.cases) {
+    assert.equal(migrated.currentVersion, 1, migrated.id);
+    assert.equal(migrated.versionHistory.length, 1, migrated.id);
+    assert.equal(migrated.versionHistory[0].version, 1, migrated.id);
+    assert.equal(migrated.versionHistory[0].status, migrated.status, migrated.id);
+    assert.equal(migrated.reviewCount, 1, migrated.id);
+    assert.ok(migrated.lastReviewedAt, migrated.id);
+  }
+  assert.equal(state.cases[0].lastReviewedAt, '2026-10-13T00:00:00.000Z');
+  assert.equal(state.cases[2].lastReviewedAt, '2026-10-15T00:00:00.000Z');
+  assert.equal(state.cases[3].lastReviewedAt, '2026-10-16T00:00:00.000Z');
 });
 
 test('知识条目不会保留模型凭证字段', () => {

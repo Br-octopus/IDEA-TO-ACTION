@@ -10,16 +10,18 @@ const {
 const { toKnowledgeEntry } = require('../prototype/research-catalog.js');
 const { methodCardsToKnowledgeEntries } = require('../prototype/method-cards.js');
 
-function loadBrowserKnowledgeSearch(segmenter, { unstableSort = false } = {}) {
+function loadBrowserKnowledgeSearch(segmenter, { unstableSort = false, includeDictionary = true } = {}) {
   const intl = Object.create(Intl);
   if (arguments.length > 0) intl.Segmenter = segmenter;
   const context = { Intl: intl };
-  for (const file of [
+  const files = [
     'knowledge-schema.js',
     'method-cards.js',
-    'research-catalog.js',
-    'knowledge-search.js'
-  ]) {
+    'research-catalog.js'
+  ];
+  if (includeDictionary) files.push('search-dictionary.js');
+  files.push('knowledge-search.js');
+  for (const file of files) {
     const filename = require.resolve(`../prototype/${file}`);
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context, { filename });
   }
@@ -70,6 +72,27 @@ test('统一索引包含公开资料、提示词、方法卡和已确认案例',
   assert.ok(entries.some(item => item.id === 'r1' && item.type === 'github-summary'));
   assert.ok(entries.some(item => item.id === 'method-writing' && item.type === 'method-card'));
   assert.ok(entries.some(item => item.id === 'm1' && item.type === 'article-summary'));
+});
+
+test('存在提炼资料卡时复用该卡索引案例，否则保留案例自动索引', () => {
+  const entries = collectKnowledgeEntries({
+    cases: [
+      { id: 'with-insight', confirmed: true, status: '成功', goal: '已有提炼卡' },
+      { id: 'without-insight', confirmed: true, status: '失败', goal: '仍用自动索引' }
+    ],
+    knowledgeEntries: [{
+      id: 'case-insight-with-insight',
+      type: 'success-case',
+      title: '已提炼案例经验',
+      summary: '提炼后的摘要',
+      linkedCaseId: 'with-insight'
+    }]
+  });
+
+  assert.equal(entries.filter(item => item.linkedCaseId === 'with-insight').length, 1);
+  assert.ok(entries.some(item => item.id === 'case-insight-with-insight'));
+  assert.equal(entries.some(item => item.id === 'case-with-insight'), false);
+  assert.ok(entries.some(item => item.id === 'case-without-insight' && item.type === 'failure-case'));
 });
 
 test('同一来源重复 id 只保留一个条目且公开资料保持未验证', () => {
@@ -273,6 +296,46 @@ test('搜索结果明确记录命中的查询词', () => {
   assert.deepEqual(result[0].matchedTerms, ['句式', '节奏']);
 });
 
+test('英文别名可以命中中文资料并提供高亮字段信息', () => {
+  const result = searchKnowledge([
+    { id: 'prompt', title: '提示词复核', summary: '检查发送内容' }
+  ], 'prompt review');
+
+  assert.deepEqual(result.map(item => item.id), ['prompt']);
+  assert.deepEqual(result[0].matchedTerms, ['提示词', '复核']);
+  assert.deepEqual(result[0].expandedMatchedTerms, ['提示词', '复核']);
+  assert.deepEqual(result[0].queryTerms, ['prompt', 'review']);
+  assert.deepEqual(result[0].matchedFields, ['title']);
+  assert.deepEqual(result[0].highlightFields.title, ['提示词', '复核']);
+});
+
+test('重复别名只计算一次同一字段命中分数', () => {
+  const result = searchKnowledge([
+    { id: 'prompt', title: '提示词' }
+  ], '提示词 prompt');
+
+  assert.equal(result[0].score, 8);
+  assert.deepEqual(result[0].matchedFields, ['title']);
+});
+
+test('自定义别名只在当前搜索中生效', () => {
+  const entries = [{ id: 'prompt', title: '提示词' }];
+
+  assert.equal(searchKnowledge(entries, '口令', {
+    aliases: { 提示词: ['口令'] }
+  })[0].id, 'prompt');
+  assert.deepEqual(searchKnowledge(entries, '口令'), []);
+});
+
+test('资料条目的自定义别名只作用于该条目', () => {
+  const result = searchKnowledge([
+    { id: 'prompt', title: '提示词', customAliases: ['口令'] },
+    { id: 'other', title: '其他资料' }
+  ], '口令');
+
+  assert.deepEqual(result.map(item => item.id), ['prompt']);
+});
+
 test('标题命中按高于摘要的字段权重计分并排在前面', () => {
   const entries = [
     { id: 'summary-hit', type: 'test-entry', title: '低权重资料', summary: 'needle' },
@@ -291,6 +354,28 @@ test('搜索可以按领域、阶段和类型过滤', () => {
     domain: '软件开发', stage: 'plan', types: ['success-case'], limit: 5
   });
   assert.deepEqual(result.map(item => item.id), ['software']);
+});
+
+test('领域和阶段筛选字段也参与搜索但不会压过标题命中', () => {
+  const entries = [
+    { id: 'domain-only', title: '通用资料', domains: ['写作'], stages: ['review'] },
+    { id: 'title-hit', title: '写作方法', domains: ['写作'], stages: ['review'] }
+  ];
+
+  const domainResult = searchKnowledge(entries, '写作', { domain: '写作', limit: 5 });
+  assert.deepEqual(domainResult.map(item => item.id), ['title-hit', 'domain-only']);
+  assert.deepEqual(domainResult.map(item => item.score), [10, 2]);
+
+  const result = searchKnowledge(entries, '写作 review', {
+    domain: '写作', stage: 'review', limit: 5
+  });
+
+  assert.deepEqual(result.map(item => item.id), ['title-hit', 'domain-only']);
+  assert.deepEqual(result.map(item => item.score), [12, 4]);
+  assert.deepEqual(result.map(item => item.matchedFields), [
+    ['title', 'domains', 'stages'],
+    ['domains', 'stages']
+  ]);
 });
 
 test('空查询保留全部资料且无结果查询返回空列表', () => {
@@ -398,6 +483,26 @@ test('搜索限制将 NaN 和未提供值设为 10，并将数值夹在 1 到 20
   assert.equal(searchKnowledge(entries, '目标查询词', { limit: 21 }).length, 20);
 });
 
+test('搜索输入统一处理 null、非字符串 query 和 null options', () => {
+  const emptyWithNullOptions = searchKnowledge(searchableEntries, null, null);
+  const emptyWithObjectOptions = searchKnowledge(searchableEntries, '', {});
+  assert.deepEqual(emptyWithNullOptions, emptyWithObjectOptions);
+
+  const numericEntries = [{ id: 'numeric', title: '123' }];
+  assert.deepEqual(searchKnowledge(numericEntries, 123), searchKnowledge(numericEntries, '123'));
+});
+
+test('超长查询的结果字段保持有界且重复搜索稳定', () => {
+  const query = '中文'.repeat(200);
+  const entries = [{ id: 'long', title: query }];
+  const first = searchKnowledge(entries, query);
+  const second = searchKnowledge(entries, query);
+
+  assert.deepEqual(first, second);
+  assert.ok(first[0].queryTerms.length <= 64);
+  assert.ok(first[0].expandedMatchedTerms.length <= 128);
+});
+
 test('浏览器 UMD 入口使用依赖脚本导出统一搜索全局', () => {
   const context = loadBrowserKnowledgeSearch();
   const api = context.ForwardStepKnowledgeSearch;
@@ -406,6 +511,115 @@ test('浏览器 UMD 入口使用依赖脚本导出统一搜索全局', () => {
   assert.equal(typeof api.searchKnowledge, 'function');
   assert.equal(typeof api.buildKnowledgeContext, 'function');
   assert.equal(api.searchKnowledge(searchableEntries, '句式')[0].id, 'writing');
+});
+
+test('浏览器旧入口未加载词典时仍可使用增强搜索', () => {
+  const context = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false });
+  const result = context.ForwardStepKnowledgeSearch.searchKnowledge(
+    [{ id: 'prompt', title: '提示词复核' }], 'prompt review'
+  );
+
+  assert.deepEqual(Array.from(result, item => item.id), ['prompt']);
+});
+
+test('正式词典和 fallback 暴露明确且只读的词典模式', () => {
+  const dictionaryApi = loadBrowserKnowledgeSearch().ForwardStepKnowledgeSearch;
+  const fallbackApi = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false }).ForwardStepKnowledgeSearch;
+
+  assert.equal(dictionaryApi.searchDictionaryMode, 'dictionary');
+  assert.equal(fallbackApi.searchDictionaryMode, 'fallback');
+  assert.equal(Object.getOwnPropertyDescriptor(fallbackApi, 'searchDictionaryMode').writable, false);
+  assert.equal(typeof dictionaryApi.suggestSearchTerms, 'function');
+  assert.equal(typeof fallbackApi.suggestSearchTerms, 'function');
+  assert.deepEqual(Array.from(fallbackApi.suggestSearchTerms('案', [{ title: '案例' }])), []);
+});
+
+test('正式词典和旧入口回退在无 Intl.Segmenter 时保持搜索结果一致', () => {
+  const entries = [
+    { id: 'prompt', title: '提示词复核' },
+    { id: 'acceptance', title: '完成标准测试' }
+  ];
+  const dictionaryContext = loadBrowserKnowledgeSearch(undefined);
+  const fallbackContext = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false });
+  const dictionaryApi = dictionaryContext.ForwardStepKnowledgeSearch;
+  const fallbackApi = fallbackContext.ForwardStepKnowledgeSearch;
+
+  assert.deepEqual(
+    Array.from(dictionaryContext.ForwardStepSearchDictionary.splitChineseTerms('完成标准')),
+    ['完成标准', '完成', '成标', '标准']
+  );
+  assert.deepEqual(
+    Array.from(dictionaryContext.ForwardStepSearchDictionary.expandSearchTerms('prompt')),
+    ['prompt', '提示词']
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(entries, 'prompt'))),
+    JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(entries, 'prompt')))
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(entries, '完成标准'))),
+    JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(entries, '完成标准')))
+  );
+
+  const longPhrase = '中文搜索案例资料';
+  const longTerms = Array.from(
+    dictionaryContext.ForwardStepSearchDictionary.splitChineseTerms(longPhrase)
+  );
+  assert.deepEqual(longTerms, ['中文', '文搜', '搜索', '索案', '案例', '例资', '资料']);
+  assert.equal(longTerms.includes(longPhrase), false);
+  const longEntries = [
+    { id: 'long', title: longPhrase },
+    { id: 'partial', title: '文搜索案例资料' }
+  ];
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(longEntries, longPhrase))),
+    JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(longEntries, longPhrase)))
+  );
+});
+
+test('正式词典和旧入口回退对条目及选项自定义别名保持一致', () => {
+  const entries = [{ id: 'prompt', title: '提示词', customAliases: ['口令'] }];
+  const options = { aliases: { 提示词: ['外号'] } };
+  const dictionaryApi = loadBrowserKnowledgeSearch(undefined).ForwardStepKnowledgeSearch;
+  const fallbackApi = loadBrowserKnowledgeSearch(undefined, { includeDictionary: false }).ForwardStepKnowledgeSearch;
+
+  for (const query of ['口令', '外号']) {
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(dictionaryApi.searchKnowledge(entries, query, options))),
+      JSON.parse(JSON.stringify(fallbackApi.searchKnowledge(entries, query, options)))
+    );
+  }
+});
+
+test('正式词典和旧入口回退在 Intl.Segmenter 可用时保持完整结果一致', () => {
+  const entries = [
+    { id: 'a', title: '完成标准测试', customAliases: ['验收门槛'] },
+    { id: 'b', title: '成标准' },
+    { id: 'c', title: '中文搜索案例' }
+  ];
+  const dictionaryApi = loadBrowserKnowledgeSearch().ForwardStepKnowledgeSearch;
+  const fallbackApi = loadBrowserKnowledgeSearch(Intl.Segmenter, { includeDictionary: false }).ForwardStepKnowledgeSearch;
+  const cases = [
+    { query: '完成标准' },
+    { query: '中文 搜索' },
+    { query: '验收门槛' },
+    { query: '外号', options: { aliases: { '完成标准测试': ['外号'] } } }
+  ];
+
+  for (const { query, options } of cases) {
+    const select = result => result.map(item => ({
+      id: item.id,
+      score: item.score,
+      queryTerms: item.queryTerms,
+      matchedTerms: item.matchedTerms,
+      highlightFields: item.highlightFields
+    }));
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(select(dictionaryApi.searchKnowledge(entries, query, options)))),
+      JSON.parse(JSON.stringify(select(fallbackApi.searchKnowledge(entries, query, options)))),
+      `搜索结果不一致: ${query}`
+    );
+  }
 });
 
 test('浏览器 UMD 搜索在不稳定 sort 下仍保持并列结果输入顺序', () => {

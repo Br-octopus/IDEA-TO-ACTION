@@ -8,12 +8,22 @@
     : typeof globalThis === "undefined"
       ? null
       : globalThis.ForwardStepKnowledgeSchema;
+  const socialResearchSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./social-research-schema.js")
+    : typeof globalThis === "undefined"
+      ? null
+      : globalThis.ForwardStepSocialResearchSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
     "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
     "externalResult", "userFeedback", "dimensions", "evidence", "suggestedLabel", "status",
-    "lessons", "nextPrompt", "createdAt"
+    "lessons", "nextPrompt", "createdAt", "currentVersion", "versionHistory",
+    "applicableWhen", "notApplicableWhen", "reviewCount", "lastReviewedAt", "changeNote", "reuseDeferredAt"
+  ];
+  const CASE_VERSION_FIELDS = [
+    "status", "suggestedLabel", "evidence", "lessons", "nextPrompt",
+    "applicableWhen", "notApplicableWhen"
   ];
 
   function createEmptyState() {
@@ -23,9 +33,12 @@
       prompts: [],
       references: [],
       researchSelection: [],
-      knowledgeSelection: [],
       knowledgeEntries: [],
-      cases: []
+      knowledgeSelection: [],
+      cases: [],
+      researchTasks: [],
+      platformConnections: {},
+      researchAttachments: []
     };
   }
 
@@ -54,19 +67,28 @@
     }
   }
 
-  function stripModelKeys(value) {
-    if (Array.isArray(value)) return value.map(stripModelKeys);
+  function stripModelKeys(value, options = {}, path = []) {
+    const hasExplicitFields = Array.isArray(options.fields);
+    const credentialFields = new Set((hasExplicitFields
+      ? options.fields
+      : ["authorization", "password", "credentials", "credential", "token", "secret"])
+      .map(key => String(key).toLowerCase().replace(/[^a-z0-9]/g, "")));
+    if (Array.isArray(value)) return value.map(item => stripModelKeys(item, options, path));
     if (!value || typeof value !== "object") return value;
-    const credentialFields = new Set([
-      "authorization", "password", "credentials", "credential", "token", "secret"
-    ]);
     return Object.fromEntries(Object.entries(value)
       .filter(([key]) => {
         const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-        return !credentialFields.has(normalized)
-          && !/(?:api|model|access|refresh|client|auth|bearer|private|secret)(?:key|token|secret|credential)$/.test(normalized);
+        const currentIsBusinessField = options.preserveBusinessFields === true
+          && path.length === 0
+          && ["token", "secret"].includes(normalized)
+          || options.preserveBusinessFields === true
+          && path.length === 0
+          && key === "apiKey";
+        const currentMatchesPattern = /^(?:api|model|search|access|refresh|client|auth|bearer|private)(?:api)?(?:key|token|secret|credential)$/.test(normalized);
+        return currentIsBusinessField
+          || (!credentialFields.has(normalized) && !currentMatchesPattern);
       })
-      .map(([key, item]) => [key, stripModelKeys(item)]));
+      .map(([key, item]) => [key, stripModelKeys(item, options, [...path, key])]));
   }
 
   function withProjectDefaults(project) {
@@ -149,6 +171,86 @@
     return [];
   }
 
+  function positiveInteger(value, fallback) {
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : fallback;
+  }
+
+  function nonNegativeInteger(value, fallback) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 0 ? number : fallback;
+  }
+
+  function createCaseVersionSnapshot(caseItem, version, changeNote = "") {
+    const {
+      versionHistory,
+      currentVersion,
+      reviewCount,
+      lastReviewedAt,
+      confirmed,
+      confirmedAt,
+      ...snapshot
+    } = caseItem;
+    return {
+      ...snapshot,
+      version,
+      changeNote: String(changeNote || "").trim()
+    };
+  }
+
+  function hasCaseVersionChange(previousCase, nextCase) {
+    return CASE_VERSION_FIELDS.some(field => (
+      !sameCaseValue(previousCase[field], nextCase[field])
+    ));
+  }
+
+  function sameCaseValue(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function hasValidCaseVersionHistory(caseItem) {
+    const { versionHistory, currentVersion, reviewCount, lastReviewedAt } = caseItem;
+    const targetVersion = positiveInteger(currentVersion, 0);
+    if (!Array.isArray(versionHistory) || versionHistory.length === 0 || versionHistory.length !== targetVersion) {
+      return false;
+    }
+    if (positiveInteger(reviewCount, 0) <= 0 || !String(lastReviewedAt ?? "").trim()) return false;
+    const hasContinuousVersions = versionHistory.every((version, index) => (
+      version
+      && typeof version === "object"
+      && positiveInteger(version.version, 0) === index + 1
+    ));
+    if (!hasContinuousVersions) return false;
+
+    const latestVersion = versionHistory[versionHistory.length - 1];
+    return CASE_VERSION_FIELDS.every(field => sameCaseValue(latestVersion[field], caseItem[field]));
+  }
+
+  function migrateConfirmedCase(reviewedCase) {
+    const normalized = normalizeCase(reviewedCase);
+    const confirmedAt = String(reviewedCase.confirmedAt ?? "").trim();
+    const createdAt = String(reviewedCase.createdAt ?? normalized.createdAt ?? "").trim();
+    const reviewedAt = confirmedAt || createdAt || new Date().toISOString();
+
+    if (hasValidCaseVersionHistory(normalized)) {
+      return {
+        ...normalized,
+        confirmed: true,
+        confirmedAt: reviewedAt
+      };
+    }
+
+    return {
+      ...normalized,
+      currentVersion: 1,
+      versionHistory: [createCaseVersionSnapshot(normalized, 1, normalized.changeNote)],
+      reviewCount: 1,
+      lastReviewedAt: reviewedAt,
+      confirmed: true,
+      confirmedAt: reviewedAt
+    };
+  }
+
   function normalizeCase(reviewedCase = {}) {
     const source = stripModelKeys(reviewedCase);
     const after = source.after ?? source.externalResult ?? "";
@@ -173,7 +275,15 @@
       status,
       lessons: String(source.lessons ?? "").trim(),
       nextPrompt: String(source.nextPrompt ?? "").trim(),
-      createdAt: String(source.createdAt ?? "").trim() || new Date().toISOString()
+      createdAt: String(source.createdAt ?? "").trim() || new Date().toISOString(),
+      currentVersion: positiveInteger(source.currentVersion, 1),
+      versionHistory: Array.isArray(source.versionHistory) ? source.versionHistory : [],
+      applicableWhen: listValue(source.applicableWhen),
+      notApplicableWhen: listValue(source.notApplicableWhen),
+      reviewCount: nonNegativeInteger(source.reviewCount, 0),
+      lastReviewedAt: String(source.lastReviewedAt ?? "").trim(),
+      changeNote: String(source.changeNote ?? "").trim(),
+      reuseDeferredAt: String(source.reuseDeferredAt ?? "").trim()
     };
   }
 
@@ -187,10 +297,22 @@
       .filter(item => item.id);
   }
 
+  function sanitizeResearchState(state) {
+    if (!socialResearchSchema || typeof socialResearchSchema.sanitizeResearchState !== "function") {
+      return {
+        researchTasks: [],
+        platformConnections: {},
+        researchAttachments: []
+      };
+    }
+    return socialResearchSchema.sanitizeResearchState(state);
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const knowledgeEntries = normalizeKnowledgeEntries(source.knowledgeEntries);
     const researchSelection = sanitizeResearchSelection(source.researchSelection);
+    const researchState = sanitizeResearchState(source);
     const state = {
       ...createEmptyState(),
       ...stripModelKeys(source),
@@ -208,8 +330,9 @@
       cases: Array.isArray(source.cases)
         ? stripModelKeys(source.cases)
           .filter(item => item && item.confirmed === true)
-          .map(item => ({ ...normalizeCase(item), confirmed: true, confirmedAt: item.confirmedAt || item.createdAt || new Date().toISOString() }))
-        : []
+          .map(migrateConfirmedCase)
+        : [],
+      ...researchState
     };
     return state;
   }
@@ -272,7 +395,17 @@
     const caseId = reviewedCase.id.trim();
     if (next.cases.some(item => typeof item.id === "string" && item.id.trim() === caseId)) return next;
     const sanitizedCase = normalizeCase({ ...reviewedCase, id: caseId });
-    next.cases.unshift({ ...sanitizedCase, confirmed: true, confirmedAt: new Date().toISOString() });
+    const confirmedAt = new Date().toISOString();
+    const versionOne = createCaseVersionSnapshot(sanitizedCase, 1, sanitizedCase.changeNote);
+    next.cases.unshift({
+      ...sanitizedCase,
+      currentVersion: 1,
+      versionHistory: [versionOne],
+      reviewCount: 1,
+      lastReviewedAt: confirmedAt,
+      confirmed: true,
+      confirmedAt
+    });
     return next;
   }
 
@@ -284,10 +417,132 @@
     const index = next.cases.findIndex(item => item.id === caseId);
     if (index < 0) return next;
     const existing = next.cases[index];
-    const merged = normalizeCase({ ...existing, ...reviewedCase, id: caseId, createdAt: existing.createdAt });
-    next.cases[index] = { ...merged, confirmed: true, confirmedAt: existing.confirmedAt || new Date().toISOString() };
+    const currentVersion = positiveInteger(existing.currentVersion, 1);
+    const nextVersion = currentVersion + 1;
+    const changeNote = String(reviewedCase.changeNote ?? "").trim();
+    const merged = normalizeCase({
+      ...existing,
+      ...reviewedCase,
+      id: caseId,
+      createdAt: existing.createdAt,
+      changeNote
+    });
+    if (!hasCaseVersionChange(existing, merged)) {
+      next.cases[index] = {
+        ...merged,
+        currentVersion,
+        versionHistory: existing.versionHistory,
+        reviewCount: existing.reviewCount,
+        lastReviewedAt: existing.lastReviewedAt,
+        confirmed: true,
+        confirmedAt: existing.confirmedAt
+      };
+      return next;
+    }
+    const versionHistory = Array.isArray(existing.versionHistory) && existing.versionHistory.length > 0
+      ? existing.versionHistory.slice()
+      : [createCaseVersionSnapshot(existing, currentVersion, existing.changeNote)];
+    versionHistory.push(createCaseVersionSnapshot(merged, nextVersion, changeNote));
+    const lastReviewedAt = new Date().toISOString();
+    next.cases[index] = {
+      ...merged,
+      currentVersion: nextVersion,
+      versionHistory,
+      reviewCount: nonNegativeInteger(existing.reviewCount, 0) + 1,
+      lastReviewedAt,
+      confirmed: true,
+      confirmedAt: existing.confirmedAt || lastReviewedAt
+    };
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase };
+  function upsertKnowledgeEntry(state, entry) {
+    const next = migrateState(state);
+    if (!knowledgeSchema || typeof knowledgeSchema.normalizeKnowledgeEntry !== "function") {
+      throw new KnowledgeSchemaUnavailableError();
+    }
+    const normalized = knowledgeSchema.normalizeKnowledgeEntry(entry);
+    if (!normalized.id) throw new TypeError("知识条目必须提供非空 id");
+
+    const linkedCaseId = normalized.linkedCaseId;
+    const existingIndex = linkedCaseId
+      ? next.knowledgeEntries.findIndex(item => item.linkedCaseId === linkedCaseId)
+      : next.knowledgeEntries.findIndex(item => item.id === normalized.id);
+    const now = new Date().toISOString();
+
+    if (existingIndex < 0) {
+      const saved = { ...normalized, updatedAt: now };
+      next.knowledgeEntries.unshift(saved);
+      return { state: next, entry: saved, updated: false };
+    }
+
+    const existing = next.knowledgeEntries[existingIndex];
+    const saved = {
+      ...existing,
+      ...normalized,
+      id: existing.id || normalized.id,
+      createdAt: existing.createdAt || normalized.createdAt,
+      updatedAt: now
+    };
+    next.knowledgeEntries[existingIndex] = saved;
+    next.knowledgeEntries = next.knowledgeEntries.filter((item, index) => (
+      index === existingIndex || !linkedCaseId || item.linkedCaseId !== linkedCaseId
+    ));
+    return { state: next, entry: saved, updated: true };
+  }
+
+  function listCaseVersions(caseItem) {
+    if (!caseItem || typeof caseItem !== "object") return [];
+    if (Array.isArray(caseItem.versionHistory) && caseItem.versionHistory.length) {
+      return caseItem.versionHistory.map(version => ({ ...version }));
+    }
+    const version = positiveInteger(caseItem.currentVersion, 1);
+    return [createCaseVersionSnapshot(caseItem, version, caseItem.changeNote)];
+  }
+
+  function getCurrentCaseVersion(caseItem) {
+    const versions = listCaseVersions(caseItem);
+    return versions[versions.length - 1] || null;
+  }
+
+  function compareCaseVersions(caseItem, leftVersion, rightVersion) {
+    const versions = listCaseVersions(caseItem);
+    const left = versions.find(version => version.version === Number(leftVersion));
+    const right = versions.find(version => version.version === Number(rightVersion));
+    if (!left || !right || left.version === right.version) return [];
+    return ["status", "evidence", "lessons", "nextPrompt", "applicableWhen", "notApplicableWhen", "changeNote"]
+      .filter(field => !sameCaseValue(left[field], right[field]))
+      .map(field => ({ field, before: left[field], after: right[field] }));
+  }
+
+  function deleteCase(state, caseId) {
+    const next = migrateState(state);
+    const id = String(caseId ?? "").trim();
+    if (!id) return next;
+    const removedEntryIds = new Set(next.knowledgeEntries
+      .filter(entry => String(entry?.linkedCaseId || "").trim() === id)
+      .map(entry => entry.id));
+    next.cases = next.cases.filter(item => item.id !== id);
+    next.knowledgeEntries = next.knowledgeEntries.filter(item => !removedEntryIds.has(item.id));
+    next.knowledgeSelection = next.knowledgeSelection.filter(itemId => !removedEntryIds.has(itemId));
+    return next;
+  }
+
+  function deferCaseReuse(state, caseId, now = new Date().toISOString()) {
+    const next = migrateState(state);
+    const id = String(caseId ?? "").trim();
+    if (!id) return next;
+    const deferredAt = new Date(now).toISOString();
+    const linkedEntryIds = new Set(next.knowledgeEntries
+      .filter(entry => String(entry?.linkedCaseId || "").trim() === id)
+      .map(entry => entry.id));
+    next.cases = next.cases.map(item => item.id === id ? { ...item, reuseDeferredAt: deferredAt } : item);
+    next.knowledgeEntries = next.knowledgeEntries.map(item => linkedEntryIds.has(item.id)
+      ? { ...item, hiddenAt: deferredAt }
+      : item);
+    next.knowledgeSelection = next.knowledgeSelection.filter(itemId => !linkedEntryIds.has(itemId));
+    return next;
+  }
+
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

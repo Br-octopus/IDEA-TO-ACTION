@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -8,6 +9,81 @@ const { startServer } = require('../server');
 
 const root = path.resolve(__dirname, '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+function loadBackupHandler({ channel, filePath, fsModule = fs, importCanceled = false }) {
+  const registeredHandlers = new Map();
+  const dialogOptions = [];
+  const app = {
+    isPackaged: false,
+    whenReady: () => Promise.resolve(),
+    getPath: () => path.dirname(filePath),
+    on: () => {},
+    quit: () => {}
+  };
+  class MockBrowserWindow {
+    constructor() {}
+    isDestroyed() { return false; }
+    async loadURL() {}
+  }
+  MockBrowserWindow.getAllWindows = () => [];
+  const dialog = {
+    showMessageBox: async () => {},
+    showSaveDialog: async (_window, options) => {
+      dialogOptions.push(options);
+      return { canceled: false, filePath };
+    },
+    showOpenDialog: async () => importCanceled
+      ? { canceled: true, filePaths: [] }
+      : { canceled: false, filePaths: [filePath] }
+  };
+  const context = {
+    console,
+    __dirname: path.join(root, 'electron'),
+    Buffer,
+    Date,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    process: { env: {}, platform: 'win32', pid: 12345 },
+    require(request) {
+      if (request === 'electron') {
+        return {
+          app,
+          BrowserWindow: MockBrowserWindow,
+          dialog,
+          ipcMain: { handle: (name, handler) => registeredHandlers.set(name, handler) }
+        };
+      }
+      if (request === 'node:fs') return fsModule;
+      return require(request);
+    }
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8'), context, {
+    filename: path.join(root, 'electron', 'main.js')
+  });
+  return new Promise(resolve => setImmediate(() => resolve({
+    handler: registeredHandlers.get(channel),
+    dialogOptions
+  })));
+}
+
+function loadBackupExportHandler(options) {
+  return loadBackupHandler({ ...options, channel: 'backup:export' });
+}
+
+function loadBackupImportHandler(options) {
+  return loadBackupHandler({ ...options, channel: 'backup:import' });
+}
+
+function createFsModule(overrides = {}) {
+  return {
+    ...fs,
+    writeFileSync: (...args) => fs.writeFileSync(...args),
+    renameSync: (...args) => fs.renameSync(...args),
+    unlinkSync: (...args) => fs.unlinkSync(...args),
+    ...overrides
+  };
+}
 
 test('Electron desktop entry and preload exist', () => {
   assert.equal(packageJson.main, 'electron/main.js');
@@ -22,8 +98,181 @@ test('Electron security settings and preload whitelist are present', () => {
   assert.match(main, /contextIsolation:\s*true/);
   assert.match(main, /nodeIntegration:\s*false/);
   assert.match(main, /sandbox:\s*true/);
-  for (const method of ['getConfig', 'saveConfig', 'requestModel', 'requestSearch']) {
+  for (const method of [
+    'getConfig', 'saveConfig', 'requestModel', 'requestSearch',
+    'exportBackup', 'importBackup', 'listBackups', 'readBackup'
+  ]) {
     assert.match(preload, new RegExp(`${method}\\s*:`));
+  }
+});
+
+test('Electron 备份 IPC 使用受限通道和文件对话框', () => {
+  const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'electron', 'preload.js'), 'utf8');
+  const backupStore = fs.readFileSync(path.join(root, 'electron', 'backup-store.js'), 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+  for (const channel of ['backup:export', 'backup:import', 'backup:list', 'backup:read']) {
+    assert.match(main, new RegExp(`ipcMain\\.handle\\(['"]${channel}['"]`));
+  }
+  assert.match(main, /showSaveDialog/);
+  assert.match(main, /showOpenDialog/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:export['"]/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:import['"]/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:list['"]/);
+  assert.match(preload, /ipcRenderer\.invoke\(['"]backup:read['"]/);
+  assert.match(main, /createBackupStore/);
+  assert.doesNotMatch(preload, /require\(['"]node:fs['"]\)/);
+  assert.doesNotMatch(preload, /userData/);
+  assert.match(backupStore, /BACKUP_DIRECTORY\s*=\s*['"]backups['"]/);
+  assert.match(backupStore, /path\.basename|pathModule\.basename/);
+  assert.ok(packageJson.build.files.includes('electron/**/*'));
+});
+
+test('backup:export 拒绝非 JSON 路径并开启覆盖确认', async () => {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-export-'));
+  const filePath = path.join(tempDirectory, 'backup.txt');
+  fs.writeFileSync(filePath, '原文件', 'utf8');
+
+  try {
+    const { handler, dialogOptions } = await loadBackupExportHandler({ filePath });
+    await assert.rejects(() => handler({}, '{}'), error => {
+      assert.equal(error.name, 'TypeError');
+      assert.match(error.message, /JSON/);
+      return true;
+    });
+    assert.equal(fs.readFileSync(filePath, 'utf8'), '原文件');
+    assert.equal(dialogOptions[0].showOverwriteConfirmation, true);
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('backup:export 临时写入失败时保留原文件并清理临时文件', async () => {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-export-'));
+  const filePath = path.join(tempDirectory, 'backup.json');
+  fs.writeFileSync(filePath, '原文件', 'utf8');
+  const tempPaths = [];
+  const cleanedPaths = [];
+  const fsModule = createFsModule({
+    writeFileSync: (targetPath, ...args) => {
+      tempPaths.push(targetPath);
+      if (targetPath.endsWith('.tmp')) throw new Error('模拟临时文件写入失败');
+      return fs.writeFileSync(targetPath, ...args);
+    },
+    unlinkSync: targetPath => {
+      cleanedPaths.push(targetPath);
+      try {
+        return fs.unlinkSync(targetPath);
+      } catch (error) {
+        if (error.code === 'ENOENT') return;
+        throw error;
+      }
+    }
+  });
+
+  try {
+    const { handler } = await loadBackupExportHandler({ filePath, fsModule });
+    await assert.rejects(() => handler({}, '{}'), error => error.code === 'BACKUP_EXPORT_WRITE_FAILED');
+    assert.equal(fs.readFileSync(filePath, 'utf8'), '原文件');
+    assert.equal(cleanedPaths.length, 1);
+    assert.equal(fs.existsSync(cleanedPaths[0]), false);
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('backup:export 替换失败时保留原文件并清理临时文件', async () => {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-export-'));
+  const filePath = path.join(tempDirectory, 'backup.json');
+  fs.writeFileSync(filePath, '原文件', 'utf8');
+  const tempPaths = [];
+  const fsModule = createFsModule({
+    writeFileSync: (targetPath, ...args) => {
+      tempPaths.push(targetPath);
+      return fs.writeFileSync(targetPath, ...args);
+    },
+    renameSync: () => {
+      throw new Error('模拟原子替换失败');
+    },
+    unlinkSync: targetPath => {
+      fs.unlinkSync(targetPath);
+    }
+  });
+
+  try {
+    const { handler } = await loadBackupExportHandler({ filePath, fsModule });
+    await assert.rejects(() => handler({}, '{}'), error => error.code === 'BACKUP_EXPORT_WRITE_FAILED');
+    assert.equal(fs.readFileSync(filePath, 'utf8'), '原文件');
+    assert.equal(tempPaths.length, 1);
+    assert.equal(fs.existsSync(tempPaths[0]), false);
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('backup:import 用户取消时保持稳定取消结果', async () => {
+  const { handler } = await loadBackupImportHandler({
+    filePath: path.join(os.tmpdir(), 'forward-step-cancelled.json'),
+    importCanceled: true
+  });
+
+  const result = await handler();
+  assert.equal(result.canceled, true);
+});
+
+test('backup:import 非 JSON 扩展名保持明确错误', async () => {
+  const { handler } = await loadBackupImportHandler({
+    filePath: path.join(os.tmpdir(), 'forward-step-invalid.txt')
+  });
+
+  await assert.rejects(() => handler(), error => {
+    assert.equal(error.name, 'TypeError');
+    assert.equal(error.code, 'BACKUP_IMPORT_INVALID_EXTENSION');
+    assert.match(error.message, /JSON/);
+    return true;
+  });
+});
+
+test('backup:import 文件不存在时返回稳定错误码且不泄露路径', async () => {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-import-'));
+  const filePath = path.join(tempDirectory, 'missing.json');
+
+  try {
+    const { handler } = await loadBackupImportHandler({ filePath });
+    await assert.rejects(() => handler(), error => {
+      assert.equal(error.code, 'BACKUP_IMPORT_READ_FAILED');
+      assert.match(error.message, /备份文件读取失败/);
+      assert.equal(error.message.includes(filePath), false);
+      assert.equal(error.cause.code, 'ENOENT');
+      return true;
+    });
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('backup:import 无权限时返回稳定错误码且不泄露路径', async () => {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-import-'));
+  const filePath = path.join(tempDirectory, 'forbidden.json');
+  const cause = Object.assign(new Error(`EACCES: ${filePath}`), { code: 'EACCES' });
+  const fsModule = createFsModule({
+    readFileSync: () => {
+      throw cause;
+    }
+  });
+
+  try {
+    const { handler } = await loadBackupImportHandler({ filePath, fsModule });
+    await assert.rejects(() => handler(), error => {
+      assert.equal(error.code, 'BACKUP_IMPORT_READ_FAILED');
+      assert.match(error.message, /备份文件读取失败/);
+      assert.equal(error.message.includes(filePath), false);
+      assert.equal(error.cause, cause);
+      return true;
+    });
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
   }
 });
 
@@ -148,7 +397,10 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'start-bundled-service:127.0.0.1:0',
     'load-url:http://127.0.0.1:50987'
   ]);
-  assert.equal(registeredHandlers.size, 4);
+  assert.equal(registeredHandlers.size, 8);
+  for (const channel of ['backup:export', 'backup:import', 'backup:list', 'backup:read']) {
+    assert.equal(registeredHandlers.has(channel), true);
+  }
   assert.doesNotMatch(mainSource, /loadFile\(/);
 
   let prevented = false;

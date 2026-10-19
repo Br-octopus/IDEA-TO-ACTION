@@ -43,3 +43,15 @@ test('用户评分空值保留为 null 并限制在 1 到 5 分', () => {
   assert.equal(normalizeKnowledgeEntry({ userRating: 8 }).userRating, 5);
   assert.equal(normalizeKnowledgeEntry({ userRating: 'not-a-rating' }).userRating, null);
 });
+
+test('资料索引元数据有稳定默认值', () => {
+  const entry = normalizeKnowledgeEntry({ id: 'manual-1', title: '资料' });
+
+  assert.equal(entry.sourceKind, 'manual');
+  assert.equal(entry.sourceId, '');
+  assert.equal(entry.hiddenAt, '');
+  assert.equal(entry.favorite, false);
+  assert.equal(entry.pinned, false);
+  assert.equal(entry.lastUsedAt, '');
+  assert.deepEqual(entry.customAliases, []);
+});

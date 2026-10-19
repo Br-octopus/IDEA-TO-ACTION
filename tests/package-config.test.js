@@ -61,7 +61,7 @@ test('图标是非空且结构基本有效的 ICO 文件', () => {
     const height = icon[entryOffset + 1] || 256;
     const bytesInResource = icon.readUInt32LE(entryOffset + 8);
     const imageOffset = icon.readUInt32LE(entryOffset + 12);
-    assert.ok(width >= 16 && height >= 16);
+    assert.ok(width >= 256 && height >= 256, 'Windows 图标至少需要包含 256x256 资源');
     assert.ok(bytesInResource > 0);
     assert.ok(imageOffset >= 6 + imageCount * 16);
     assert.ok(imageOffset + bytesInResource <= icon.length);
