@@ -539,7 +539,8 @@
   }
 
   function mergeState(currentState, backup) {
-    // 先校验备份顶层契约；条目内容复用同一 schema 清洗，id 兼容性则由 mergeCollection 单独报告。
+    // 先校验备份顶层契约；条目内容复用同一 schema 白名单清洗。
+    // 被 schema 判定为非法并丢弃的研究条目不会进入 mergeCollection，也不应被报告为成功新增。
     const collections = validateBackupStructure(backup);
     const state = sanitizeState(currentState);
     const data = sanitizeBackupData(backup.scope, backup.data);

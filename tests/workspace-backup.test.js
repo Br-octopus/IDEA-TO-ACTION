@@ -871,6 +871,31 @@ test('合并外部备份时报告非法 id 的原始值', () => {
   }]);
 });
 
+test('mergeState 先校验顶层结构再按 schema 白名单清洗研究集合，非法条目安全丢弃', () => {
+  const backup = createBackup({
+    projects: [],
+    prompts: [],
+    cases: [],
+    knowledgeEntries: [],
+    researchTasks: [{ id: 'task-1', topic: '保留的研究任务' }],
+    researchAttachments: [{ id: 'attachment-1', relativePath: 'research/a.png' }]
+  }, { scope: 'workspace', now: exportedAt });
+  // 顶层 researchTasks 仍是合法数组；非法条目由社媒研究 schema 白名单清洗丢弃。
+  backup.data.researchTasks.push(null, { topic: '缺少稳定 id 的非法任务' });
+  backup.data.researchAttachments.push({ id: 42, relativePath: 'research/invalid.png' });
+
+  const result = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, backup);
+
+  assert.deepEqual(result.state.researchTasks.map(item => item.id), ['task-1']);
+  assert.deepEqual(result.state.researchAttachments.map(item => item.id), ['attachment-1']);
+  assert.deepEqual(result.added, [
+    { collection: 'researchTasks', id: 'task-1' },
+    { collection: 'researchAttachments', id: 'attachment-1' }
+  ]);
+  assert.deepEqual(result.skipped, []);
+  assert.equal(result.added.some(item => item.id.startsWith('research-task-')), false);
+});
+
 test('合并报告按集合和 id 去重，不丢失跨集合相同 id', () => {
   const incoming = createBackup({
     projects: [{ id: 'same', title: '项目' }],

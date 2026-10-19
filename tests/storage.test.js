@@ -80,6 +80,7 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     '/prototype/method-cards.js',
     '/prototype/research-catalog.js',
     '/prototype/knowledge-search.js',
+    '/prototype/social-research-schema.js',
     '/prototype/storage.js',
     '/prototype/app.js'
   ];
@@ -92,13 +93,15 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     const methodCardsScriptIndex = html.indexOf('src="/prototype/method-cards.js"');
     const researchScriptIndex = html.indexOf('src="/prototype/research-catalog.js"');
     const knowledgeSearchScriptIndex = html.indexOf('src="/prototype/knowledge-search.js"');
+    const socialResearchSchemaScriptIndex = html.indexOf('src="/prototype/social-research-schema.js"');
     const storageScriptIndex = html.indexOf('src="/prototype/storage.js"');
     const appScriptIndex = html.indexOf('src="/prototype/app.js"');
     assert.ok(schemaScriptIndex >= 0, `${pagePath} 应先引用 knowledge-schema.js`);
     assert.ok(schemaScriptIndex < methodCardsScriptIndex, `${pagePath} 中 schema 应在 method-cards.js 前加载`);
     assert.ok(methodCardsScriptIndex < researchScriptIndex, `${pagePath} 中 method-cards.js 应在 research-catalog.js 前加载`);
     assert.ok(researchScriptIndex < knowledgeSearchScriptIndex, `${pagePath} 中 research-catalog.js 应在 knowledge-search.js 前加载`);
-    assert.ok(knowledgeSearchScriptIndex < storageScriptIndex, `${pagePath} 中 knowledge-search.js 应在 storage.js 前加载`);
+    assert.ok(knowledgeSearchScriptIndex < socialResearchSchemaScriptIndex, `${pagePath} 中 knowledge-search.js 应在 social-research-schema.js 前加载`);
+    assert.ok(socialResearchSchemaScriptIndex < storageScriptIndex, `${pagePath} 中 social-research-schema.js 应在 storage.js 前加载`);
     assert.ok(storageScriptIndex < appScriptIndex, `${pagePath} 中 storage.js 应在 app.js 前加载`);
     for (const scriptPath of paths) {
       assert.ok(html.includes(`src="${scriptPath}"`), `${pagePath} 应引用 ${scriptPath}`);
@@ -107,12 +110,28 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     }
 
     const context = {};
-    for (const scriptPath of paths.slice(0, 4)) {
+    for (const scriptPath of paths.slice(0, 6)) {
       const source = fs.readFileSync(require.resolve(`..${scriptPath}`), 'utf8');
       vm.runInNewContext(source, context, { filename: scriptPath });
     }
     assert.equal(typeof context.ForwardStepKnowledgeSearch.collectKnowledgeEntries, 'function');
     assert.equal(typeof context.ForwardStepMethodCards.methodCardsToKnowledgeEntries, 'function');
+    assert.equal(typeof context.ForwardStepSocialResearchSchema.sanitizeResearchState, 'function');
+    const migrated = context.ForwardStepStorage.migrateState({
+      researchTasks: [{ id: 'browser-task-1', topic: '浏览器迁移研究' }],
+      platformConnections: {
+        reddit: { status: 'ready', supportsSearch: true }
+      },
+      researchAttachments: [{
+        id: 'browser-attachment-1',
+        type: 'screenshot',
+        relativePath: 'research/browser.png'
+      }]
+    });
+    assert.deepEqual(migrated.researchTasks.map(item => item.id), ['browser-task-1']);
+    assert.equal(migrated.platformConnections.reddit.platform, 'reddit');
+    assert.equal(migrated.platformConnections.reddit.supportsSearch, true);
+    assert.deepEqual(migrated.researchAttachments.map(item => item.id), ['browser-attachment-1']);
   }
 });
 

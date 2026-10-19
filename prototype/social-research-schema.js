@@ -299,6 +299,10 @@
     });
   }
 
+  function hasStableId(value) {
+    return isObject(value) && typeof value.id === "string" && Boolean(value.id.trim());
+  }
+
   function sanitizeResearchState(state) {
     const source = isObject(state) ? state : {};
     const platformConnections = isObject(source.platformConnections)
@@ -310,9 +314,11 @@
       : {};
     return {
       researchTasks: (Array.isArray(source.researchTasks) ? source.researchTasks : [])
+        .filter(hasStableId)
         .map(normalizeResearchTask),
       platformConnections,
       researchAttachments: (Array.isArray(source.researchAttachments) ? source.researchAttachments : [])
+        .filter(hasStableId)
         .map(normalizeAttachmentMeta)
         .filter(item => item.id)
     };
