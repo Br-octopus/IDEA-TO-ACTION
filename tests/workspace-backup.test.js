@@ -245,6 +245,43 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   }
 });
 
+test('未知命名的敏感对象字段不会进入完整工作区或资料库备份', () => {
+  const state = createState();
+  state.projects[0].privateTokenValue = 'private-token-value';
+  state.prompts[0].sessionKeyValue = 'session-key-value';
+  state.cases[0].authSecretValue = 'auth-secret-value';
+  state.knowledgeEntries[0].privateTokenValue = 'knowledge-private-token-value';
+  state.knowledgeEntries[0].metadata = { sessionKeyValue: 'nested-session-key-value' };
+  state.references[0].authSecretValue = 'reference-auth-secret-value';
+  state.knowledgeMetadata.authSecretValue = 'metadata-auth-secret-value';
+  state.knowledgeMetadata.nested = { privateTokenValue: 'nested-metadata-private-token-value' };
+  state.cases[0].versionHistory = [{
+    version: 1,
+    status: '成功',
+    authSecretValue: 'history-auth-secret-value'
+  }];
+
+  const workspaceBackup = createBackup(state, { scope: 'workspace', now: exportedAt });
+  const knowledgeBackup = createBackup(state, { scope: 'knowledge-base', now: exportedAt });
+  const serialized = `${JSON.stringify(workspaceBackup)}${JSON.stringify(knowledgeBackup)}`;
+
+  for (const value of [
+    'private-token-value', 'session-key-value', 'auth-secret-value',
+    'knowledge-private-token-value', 'nested-session-key-value',
+    'reference-auth-secret-value', 'metadata-auth-secret-value',
+    'nested-metadata-private-token-value', 'history-auth-secret-value'
+  ]) {
+    assert.equal(serialized.includes(value), false, `不应备份 ${value}`);
+  }
+
+  assert.equal(workspaceBackup.data.prompts[0].text, '提示词正文包含 token、secret 和 apiKey');
+  assert.equal(workspaceBackup.data.cases[0].result, '案例结果');
+  assert.equal(workspaceBackup.data.knowledgeEntries[0].title, '资料');
+  assert.equal(workspaceBackup.data.references[0].title, '公开资料');
+  assert.equal(knowledgeBackup.data.knowledgeEntries[0].title, '资料');
+  assert.equal(knowledgeBackup.data.cases[0].result, '案例结果');
+});
+
 test('references 凭证清洗后仍可替换和合并', () => {
   const backup = createBackup(createState(), { scope: 'workspace', now: exportedAt });
   const replaced = replaceState({}, backup);

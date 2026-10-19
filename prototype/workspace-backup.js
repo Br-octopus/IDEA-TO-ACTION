@@ -20,12 +20,232 @@
     "knowledgeEntries", "cases", "knowledgeMetadata"
   ];
   const RESEARCH_COLLECTIONS = ["researchTasks", "researchAttachments"];
-  const BACKUP_CREDENTIAL_FIELDS = [
-    "authorization", "password", "credentials", "accessToken", "refresh_token",
-    "clientSecret", "client_secret", "modelKey", "modelApiKey", "model_api_key",
-    "searchApiKey", "modelCredential", "searchCredential", "authToken", "bearerToken",
-    "privateKey", "secretKey", "apiKey", "api_key", "refreshToken"
-  ];
+  const SCALAR = { kind: "scalar" };
+  const SCALAR_OR_LIST = { kind: "scalar-or-list" };
+  const LIST = { kind: "list" };
+
+  function object(fields) {
+    return { kind: "object", fields };
+  }
+
+  function array(item) {
+    return { kind: "array", item };
+  }
+
+  const PROJECT_STEP_FIELDS = {
+    id: SCALAR,
+    title: SCALAR,
+    description: SCALAR,
+    deliverable: SCALAR,
+    guidance: SCALAR,
+    status: SCALAR,
+    prompt: SCALAR,
+    result: SCALAR,
+    notes: SCALAR,
+    order: SCALAR,
+    index: SCALAR,
+    completed: SCALAR_OR_LIST
+  };
+
+  const PROMPT_METADATA_FIELDS = {
+    status: SCALAR,
+    note: SCALAR,
+    result: SCALAR,
+    testedAt: SCALAR,
+    tags: LIST
+  };
+
+  const REFERENCE_VERIFICATION_FIELDS = {
+    status: SCALAR,
+    note: SCALAR
+  };
+
+  const CASE_FIELDS = {
+    id: SCALAR,
+    projectId: SCALAR,
+    domain: SCALAR,
+    taskType: SCALAR,
+    goal: SCALAR,
+    preserveItems: LIST,
+    before: SCALAR,
+    after: SCALAR,
+    externalResult: SCALAR,
+    userFeedback: SCALAR,
+    feedback: SCALAR,
+    dimensions: LIST,
+    evidence: LIST,
+    suggestedLabel: SCALAR,
+    status: SCALAR,
+    lessons: SCALAR,
+    nextPrompt: SCALAR,
+    createdAt: SCALAR,
+    currentVersion: SCALAR,
+    versionHistory: array(object({})),
+    applicableWhen: LIST,
+    notApplicableWhen: LIST,
+    reviewCount: SCALAR,
+    lastReviewedAt: SCALAR,
+    changeNote: SCALAR,
+    reuseDeferredAt: SCALAR,
+    confirmed: SCALAR,
+    confirmedAt: SCALAR,
+    result: SCALAR,
+    token: SCALAR,
+    secret: SCALAR,
+    apiKey: SCALAR
+  };
+
+  const CASE_VERSION_FIELDS = {
+    ...CASE_FIELDS,
+    version: SCALAR
+  };
+  CASE_FIELDS.versionHistory = array(object(CASE_VERSION_FIELDS));
+
+  const PROJECT_FIELDS = {
+    id: SCALAR,
+    title: SCALAR,
+    idea: SCALAR,
+    domain: SCALAR,
+    methodId: SCALAR,
+    methodTemporary: SCALAR,
+    methodGuidance: SCALAR,
+    goal: SCALAR,
+    goalSummary: SCALAR,
+    audience: SCALAR,
+    currentState: SCALAR,
+    constraints: SCALAR,
+    facts: SCALAR_OR_LIST,
+    successCriteria: LIST,
+    assumptions: LIST,
+    missingInfo: LIST,
+    preserveItems: LIST,
+    steps: array(object(PROJECT_STEP_FIELDS)),
+    currentStepId: SCALAR,
+    currentStep: SCALAR,
+    nextAction: SCALAR,
+    reply: SCALAR,
+    createdAt: SCALAR,
+    materials: SCALAR,
+    success: SCALAR,
+    time: SCALAR,
+    webSearch: SCALAR,
+    completed: LIST,
+    masterPrompt: SCALAR,
+    token: SCALAR,
+    secret: SCALAR,
+    apiKey: SCALAR
+  };
+
+  const PROMPT_FIELDS = {
+    id: SCALAR,
+    groupId: SCALAR,
+    version: SCALAR,
+    title: SCALAR,
+    text: SCALAR,
+    createdAt: SCALAR,
+    updatedAt: SCALAR,
+    verified: SCALAR,
+    note: SCALAR,
+    domain: SCALAR,
+    type: SCALAR,
+    sourceUrl: SCALAR,
+    sourceType: SCALAR,
+    sourceKind: SCALAR,
+    sourceId: SCALAR,
+    summary: SCALAR,
+    reusablePatterns: SCALAR,
+    limitations: SCALAR,
+    licenseNote: SCALAR,
+    verificationStatus: SCALAR,
+    domains: LIST,
+    stages: LIST,
+    keywords: LIST,
+    metadata: object(PROMPT_METADATA_FIELDS),
+    token: SCALAR,
+    secret: SCALAR,
+    apiKey: SCALAR
+  };
+
+  const REFERENCE_FIELDS = {
+    id: SCALAR,
+    title: SCALAR,
+    url: SCALAR,
+    link: SCALAR,
+    sourceType: SCALAR,
+    licenseNote: SCALAR,
+    domains: LIST,
+    stages: LIST,
+    summary: SCALAR,
+    borrowablePatterns: SCALAR,
+    limitations: SCALAR,
+    updatedAt: SCALAR,
+    date: SCALAR,
+    verification: object(REFERENCE_VERIFICATION_FIELDS),
+    kind: SCALAR,
+    token: SCALAR,
+    secret: SCALAR,
+    apiKey: SCALAR
+  };
+
+  const KNOWLEDGE_ENTRY_FIELDS = {
+    id: SCALAR,
+    type: SCALAR,
+    title: SCALAR,
+    sourceUrl: SCALAR,
+    url: SCALAR,
+    sourceType: SCALAR,
+    sourceKind: SCALAR,
+    sourceId: SCALAR,
+    hiddenAt: SCALAR,
+    favorite: SCALAR,
+    pinned: SCALAR,
+    lastUsedAt: SCALAR,
+    customAliases: LIST,
+    domains: LIST,
+    stages: LIST,
+    keywords: LIST,
+    summary: SCALAR,
+    reusablePatterns: SCALAR,
+    limitations: SCALAR,
+    licenseNote: SCALAR,
+    verificationStatus: SCALAR,
+    userRating: SCALAR,
+    applicableCases: LIST,
+    contentExcerpt: SCALAR,
+    linkedProjectId: SCALAR,
+    linkedCaseId: SCALAR,
+    createdAt: SCALAR,
+    updatedAt: SCALAR
+  };
+
+  const KNOWLEDGE_METADATA_FIELDS = {
+    version: SCALAR,
+    schemaVersion: SCALAR,
+    createdAt: SCALAR,
+    updatedAt: SCALAR,
+    lastUpdatedAt: SCALAR,
+    entryCount: SCALAR,
+    caseCount: SCALAR,
+    sourceCount: SCALAR,
+    hiddenCount: SCALAR,
+    nested: object({
+      version: SCALAR,
+      schemaVersion: SCALAR,
+      createdAt: SCALAR,
+      updatedAt: SCALAR,
+      lastUpdatedAt: SCALAR,
+      note: SCALAR,
+      label: SCALAR
+    })
+  };
+
+  const KNOWLEDGE_FILTER_FIELDS = {
+    query: SCALAR,
+    type: SCALAR,
+    domain: SCALAR,
+    stage: SCALAR,
+    verificationStatus: SCALAR
+  };
 
   function isObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -36,21 +256,53 @@
     return JSON.parse(JSON.stringify(value));
   }
 
-  function sanitizeState(state) {
-    if (!storage || typeof storage.stripModelKeys !== "function") {
-      throw new Error("备份依赖的凭证过滤模块未加载");
+  function isScalar(value) {
+    return value === null || ["string", "number", "boolean"].includes(typeof value);
+  }
+
+  function sanitizeBySchema(value, schema) {
+    if (!schema) return undefined;
+    if (schema.kind === "scalar") return isScalar(value) ? clone(value) : undefined;
+    if (schema.kind === "scalar-or-list") {
+      if (isScalar(value)) return clone(value);
+      if (Array.isArray(value)) return value.filter(isScalar).map(clone);
+      return undefined;
     }
+    if (schema.kind === "list") {
+      return Array.isArray(value) ? value.filter(isScalar).map(clone) : undefined;
+    }
+    if (schema.kind === "array") {
+      return Array.isArray(value)
+        ? value.map(item => sanitizeBySchema(item, schema.item)).filter(item => item !== undefined)
+        : undefined;
+    }
+    if (schema.kind === "object") {
+      if (!isObject(value)) return undefined;
+      return Object.entries(value).reduce((result, [key, item]) => {
+        if (!Object.hasOwn(schema.fields, key)) return result;
+        const sanitized = sanitizeBySchema(item, schema.fields[key]);
+        if (sanitized !== undefined) result[key] = sanitized;
+        return result;
+      }, {});
+    }
+    return undefined;
+  }
+
+  function sanitizeCollection(value, fields) {
+    return sanitizeBySchema(value, array(object(fields))) || [];
+  }
+
+  function sanitizeState(state) {
     const source = clone(isObject(state) ? state : {});
     const sanitized = clone(source);
-    for (const field of ["projects", "prompts", "cases", "knowledgeEntries", "references", "knowledgeMetadata"]) {
-      if (Object.hasOwn(source, field)) {
-        sanitized[field] = storage.stripModelKeys(source[field], {
-          fields: BACKUP_CREDENTIAL_FIELDS,
-          preserveBusinessFields: field !== "knowledgeMetadata"
-        });
-      }
-    }
-    if (typeof storage.sanitizeResearchState === "function") {
+    sanitized.projects = sanitizeCollection(source.projects, PROJECT_FIELDS);
+    sanitized.prompts = sanitizeCollection(source.prompts, PROMPT_FIELDS);
+    sanitized.cases = sanitizeCollection(source.cases, CASE_FIELDS);
+    sanitized.knowledgeEntries = sanitizeCollection(source.knowledgeEntries, KNOWLEDGE_ENTRY_FIELDS);
+    sanitized.references = sanitizeCollection(source.references, REFERENCE_FIELDS);
+    sanitized.knowledgeMetadata = sanitizeBySchema(source.knowledgeMetadata, object(KNOWLEDGE_METADATA_FIELDS)) || {};
+    sanitized.knowledgeFilters = sanitizeBySchema(source.knowledgeFilters, object(KNOWLEDGE_FILTER_FIELDS)) || {};
+    if (storage && typeof storage.sanitizeResearchState === "function") {
       Object.assign(sanitized, storage.sanitizeResearchState(source));
     }
     return sanitized;
