@@ -66,3 +66,10 @@ test('报告生成期间明确说明取消边界，禁用暂停并保留取消�
   assert.ok(source.includes('|| reportGenerating'), '模型请求期间应禁用暂停');
   assert.ok(source.includes('coordinator.cancel(task.id)'), '报告生成期间仍通过现有入口允许取消');
 });
+
+test('partial-failure 的报告区和状态栏展示真实错误详情及错误码', () => {
+  const source = fs.readFileSync(path.join(root, 'prototype/social-research-ui.js'), 'utf8');
+  assert.ok(source.includes('task.reportErrorCode'), '错误码应展示在状态栏或报告区');
+  assert.ok(source.includes('task.reportError'), '错误详情应展示在状态栏或报告区');
+  assert.ok(source.includes('研究未完成：'), '状态栏应明确指出研究未完成');
+});

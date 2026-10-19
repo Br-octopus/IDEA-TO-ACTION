@@ -23,6 +23,7 @@
       }
       let state = storage.migrateState(initialState || storage.createEmptyState());
       const activeRuns = new Map();
+      const persistenceErrors = new WeakSet();
       const persist = () => {
         state = typeof persistState === "function" ? persistState(state) || state
           : typeof localStorage !== "undefined" ? storage.saveState(localStorage, state)
@@ -32,7 +33,10 @@
       const findTask = taskId => state.researchTasks.find(task => task.id === taskId);
       const updateTask = task => {
         state = { ...state, researchTasks: state.researchTasks.map(item => item.id === task.id ? schema.createResearchTask(task) : item) };
-        persist();
+        try { persist(); } catch (error) {
+          if (error && (typeof error === "object" || typeof error === "function")) persistenceErrors.add(error);
+          throw error;
+        }
         return findTask(task.id);
       };
       const parseModel = (value, fallback) => {
@@ -213,13 +217,15 @@
         try {
           reportRaw = await requestModel("report", prompts.buildResearchReportPrompt({ ...task, results }, results));
         } catch (error) {
+          if (activeRun.cancelRequested) return finishCancelled(findTask(taskId) || task);
           task = workflow.transitionResearchTask(task, { type: "partial_failure" });
           return updateTask({
             ...task,
             results,
             resultIds: results.map(item => item.id),
             platformErrors,
-            reportError: error.message || "研究报告生成失败"
+            reportError: error.message || "研究报告生成失败",
+            reportErrorCode: error.code || ""
           });
         }
         if (!await checkpoint()) return finishCancelled(task);
@@ -238,17 +244,18 @@
         task = { ...task, results, resultIds: results.map(item => item.id), report: normalizedReport, reportId: `${task.id}-report`, platformErrors };
         return { ...updateTask(task), platformErrors };
         } catch (error) {
+          if (error && (typeof error === "object" || typeof error === "function") && persistenceErrors.has(error)) throw error;
           const latest = findTask(taskId);
           if (activeRun.cancelRequested && latest?.status === "searching") return finishCancelled(latest);
           if (latest?.status === "searching") {
             const failed = workflow.transitionResearchTask(latest, { type: "partial_failure" });
             return updateTask({
               ...failed,
-              results: [],
-              resultIds: [],
-              report: null,
-              reportId: "",
-              reportError: error.message || "研究执行异常"
+              results: latest.results || [],
+              resultIds: latest.resultIds || [],
+              platformErrors,
+              reportError: error.message || "研究执行异常",
+              reportErrorCode: error.code || ""
             });
           }
           throw error;

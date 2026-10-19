@@ -24,7 +24,7 @@ function makeModelClient({ emptyPlan = false, emptyReport = false, planResponse,
           budget: { maxPlatforms: 2, maxQueriesPerPlatform: 2 }
         });
       }
-      if (purpose === 'report' && reportError) throw new Error(reportError);
+      if (purpose === 'report' && reportError) throw reportError instanceof Error ? reportError : new Error(reportError);
       return emptyReport ? '' : JSON.stringify({
         summary: '发现两个平台的共同痛点',
         coreFindings: ['用户关注账单同步可靠性'],
@@ -210,7 +210,7 @@ test('部分平台检查失败时继续搜索已准备平台并在报告中保�
 });
 
 test('报告模型请求失败会记录错误并进入 partial-failure，不能保存或重跑', async () => {
-  const harness = makeHarness({ model: makeModelClient({ reportError: 'report service unavailable' }) });
+  const harness = makeHarness({ model: makeModelClient({ reportError: Object.assign(new Error('report service unavailable'), { code: 'model_unavailable' }) }) });
   const task = await harness.coordinator.createPlan({
     topic: '报告失败', template: 'trends', platforms: ['reddit']
   });
@@ -220,6 +220,7 @@ test('报告模型请求失败会记录错误并进入 partial-failure，不能�
 
   assert.equal(failed.status, 'partial-failure');
   assert.equal(failed.reportError, 'report service unavailable');
+  assert.equal(failed.reportErrorCode, 'model_unavailable');
   assert.throws(() => harness.coordinator.saveSelected(task.id, []), /尚未进入保存阶段/);
   await assert.rejects(() => harness.coordinator.run(task.id), /可运行的准备状态/);
 });
@@ -343,37 +344,53 @@ test('报告请求期间重复 run 被拒绝，活动运行不会被覆盖', asy
   assert.equal((await run).status, 'cancelled');
 });
 
-test('意外持久化异常和预算超限会持久化 partial-failure 错误', async () => {
-  let failSearchingPersist = true;
-  const persistedStates = [];
+test('持久化异常原样抛出；预算超限保留已收集结果和错误码', async () => {
+  const persistenceError = Object.assign(new Error('写入失败'), { code: 'storage_unavailable' });
   const persistenceHarness = makeHarness({ persistState(state) {
-    if (failSearchingPersist && state.researchTasks.some(task => task.status === 'searching')) {
-      failSearchingPersist = false;
-      throw new Error('写入失败');
-    }
-    persistedStates.push(structuredClone(state));
+    if (state.researchTasks.some(task => task.status === 'searching')) throw persistenceError;
     return state;
   } });
   const persistenceTask = await persistenceHarness.coordinator.createPlan({ topic: '持久化异常', template: 'trends', platforms: ['reddit'] });
   await persistenceHarness.coordinator.confirmPlan(persistenceTask.id);
-  const persistenceFailure = await persistenceHarness.coordinator.run(persistenceTask.id);
-  assert.equal(persistenceFailure.status, 'partial-failure');
-  assert.equal(persistenceFailure.reportError, '写入失败');
-  assert.equal(persistenceHarness.coordinator.getState().researchTasks[0].status, 'partial-failure');
-  assert.equal(persistedStates.at(-1).researchTasks[0].status, 'partial-failure');
-  assert.equal(persistedStates.at(-1).researchTasks[0].reportError, '写入失败');
+  await assert.rejects(persistenceHarness.coordinator.run(persistenceTask.id), error => error === persistenceError);
 
-  const social = makeSocial({ reddit: { search: async () => [
-    { id: 'reddit-1', platform: 'reddit', url: 'https://reddit.example/1' },
-    { id: 'reddit-2', platform: 'reddit', url: 'https://reddit.example/2' }
+  const social = makeSocial({ reddit: { search: async ({ query }) => [
+    { id: `${query}-result`, platform: 'reddit', url: `https://reddit.example/${query}` }
   ] } });
   const budgetHarness = makeHarness({ social });
   const budgetTask = await budgetHarness.coordinator.createPlan({
-    topic: '预算异常', template: 'trends', platforms: ['reddit'], budget: { maxDetails: 1 }
+    topic: '预算异常', template: 'trends', platforms: ['reddit'], queries: ['q1', 'q2'],
+    plan: { platformRoles: [{ platform: 'reddit', role: '测试', queries: ['q1', 'q2'] }] },
+    budget: { maxDetails: 1, maxQueriesPerPlatform: 2 }
   });
   await budgetHarness.coordinator.confirmPlan(budgetTask.id);
   const budgetFailure = await budgetHarness.coordinator.run(budgetTask.id);
   assert.equal(budgetFailure.status, 'partial-failure');
-  assert.match(budgetFailure.reportError, /budget_exceeded|详情数超出预算/);
+  assert.match(budgetFailure.reportError, /详情数超出预算/);
+  assert.equal(budgetFailure.reportErrorCode, 'budget_exceeded');
+  assert.deepEqual(budgetFailure.results.map(result => result.id), ['q1-result']);
+  assert.deepEqual(budgetFailure.resultIds, ['q1-result']);
+  assert.deepEqual(budgetHarness.coordinator.getState().researchTasks[0].resultIds, ['q1-result']);
   assert.equal(budgetHarness.coordinator.getState().researchTasks[0].status, 'partial-failure');
+});
+
+test('报告模型抛错时取消优先，最终状态为 cancelled', async () => {
+  let rejectReport;
+  const model = makeModelClient();
+  const originalRequest = model.requestModel;
+  model.requestModel = input => input.options?.purpose === 'report'
+    ? new Promise((resolve, reject) => { rejectReport = reject; })
+    : originalRequest(input);
+  const harness = makeHarness({ model });
+  const task = await harness.coordinator.createPlan({ topic: '取消后报告异常', template: 'trends', platforms: ['reddit'] });
+  await harness.coordinator.confirmPlan(task.id);
+  const run = harness.coordinator.run(task.id);
+  while (!rejectReport) await new Promise(resolve => setImmediate(resolve));
+  harness.coordinator.cancel(task.id);
+  rejectReport(Object.assign(new Error('report service unavailable'), { code: 'model_unavailable' }));
+  const cancelled = await run;
+
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.reportError, '');
+  assert.deepEqual(cancelled.results, []);
 });

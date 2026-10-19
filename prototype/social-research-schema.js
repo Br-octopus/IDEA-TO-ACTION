@@ -284,6 +284,7 @@
         : {},
       failureReason: text(source.failureReason),
       reportError: text(source.reportError),
+      reportErrorCode: text(source.reportErrorCode),
       budget: normalizeBudget(source.budget),
       usage: isObject(source.usage) ? {
         platforms: nonNegativeInteger(source.usage.platforms),

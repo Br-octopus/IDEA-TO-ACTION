@@ -84,7 +84,8 @@
         $("social-research-progress-detail").textContent = `${paused ? "已暂停" : "执行中"} · ${platform} · ${mode} · 查询：${liveProgress.query || "等待查询"} · 已收集 ${liveProgress.resultCount || 0} 条`;
       }
       if (!running) $("social-research-progress-detail").textContent = "";
-      if (!running && !["cancelled", "awaiting-save", "partial-failure", "failed"].includes(task.status)) setStatus(`${task.status}${ready ? " · 平台准备完成" : " · 先检查所选平台"}`);
+      if (task.status === "partial-failure" && task.reportError) setStatus(`研究未完成：${task.reportErrorCode ? `${task.reportErrorCode}：` : ""}${task.reportError}`);
+      else if (!running && !["cancelled", "awaiting-save", "partial-failure", "failed"].includes(task.status)) setStatus(`${task.status}${ready ? " · 平台准备完成" : " · 先检查所选平台"}`);
     }
 
     function renderResults(task) {
@@ -102,7 +103,11 @@
 
     function renderReport(task) {
       const report = task?.report;
-      if (!report) { $("social-research-report-content").textContent = "报告结论会关联到对应原始结果。"; return; }
+      if (!report) {
+        const detail = task?.reportError ? `${task.reportErrorCode ? `${task.reportErrorCode}：` : ""}${task.reportError}` : "报告结论会关联到对应原始结果。";
+        $("social-research-report-content").textContent = detail;
+        return;
+      }
       const findings = [...(report.coreFindings || []), ...(report.commonPoints || []), ...(report.platformDifferences || []), ...(report.painPointsOrPatterns || []), ...(report.representativeCases || []), ...(report.conflicts || []), ...(report.needsVerification || []), ...(report.nextSteps || [])];
       $("social-research-report-content").innerHTML = `<p>${escape(report.summary || "研究报告")}</p>${findings.map((finding, index) => { const id = report.resultIds?.[index] || report.resultIds?.[0]; const result = task.results.find(item => item.id === id); return `<div class="social-report-item"><span>${escape(finding)}</span>${result?.url ? `<a href="#social-result-${escape(id)}" data-report-result="${escape(id)}">来源：${escape(result.title || id)}</a>` : `<span class="social-muted">来源待核验</span>`}</div>`; }).join("")}`;
       const resultInputs = [...document.querySelectorAll("[data-save-result]")];
