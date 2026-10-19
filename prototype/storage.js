@@ -14,7 +14,7 @@
     "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
     "externalResult", "userFeedback", "dimensions", "evidence", "suggestedLabel", "status",
     "lessons", "nextPrompt", "createdAt", "currentVersion", "versionHistory",
-    "applicableWhen", "notApplicableWhen", "reviewCount", "lastReviewedAt", "changeNote"
+    "applicableWhen", "notApplicableWhen", "reviewCount", "lastReviewedAt", "changeNote", "reuseDeferredAt"
   ];
   const CASE_VERSION_FIELDS = [
     "status", "suggestedLabel", "evidence", "lessons", "nextPrompt",
@@ -259,7 +259,8 @@
       notApplicableWhen: listValue(source.notApplicableWhen),
       reviewCount: nonNegativeInteger(source.reviewCount, 0),
       lastReviewedAt: String(source.lastReviewedAt ?? "").trim(),
-      changeNote: String(source.changeNote ?? "").trim()
+      changeNote: String(source.changeNote ?? "").trim(),
+      reuseDeferredAt: String(source.reuseDeferredAt ?? "").trim()
     };
   }
 
@@ -497,5 +498,21 @@
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase };
+  function deferCaseReuse(state, caseId, now = new Date().toISOString()) {
+    const next = migrateState(state);
+    const id = String(caseId ?? "").trim();
+    if (!id) return next;
+    const deferredAt = new Date(now).toISOString();
+    const linkedEntryIds = new Set(next.knowledgeEntries
+      .filter(entry => String(entry?.linkedCaseId || "").trim() === id)
+      .map(entry => entry.id));
+    next.cases = next.cases.map(item => item.id === id ? { ...item, reuseDeferredAt: deferredAt } : item);
+    next.knowledgeEntries = next.knowledgeEntries.map(item => linkedEntryIds.has(item.id)
+      ? { ...item, hiddenAt: deferredAt }
+      : item);
+    next.knowledgeSelection = next.knowledgeSelection.filter(itemId => !linkedEntryIds.has(itemId));
+    return next;
+  }
+
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

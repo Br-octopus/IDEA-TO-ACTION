@@ -79,7 +79,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
 
 
 (() => {
-  const { STORAGE_KEY, createEmptyState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase } = window.ForwardStepStorage;
+  const { STORAGE_KEY, createEmptyState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse: deferCaseReuseState } = window.ForwardStepStorage;
   const research = window.ForwardStepResearchCatalog;
   const desktopApi = window.desktopApi;
   const workspaceBackup = window.ForwardStepWorkspaceBackup;
@@ -204,7 +204,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     if (!api || !Array.isArray(state.knowledgeSelection) || !state.knowledgeSelection.length) return [];
     const entries = api.collectKnowledgeEntries(state, { references: research.catalog, methodCards: [] });
     const byId = new Map(entries.map(item => [item.id, item]));
-    return state.knowledgeSelection.map(id => byId.get(id)).filter(Boolean).slice(0, 5);
+    return state.knowledgeSelection.map(id => byId.get(id)).filter(Boolean).filter(item => !item.hiddenAt).slice(0, 5);
   }
   let persistenceBlocked = false;
   let state;
@@ -1084,19 +1084,11 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
     toast(`已载入 V${caseItem.currentVersion || 1}，修改后确认即可创建新版本`);
   }
   function deferCaseReuse(caseId) {
-    const linkedEntries = state.knowledgeEntries.filter(item => item.linkedCaseId === caseId);
-    if (!linkedEntries.length) {
-      toast("该案例尚未生成资料卡，暂不复用将在生成资料卡后生效");
-      return;
-    }
-    const hiddenAt = new Date().toISOString();
-    state = {
-      ...state,
-      knowledgeEntries: state.knowledgeEntries.map(item => item.linkedCaseId === caseId ? { ...item, hiddenAt } : item)
-    };
-    if (!persist()) return;
+    const previousState = state;
+    state = deferCaseReuseState(state, caseId);
+    if (!persist()) { state = previousState; return; }
     refreshKnowledgeView();
-    toast("已暂不复用该案例资料卡；原始案例仍保留");
+    toast("已暂不复用该案例；原始案例和资料卡仍保留");
   }
   async function deleteCaseFromLibrary(caseId) {
     const caseItem = state.cases.find(item => item.id === caseId);

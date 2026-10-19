@@ -192,6 +192,8 @@
       ...(Array.isArray(state.cases)
         ? state.cases
           .filter(item => item && item.confirmed === true
+            && item.reuseDeferred !== true
+            && !String(item.reuseDeferredAt || "").trim()
             && !linkedCaseIds.has(String(item.id || "").trim()))
           .map(reviewedCase => ({ source: "case", entry: fromCase(reviewedCase) }))
         : [])

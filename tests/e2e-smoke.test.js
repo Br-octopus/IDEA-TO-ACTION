@@ -54,6 +54,8 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
   assert.match(app, /data-case-delete/, '案例应提供删除入口');
   assert.match(app, /createSafetyBackup\(\)/, '删除案例前必须创建安全备份');
   assert.match(app, /deleteCase\(state, caseId\)/, '删除案例必须调用 storage.deleteCase');
+  assert.match(app, /deferCaseReuseState\(state, caseId\)/, '暂不复用必须更新案例持久化状态');
+  assert.match(app, /filter\(item => !item\.hiddenAt\)/, '发送上下文必须排除已隐藏资料卡');
   assert.match(app, /\["knowledge-scope", "knowledge-type", "knowledge-domain", "knowledge-stage", "knowledge-verification", "case-filter", "case-domain", "case-project"\]\.forEach\(id => document\.getElementById\(id\)\.addEventListener\("change", refreshKnowledgeView\)\)/, '资料范围筛选变更必须立即刷新资料视图');
   assert.ok(app.includes('data-knowledge-edit'), '手动资料应提供编辑入口');
   assert.ok(app.includes('data-knowledge-source'), '派生资料应提供编辑原始来源入口');

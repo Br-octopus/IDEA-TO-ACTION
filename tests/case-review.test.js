@@ -6,13 +6,15 @@ const {
 } = require('../prototype/prompt-engine.js');
 const {
   createEmptyState,
+  migrateState,
   confirmCase,
   updateCase,
   upsertKnowledgeEntry,
   getCurrentCaseVersion,
   listCaseVersions,
   compareCaseVersions,
-  deleteCase
+  deleteCase,
+  deferCaseReuse
 } = require('../prototype/storage.js');
 const { collectKnowledgeEntries } = require('../prototype/knowledge-search.js');
 
@@ -250,6 +252,23 @@ test('删除案例同时移除 linkedCaseId 资料卡，但保留项目、提示
   assert.deepEqual(next.references.map(item => item.id), ['reference-keep']);
 });
 
+test('暂不复用会持久化无卡案例状态，并隐藏资料卡、移除选择且可经刷新保留', () => {
+  const state = {
+    ...createEmptyState(),
+    cases: [{ id: 'case-defer', confirmed: true, status: '成功' }],
+    knowledgeEntries: [{ id: 'case-card-defer', linkedCaseId: 'case-defer' }],
+    knowledgeSelection: ['case-card-defer']
+  };
+  const deferred = deferCaseReuse(state, 'case-defer', '2026-10-19T10:00:00.000Z');
+  assert.equal(deferred.cases[0].reuseDeferredAt, '2026-10-19T10:00:00.000Z');
+  assert.equal(deferred.knowledgeEntries[0].hiddenAt, '2026-10-19T10:00:00.000Z');
+  assert.deepEqual(deferred.knowledgeSelection, []);
+  const refreshed = migrateState(deferred);
+  assert.equal(refreshed.cases[0].reuseDeferredAt, '2026-10-19T10:00:00.000Z');
+  assert.equal(refreshed.knowledgeEntries[0].hiddenAt, '2026-10-19T10:00:00.000Z');
+  assert.deepEqual(refreshed.knowledgeSelection, []);
+});
+
 test('只有用户确认的成功或失败案例进入可复用案例检索', () => {
   const entries = collectKnowledgeEntries({
     prompts: [],
@@ -262,6 +281,17 @@ test('只有用户确认的成功或失败案例进入可复用案例检索', ()
   assert.equal(entries.some(item => item.id === 'case-success' && item.type === 'success-case'), true);
   assert.equal(entries.some(item => item.id === 'case-pending' && item.type === 'review-insight'), true);
   assert.equal(entries.some(item => item.id === 'case-draft'), false);
+});
+
+test('暂不复用的无卡案例不再自动进入统一搜索', () => {
+  const entries = collectKnowledgeEntries({
+    cases: [
+      { id: 'case-active', confirmed: true, status: '成功' },
+      { id: 'case-deferred', confirmed: true, status: '成功', reuseDeferredAt: '2026-10-19T10:00:00.000Z' }
+    ]
+  });
+  assert.equal(entries.some(item => item.id === 'case-active'), true);
+  assert.equal(entries.some(item => item.id === 'case-deferred'), false);
 });
 
 test('案例资料卡按 linkedCaseId 更新并经统一 schema 规范化', () => {
@@ -319,6 +349,7 @@ test('案例库界面提供案例组合筛选、摘要字段和安全的资料�
   assert.match(app, /data-case-delete/);
   assert.match(app, /sourceKind: "case"/);
   assert.match(app, /Boolean\(item\.linkedCaseId\)/);
+  assert.match(app, /function selectedKnowledgeEntries\(\)[\s\S]*filter\(item => !item\.hiddenAt\)/);
   assert.match(app, /createSafetyBackup\(\)/);
   assert.match(app, /deleteCase\(state, caseId\)/);
   assert.match(app, /compareCaseVersions/);
