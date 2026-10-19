@@ -383,6 +383,63 @@ test('完整工作区备份保留研究任务报告结果选择和附件元数�
   }
 });
 
+test('恢复和合并手工构造的研究备份时清洗嵌套凭证与未知字段', () => {
+  const backup = createBackup({
+    researchTasks: [{
+      id: 'import-task',
+      topic: '研究主题',
+      results: [{ id: 'import-result', url: 'https://example.test/post', summary: '应保留的摘要' }],
+      report: { coreFindings: ['应保留的发现'] }
+    }],
+    platformConnections: { reddit: { platform: 'reddit', status: 'ready' } },
+    researchAttachments: [{
+      id: 'import-attachment', type: 'screenshot', size: 10,
+      sourceResultId: 'import-result', relativePath: 'research/a.png', savedAt: exportedAt
+    }]
+  }, { scope: 'workspace', now: exportedAt });
+  Object.assign(backup.data.researchTasks[0], {
+    apiKey: 'task-api-secret', unknownTaskField: 'task-unknown-secret',
+    plan: { objective: '目标', nested: { cookie: 'plan-cookie-secret' } },
+    results: [{
+      ...backup.data.researchTasks[0].results[0],
+      credentials: 'result-credential-secret', sessionToken: 'result-session-secret'
+    }],
+    report: { coreFindings: ['应保留的发现'], password: 'report-password-secret' }
+  });
+  Object.assign(backup.data.platformConnections.reddit, {
+    apiKey: 'connection-api-secret', cookies: ['connection-cookie-secret'],
+    sessionToken: 'connection-session-secret', profilePath: 'C:/private/profile',
+    unknownConnectionField: 'connection-unknown-secret'
+  });
+  Object.assign(backup.data.researchAttachments[0], {
+    password: 'attachment-password-secret', unknownAttachmentField: 'attachment-unknown-secret'
+  });
+
+  assert.equal(validateBackup(backup), true);
+  const replaced = replaceState({}, backup);
+  const merged = mergeState({}, backup).state;
+
+  for (const state of [replaced, merged]) {
+    const serialized = JSON.stringify(state);
+    for (const secret of [
+      'task-api-secret', 'task-unknown-secret', 'plan-cookie-secret',
+      'result-credential-secret', 'result-session-secret', 'report-password-secret',
+      'connection-api-secret', 'connection-cookie-secret', 'connection-session-secret',
+      'C:/private/profile', 'connection-unknown-secret', 'attachment-password-secret',
+      'attachment-unknown-secret'
+    ]) {
+      assert.equal(serialized.includes(secret), false, `导入状态不得保留 ${secret}`);
+    }
+    assert.equal(state.researchTasks[0].results[0].summary, '应保留的摘要');
+    assert.deepEqual(state.researchTasks[0].report.coreFindings, ['应保留的发现']);
+    assert.deepEqual(Object.keys(state.researchAttachments[0]).sort(), [
+      'id', 'relativePath', 'savedAt', 'size', 'sourceResultId', 'type'
+    ]);
+  }
+  assert.equal(replaced.platformConnections.reddit.status, 'needs-recheck');
+  assert.deepEqual(merged.platformConnections, {});
+});
+
 test('资料库备份不带研究任务和平台连接，只保留已保存资料', () => {
   const backup = createBackup({
     researchTasks: [{ id: 'task-1', topic: '临时研究' }],

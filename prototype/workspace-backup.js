@@ -196,6 +196,18 @@
     return true;
   }
 
+  function sanitizeResearchBackupData(data) {
+    if (!storage || typeof storage.sanitizeResearchState !== "function") {
+      throw new Error("备份依赖的研究数据清洗模块未加载");
+    }
+    const sanitized = storage.sanitizeResearchState(data);
+    const result = { ...data };
+    for (const field of ["researchTasks", "platformConnections", "researchAttachments"]) {
+      if (Object.hasOwn(data, field)) result[field] = sanitized[field];
+    }
+    return result;
+  }
+
   function getBackupSummary(backup) {
     validateBackup(backup);
     return {
@@ -207,7 +219,9 @@
 
   function replaceState(currentState, backup) {
     validateBackup(backup);
-    const data = clone(backup.data);
+    const data = clone(backup.scope === "workspace"
+      ? sanitizeResearchBackupData(backup.data)
+      : backup.data);
     if (backup.scope === "workspace") return data;
     const current = isObject(currentState) ? clone(currentState) : {};
     if (typeof storage.sanitizeResearchState === "function") {
@@ -281,7 +295,9 @@
     if (typeof storage.sanitizeResearchState === "function") {
       Object.assign(state, storage.sanitizeResearchState(state));
     }
-    const data = backup.data;
+    const data = backup.scope === "workspace"
+      ? sanitizeResearchBackupData(backup.data)
+      : backup.data;
     const report = {
       added: [],
       skipped: [],
