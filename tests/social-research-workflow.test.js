@@ -11,6 +11,7 @@ const {
   rejectResearchPlan,
   transitionResearchTask,
   consumeResearchBudget,
+  approveSupplementarySearch,
   decideConnectionMode,
   shouldFallbackToBrowser,
   canRequestSupplementarySearch
@@ -64,6 +65,51 @@ test('状态迁移只允许批准后的确定性顺序', () => {
   ));
 });
 
+test('补搜确认不能被 startResearchTask 绕过，取消任务也不能推进', () => {
+  const approved = approve({ platforms: ['reddit'], budget: { maxQueriesPerPlatform: 2 } });
+  const searching = startResearchTask(approved);
+  const reportReady = transitionResearchTask(searching, 'report_ready');
+  const waiting = transitionResearchTask(reportReady, {
+    type: 'request_supplementary',
+    request: { platform: 'reddit', queries: 1 }
+  });
+
+  assert.equal(waiting.status, 'awaiting_supplementary_confirmation');
+  assert.throws(() => startResearchTask(waiting), error => error.code === 'SUPPLEMENTARY_CONFIRMATION_REQUIRED');
+  const cancelled = rejectResearchPlan(waiting, '用户取消');
+  assert.throws(() => approveSupplementarySearch(cancelled, { platform: 'reddit', queries: 1 }), error => error.code === 'TASK_CANCELLED');
+});
+
+test('批准补搜在同一校验中消费预算，超预算不部分消费', () => {
+  const approved = approve({ platforms: ['reddit'], budget: { maxQueriesPerPlatform: 2 } });
+  const waiting = transitionResearchTask(
+    transitionResearchTask(startResearchTask(approved), 'report_ready'),
+    'request_supplementary'
+  );
+  const first = approveSupplementarySearch(waiting, { platform: 'reddit', queries: 1 });
+  assert.equal(first.code, 'ok');
+  assert.equal(first.status, 'searching');
+  assert.equal(first.budgetUsage.queriesByPlatform.reddit, 1);
+
+  const waitingWithPlatforms = transitionResearchTask(
+    transitionResearchTask(first.task, 'report_ready'),
+    'request_supplementary'
+  );
+  const second = approveSupplementarySearch(waitingWithPlatforms, { platforms: ['reddit'], queries: 1 });
+  assert.equal(second.code, 'ok');
+  assert.equal(second.budgetUsage.platforms, 0);
+  assert.equal(second.budgetUsage.queriesByPlatform.reddit, 2);
+
+  const waitingAgain = transitionResearchTask(
+    transitionResearchTask(second.task, 'report_ready'),
+    'request_supplementary'
+  );
+  const exceeded = approveSupplementarySearch(waitingAgain, { platform: 'reddit', queries: 2 });
+  assert.equal(exceeded.code, 'budget_exceeded');
+  assert.equal(exceeded.status, 'awaiting_supplementary_confirmation');
+  assert.equal(exceeded.budgetUsage.queriesByPlatform.reddit, 2);
+});
+
 test('平台、查询、翻页、详情、时间、附件和分析 token 超预算返回 budget_exceeded', () => {
   const limits = {
     maxPlatforms: 1,
@@ -114,6 +160,9 @@ test('连接策略遵守 API、浏览器和自动偏好', () => {
   assert.equal(decideConnectionMode('reddit', apiConnection, 'auto'), 'api');
   assert.equal(decideConnectionMode('reddit', apiConnection, 'api'), 'api');
   assert.equal(decideConnectionMode('reddit', apiConnection, 'browser'), 'browser');
+  assert.equal(decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'api'), 'api_unavailable');
+  assert.equal(decideConnectionMode('reddit', { apiAvailable: true, apiConfigured: false }, 'api'), 'api_unavailable');
+  assert.equal(decideConnectionMode('reddit', { apiAvailable: true, apiConfigured: true }, 'browser'), 'browser');
 });
 
 test('API 认证失败、超时、限流、空结果、结果不足或字段不完整时建议浏览器', () => {
@@ -162,4 +211,23 @@ test('补搜和报告提示词要求证据可追溯且不为无链接结果生�
     assert.match(prompt, /追溯|来源/);
   }
   assert.match(report, /没有.*链接|无.*链接/);
+});
+
+test('提示词会脱敏主题、证据缺口和结果摘要中的疑似凭证', () => {
+  const secret = 'sk-live-1234567890abcdef';
+  const plan = prompts.buildResearchPlanPrompt({ topic: `研究主题 password=${secret}`, platforms: ['reddit'] });
+  const supplementary = prompts.buildSupplementarySearchPrompt(
+    { id: 'task-1', topic: '正常中文主题', template: 'pain-points', platforms: ['reddit'], budget: {}, budgetUsage: {}, status: 'awaiting_supplementary_confirmation' },
+    `缺口 token: ${secret}`
+  );
+  const report = prompts.buildResearchReportPrompt(
+    { id: 'task-1', topic: '正常中文主题', template: 'pain-points', platforms: ['reddit'] },
+    [{ id: 'r1', platform: 'reddit', title: '结果', url: 'https://example.test/1', summary: `摘要 secret=${secret}` }]
+  );
+
+  for (const prompt of [plan, supplementary, report]) {
+    assert.equal(prompt.includes(secret), false);
+    assert.match(prompt, /REDACTED_SENSITIVE_VALUE/);
+  }
+  assert.match(plan, /研究主题/);
 });

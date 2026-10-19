@@ -14,11 +14,23 @@
     return String(value ?? "").trim();
   }
 
+  function redactSensitiveText(value) {
+    let result = text(value);
+    if (!result) return result;
+    result = result.replace(
+      /((?:api[-_ ]?key|password|passwd|token|secret|authorization|bearer|credential)\s*[:=：]\s*)([^\s,;，；]+)/gi,
+      "$1[REDACTED_SENSITIVE_VALUE]"
+    );
+    result = result.replace(/\b(?:sk-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{10,}|AKIA[0-9A-Z]{16})\b/g, "[REDACTED_SENSITIVE_VALUE]");
+    result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer [REDACTED_SENSITIVE_VALUE]");
+    return result;
+  }
+
   function safeJson(value) {
     try {
       return JSON.stringify(value, (key, item) => {
         if (/token|secret|password|cookie|credential|api[-_]?key|authorization/i.test(key)) return undefined;
-        return item;
+        return typeof item === "string" ? redactSensitiveText(item) : item;
       }, 2);
     } catch {
       return "{}";
@@ -80,7 +92,7 @@
         budgetUsage: task.budgetUsage || {},
         status: text(task.status)
       }),
-      `证据缺口：${text(evidenceGap)}`,
+      `证据缺口：${redactSensitiveText(evidenceGap)}`,
       "输出 JSON 字段：evidenceGap、supplementaryQueries、platforms、expectedEvidence、budgetImpact、stopConditions。",
       "如果补搜会增加平台、查询、翻页、详情、执行时间或附件预算，输出 needsConfirmation=true，不得直接批准。",
       "每个补搜查询必须说明目标平台和预期证据；不得把没有结果链接的搜索摘要写成事实。",
@@ -96,10 +108,10 @@
       platform: text(result?.platform),
       title: text(result?.title),
       url: text(result?.url || result?.sourceUrl),
-      summary: text(result?.summary),
-      publishedAt: text(result?.publishedAt),
-      evidenceStatus: text(result?.evidenceStatus),
-      retrievalMethod: text(result?.retrievalMethod)
+      summary: redactSensitiveText(result?.summary),
+      publishedAt: redactSensitiveText(result?.publishedAt),
+      evidenceStatus: redactSensitiveText(result?.evidenceStatus),
+      retrievalMethod: redactSensitiveText(result?.retrievalMethod)
     })) : [];
     return [
       "你是社媒研究报告整理器，只能基于给定结果生成报告，不得补写未提供的来源。",

@@ -146,6 +146,9 @@
       result[key] = {
         platform: key,
         apiAvailable: capability.apiAvailable === true || capability.supportsApi === true,
+        apiConfigured: capability.apiConfigured === false
+          ? false
+          : capability.apiConfigured === true ? true : undefined,
         browserAvailable: capability.browserAvailable !== false,
         supportsSearch: capability.supportsSearch !== false,
         minimumResults: positiveInteger(capability.minimumResults ?? capability.minResults, 0),
@@ -273,12 +276,87 @@
   function startResearchTask(task) {
     const next = cloneTask(task);
     assertApproved(next);
-    if (!["preparing_platforms", "paused", "awaiting_supplementary_confirmation"].includes(next.status)) {
+    if (next.status === "awaiting_supplementary_confirmation") {
+      throw workflowError("SUPPLEMENTARY_CONFIRMATION_REQUIRED", "补搜尚未确认，不能直接开始搜索");
+    }
+    if (!["preparing_platforms", "paused"].includes(next.status)) {
       throw workflowError("INVALID_TRANSITION", "当前状态不能开始搜索");
     }
     next.status = "searching";
     next.updatedAt = nowIso();
     return next;
+  }
+
+  function supplementaryRequestSource(request = {}) {
+    const source = isObject(request) ? request : {};
+    const nestedUsage = isObject(source.usage)
+      ? source.usage
+      : isObject(source.budgetImpact) ? source.budgetImpact : {};
+    const merged = { ...source, ...nestedUsage };
+    const requestedPlatforms = normalizePlatforms(merged.platforms || (merged.platform ? [merged.platform] : []));
+    if (Number(merged.queries) > 0 && !merged.platform && !merged.queriesByPlatform && requestedPlatforms.length === 1) {
+      merged.platform = requestedPlatforms[0];
+    }
+    return merged;
+  }
+
+  function validateSupplementaryRequest(task, request = {}) {
+    const source = supplementaryRequestSource(request);
+    const requestedPlatforms = normalizePlatforms(source.platforms || (source.platform ? [source.platform] : []));
+    const queryUsage = normalizeQueriesByPlatform(source.queriesByPlatform || source.queries);
+    const queryPlatforms = Object.keys(queryUsage).filter(platform => platform !== "__all__");
+    const allRequestedPlatforms = [...new Set([...requestedPlatforms, ...queryPlatforms])];
+    const timeRange = normalizeTimeRange(source.timeRange);
+    const currentTimeRange = normalizeTimeRange(task.timeRange);
+    const delta = usageToDelta(source);
+
+    if (!allRequestedPlatforms.length || allRequestedPlatforms.some(platform => !task.platforms.includes(platform))) {
+      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜平台必须来自已批准的平台" };
+    }
+    // 补搜只能复用主任务已批准的平台；平台预算只为新增平台保留，不能重复扣除。
+    delta.platforms = 0;
+    if ((timeRange.from || timeRange.to || timeRange.timezone)
+      && JSON.stringify(timeRange) !== JSON.stringify(currentTimeRange)) {
+      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜时间范围不能超出已批准范围" };
+    }
+    if (delta.queriesByPlatform.__all__ > 0) {
+      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜查询必须明确目标平台" };
+    }
+    const hasUsage = delta.platforms > 0
+      || Object.values(delta.queriesByPlatform).some(count => count > 0)
+      || delta.pages > 0
+      || delta.details > 0
+      || delta.durationMs > 0
+      || delta.attachmentBytes > 0
+      || delta.analysisTokens > 0;
+    if (!hasUsage) {
+      return { ok: false, code: "SUPPLEMENTARY_REQUEST_INVALID", message: "补搜请求必须包含预算消耗" };
+    }
+    return { ok: true, source, delta };
+  }
+
+  function approveSupplementarySearch(task, request = {}) {
+    const current = cloneTask(task);
+    assertApproved(current);
+    if (current.status !== "awaiting_supplementary_confirmation") {
+      throw workflowError("INVALID_TRANSITION", "当前状态不能批准补搜");
+    }
+    const validation = validateSupplementaryRequest(current, request);
+    if (!validation.ok) throw workflowError(validation.code, validation.message);
+
+    const nextUsage = addUsage(current.budgetUsage, validation.delta);
+    const exceeded = findBudgetViolations(nextUsage, current.budget);
+    if (exceeded.length) return budgetResult(current, "budget_exceeded", nextUsage, exceeded);
+
+    const next = {
+      ...current,
+      budgetUsage: nextUsage,
+      supplementaryRequest: validation.source,
+      supplementaryApprovedAt: nowIso(),
+      status: "searching",
+      updatedAt: nowIso()
+    };
+    return budgetResult(next, "ok", nextUsage, []);
   }
 
   function transitionResearchTask(task, event) {
@@ -289,6 +367,13 @@
     if (eventName === "approve" || eventName === "confirm_plan") return approveResearchPlan(next);
     if (["start", "start_search", "search_started"].includes(eventName)) return startResearchTask(next);
 
+    if (eventName === "approve_supplementary") {
+      const request = isObject(event)
+        ? event.request || event.supplementaryRequest || next.supplementaryRequest
+        : next.supplementaryRequest;
+      return approveSupplementarySearch(next, request);
+    }
+
     const transitions = {
       pause: { from: ["searching"], to: "paused" },
       resume: { from: ["paused"], to: "searching" },
@@ -296,7 +381,6 @@
       report_ready: { from: ["searching"], to: "report_ready" },
       partial_failure: { from: ["searching"], to: "partial_failure" },
       request_supplementary: { from: ["report_ready", "partial_failure"], to: "awaiting_supplementary_confirmation" },
-      approve_supplementary: { from: ["awaiting_supplementary_confirmation"], to: "searching" },
       save_requested: { from: ["report_ready", "partial_failure"], to: "awaiting_save" },
       saved: { from: ["awaiting_save"], to: "saved" }
     };
@@ -305,6 +389,14 @@
       throw workflowError("INVALID_TRANSITION", `不能从 ${next.status} 执行 ${eventName || "未知事件"}`);
     }
     next.status = transition.to;
+    if (eventName === "request_supplementary" && isObject(event)) {
+      const request = event.request || event.supplementaryRequest;
+      if (request) {
+        const validation = validateSupplementaryRequest(next, request);
+        if (!validation.ok) throw workflowError(validation.code, validation.message);
+        next.supplementaryRequest = validation.source;
+      }
+    }
     next.updatedAt = nowIso();
     return next;
   }
@@ -384,9 +476,13 @@
       || capability.api?.available === true
       || capability.status === "api-available";
     const requested = text(preference || capability.connectionMode || "auto").toLowerCase();
-    if (!apiAvailable) return "browser";
     if (requested === "browser") return "browser";
-    if (requested === "api") return "api";
+    const apiConfigured = capability.apiConfigured !== false
+      && capability.api?.configured !== false
+      && capability.configured !== false;
+    const apiReady = apiAvailable && apiConfigured;
+    if (requested === "api") return apiReady ? "api" : "api_unavailable";
+    if (!apiReady) return "browser";
     const failure = text(capability.lastErrorCategory || capability.errorCategory).toLowerCase();
     if (["auth_failed", "authentication_failed", "timeout", "rate_limited"].includes(failure)) return "browser";
     return "api";
@@ -429,12 +525,10 @@
       const canSupplement = ["searching", "paused", "partial_failure", "report_ready", "awaiting_supplementary_confirmation"].includes(current.status)
         || (current.status === "preparing_platforms" && hasConsumedBudget);
       if (!canSupplement) return false;
-      const requestedPlatforms = normalizePlatforms(request.platforms || (request.platform ? [request.platform] : []));
-      if (requestedPlatforms.some(platform => !current.platforms.includes(platform))) return false;
-      const timeRange = normalizeTimeRange(request.timeRange);
-      if ((timeRange.from || timeRange.to || timeRange.timezone)
-        && JSON.stringify(timeRange) !== JSON.stringify(normalizeTimeRange(current.timeRange))) return false;
-      return consumeResearchBudget(current, request).code === "ok";
+      const validation = validateSupplementaryRequest(current, request);
+      if (!validation.ok) return false;
+      const nextUsage = addUsage(current.budgetUsage, validation.delta);
+      return findBudgetViolations(nextUsage, current.budget).length === 0;
     } catch {
       return false;
     }
@@ -448,6 +542,7 @@
     rejectResearchPlan,
     transitionResearchTask,
     consumeResearchBudget,
+    approveSupplementarySearch,
     decideConnectionMode,
     shouldFallbackToBrowser,
     canRequestSupplementarySearch,
