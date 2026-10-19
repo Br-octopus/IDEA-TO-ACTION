@@ -285,6 +285,7 @@ test('社媒研究工作区备份可恢复摘要报告和附件元数据且不�
     platformConnections: {
       reddit: {
         platform: 'reddit', status: 'ready', profilePath: 'C:/private/profile',
+        storagePath: 'C:/private/storage', profileDirectory: 'C:/private/profile-directory',
         cookies: ['cookie-secret'], sessionToken: 'session-secret', apiKey: 'api-secret', password: 'password-secret'
       }
     },
@@ -306,7 +307,12 @@ test('社媒研究工作区备份可恢复摘要报告和附件元数据且不�
     relativePath: 'research/smoke.pdf', savedAt: '2026-10-19T08:00:00.000Z'
   });
   assert.equal(restored.platformConnections.reddit.status, 'needs-recheck');
-  for (const secret of ['task-secret', 'C:/private/profile', 'cookie-secret', 'session-secret', 'api-secret', 'password-secret', 'attachment-secret']) {
+  const connectionMetadata = restored.platformConnections.reddit;
+  for (const pathField of ['profilePath', 'storagePath', 'profileDirectory']) {
+    assert.equal(Object.hasOwn(connectionMetadata, pathField), false, `连接备份不应包含 ${pathField}`);
+    assert.equal(serialized.includes(pathField), false, `序列化备份不应包含 ${pathField}`);
+  }
+  for (const secret of ['task-secret', 'C:/private/profile', 'C:/private/storage', 'C:/private/profile-directory', 'cookie-secret', 'session-secret', 'api-secret', 'password-secret', 'attachment-secret']) {
     assert.equal(serialized.includes(secret), false, `备份不应包含 ${secret}`);
   }
 });
