@@ -34,15 +34,23 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+class InvalidRequestError extends Error {}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > 2_000_000) reject(new Error('请求内容过大'));
+      if (body.length > 2_000_000) reject(new InvalidRequestError());
     });
     req.on('end', () => {
-      try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('请求不是有效 JSON')); }
+      try {
+        const parsed = body ? JSON.parse(body) : {};
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new InvalidRequestError();
+        resolve(parsed);
+      } catch {
+        reject(new InvalidRequestError());
+      }
     });
     req.on('error', reject);
   });
@@ -138,6 +146,9 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
     if (res.headersSent) {
       res.destroy(error);
       return;
+    }
+    if (error instanceof InvalidRequestError) {
+      return sendJson(res, 400, { code: 'INVALID_REQUEST', message: '请求格式无效。' });
     }
     return sendJson(res, 500, { code: 'INTERNAL_ERROR', message: '服务发生未知错误。' });
   }

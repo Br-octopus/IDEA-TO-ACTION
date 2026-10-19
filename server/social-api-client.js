@@ -45,7 +45,7 @@ function normalizeSocialApiError(error = {}) {
 
 function isValidRedditUserAgent(value) {
   if (typeof value !== 'string') return false;
-  if (/[\r\n]/.test(value)) return false;
+  if (/[\x00-\x1F\x7F]/.test(value)) return false;
   const userAgent = value.trim();
   return Boolean(userAgent)
     && /^[^:\s]+:[^:\s]+:[^()\s]+ \(by [^()\s]+\)$/.test(userAgent);

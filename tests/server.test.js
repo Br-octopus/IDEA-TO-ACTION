@@ -144,9 +144,9 @@ test('服务端搜索参数校验和通用异常响应不会回显运行时错�
     method: 'POST', headers: { 'content-type': 'application/json' }, body: '{'
   });
   const errorPayload = await malformedJson.json();
-  assert.equal(malformedJson.status, 500);
-  assert.equal(errorPayload.code, 'INTERNAL_ERROR');
-  assert.equal(errorPayload.message, '服务发生未知错误。');
+  assert.equal(malformedJson.status, 400);
+  assert.equal(errorPayload.code, 'INVALID_REQUEST');
+  assert.equal(errorPayload.message, '请求格式无效。');
   assert.doesNotMatch(JSON.stringify(errorPayload), /请求不是有效 JSON|SyntaxError|Unexpected end/i);
 });
 
