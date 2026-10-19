@@ -33,13 +33,14 @@
       const prompt = coordinator.getStagePrompt(task);
       root.innerHTML = `<section class="social-panel"><div class="block-top"><div><h2>PPT 规划工作台</h2><p>当前阶段：${escape(scene.stage)} · ${escape(status)}</p></div><button class="button-secondary" type="button" data-ppt-action="new">新建规划</button></div>
         <h3>演示简报</h3><div class="social-form-grid"><label class="field">目标<textarea data-brief="idea">${escape(scene.brief.idea)}</textarea></label><label class="field">受众<textarea data-brief="audience">${escape(scene.brief.audience)}</textarea></label><label class="field">受众行动<textarea data-brief="audienceAction">${escape(scene.brief.audienceAction)}</textarea></label><label class="field">待确认<textarea data-brief="assumptions">${escape(scene.brief.assumptions.join("\n"))}</textarea></label><label class="field">硬性要求<textarea data-brief="hardRequirements">${escape(scene.brief.hardRequirements.join("\n"))}</textarea></label><label class="field">偏好<textarea data-brief="preferences">${escape(scene.brief.preferences.join("\n"))}</textarea></label></div>
+        <h3>硬性约束</h3><div class="social-form-grid"><label class="field">最少页数<input type="number" min="1" step="1" data-ppt-constraint="minSlides" value="${escape(scene.brief.constraints.minSlides ?? "")}"></label><label class="field">最多页数<input type="number" min="1" step="1" data-ppt-constraint="maxSlides" value="${escape(scene.brief.constraints.maxSlides ?? "")}"></label><label class="field">每页最多字数<input type="number" min="1" step="1" data-ppt-constraint="maxWordsPerSlide" value="${escape(scene.brief.constraints.maxWordsPerSlide ?? "")}"></label></div>
         <h3>简报核对</h3><div class="social-form-grid"><div class="field"><strong>已知事实</strong>${list(scene.brief.facts)}</div><div class="field"><strong>当前假设</strong>${list(scene.brief.assumptions)}</div><div class="field"><strong>待确认</strong>${list(scene.outline.reviewIssues)}</div></div>
         <div class="social-tools"><button class="button-secondary" data-ppt-action="save-brief">保存简报</button><button class="button-primary" data-ppt-action="generate-brief">生成简报草稿</button><button class="button-secondary" data-ppt-action="materials">筛选本地资料</button><button class="button-secondary" data-ppt-action="research-preview">预览联网研究</button>${pendingResearchId ? `<button class="button-secondary" data-ppt-action="research-approve">确认联网研究</button><button class="button-primary" data-ppt-action="research-run">运行已确认研究</button>` : ""}</div>
         <h3>资料与来源</h3>${scene.sources.length ? `<ul>${scene.sources.map(source => `<li><strong>${escape(source.title)}</strong> · ID ${escape(source.id)} · ${escape(source.summary)} ${escape(source.url)}</li>`).join("")}</ul>` : "<p>尚无来源；联网研究必须先预览并确认。</p>"}
         <h3>故事线与页数估算</h3><p>${escape(scene.outline.storyLine || "尚未生成大纲")}</p><p>推荐页数依据：${escape(scene.outline.rationale || `${estimate.range.min}-${estimate.range.max} 页。${estimate.assumptions.join(" ")}`)}</p>
         <div class="social-tools"><button class="button-primary" data-ppt-action="generate-outline">生成大纲草稿</button><button class="button-secondary" data-ppt-action="review-outline">核对大纲</button><button class="button-primary" data-ppt-action="approve-outline" ${scene.outline.slides.length ? "" : "disabled"}>确认大纲</button></div>
         ${scene.outline.slides.map(slide => `<article class="social-panel"><h4>大纲第 ${slide.page} 页：${escape(slide.title)}</h4><p>${escape(slide.purpose)} · ${escape(slide.claim)}</p><p>来源：${escape(slide.sourceIds.join(", ") || "无；待核实")}</p></article>`).join("")}
-        <h3>逐页文稿</h3>${scene.draft.slides.map(slide => `<article class="social-panel"><h4>第 ${slide.page} 页：${escape(slide.title)}</h4><label class="field">页面标题<input data-slide-edit="title" data-slide-id="${escape(slide.id)}" value="${escape(slide.title)}"></label><p>${list(slide.body)}</p><p>视觉说明：${escape(slide.visualDescription)}</p><p>来源：${escape(slide.sourceIds.join(", ") || "无；待核实")} · ${escape(slide.evidenceStatus)}</p><div class="social-tools"><button class="button-secondary" data-ppt-action="keep-slide" data-slide-id="${escape(slide.id)}">保留</button><button class="button-secondary" data-ppt-action="edit-slide" data-slide-id="${escape(slide.id)}">保存修改</button><input data-ppt-delete-reason="${escape(slide.id)}" placeholder="删除原因"><button class="button-secondary" data-ppt-action="delete-slide" data-slide-id="${escape(slide.id)}">删除页面</button></div>${slide.disposition === "deleted" ? `<p>已删除：${escape(slide.deleteReason)}</p>` : ""}</article>`).join("")}
+        <h3>逐页文稿</h3>${scene.draft.slides.map(slide => `<article class="social-panel"><h4>第 ${slide.page} 页：${escape(slide.title)}</h4><label class="field">页面标题<input data-slide-edit="title" data-slide-id="${escape(slide.id)}" value="${escape(slide.title)}"></label><label class="field">页面文案<textarea data-slide-edit="body" data-slide-id="${escape(slide.id)}">${escape(slide.body.join("\n"))}</textarea></label><label class="field">视觉说明<textarea data-slide-edit="visualDescription" data-slide-id="${escape(slide.id)}">${escape(slide.visualDescription)}</textarea></label><label class="field">演讲备注<textarea data-slide-edit="speakerNotes" data-slide-id="${escape(slide.id)}">${escape(slide.speakerNotes)}</textarea></label><p>来源：${escape(slide.sourceIds.join(", ") || "无；待核实")} · ${escape(slide.evidenceStatus)}</p><div class="social-tools"><button class="button-secondary" data-ppt-action="keep-slide" data-slide-id="${escape(slide.id)}">保留</button><button class="button-secondary" data-ppt-action="edit-slide" data-slide-id="${escape(slide.id)}">保存修改</button><input data-ppt-delete-reason="${escape(slide.id)}" placeholder="删除原因"><button class="button-secondary" data-ppt-action="delete-slide" data-slide-id="${escape(slide.id)}">删除页面</button></div>${slide.disposition === "deleted" ? `<p>已删除：${escape(slide.deleteReason)}</p>` : ""}</article>`).join("")}
         <div class="social-tools"><button class="button-primary" data-ppt-action="generate-slides" ${scene.outlineStatus === "approved" ? "" : "disabled"}>生成逐页草稿</button></div>
         <h3>路线比较</h3><div class="social-tools">${workflow.recommendPptRoute(scene.brief).options.map(route => `<button class="button-secondary" data-ppt-action="choose-route" data-route="${escape(route.id)}">${escape(route.title)}${route.recommended ? " · 推荐" : ""}${scene.route.selected === route.id ? " · 已选" : ""}</button>`).join("")}</div>
         <h3>当前阶段提示词</h3><textarea readonly>${escape(prompt)}</textarea><button class="button-secondary" data-ppt-action="copy-prompt">复制提示词</button><p>本工作台只生成规划草稿和制作提示词，不写入最终 PPT、HTML 或图片。</p></section>`;
@@ -59,6 +60,11 @@
       if (action === "save-brief") {
         const brief = { ...task.pptScene.brief };
         root.querySelectorAll("[data-brief]").forEach(node => { const key = node.dataset.brief; brief[key] = ["assumptions", "hardRequirements", "preferences"].includes(key) ? node.value.split(/\r?\n/).map(item => item.trim()).filter(Boolean) : node.value; });
+        brief.constraints = { ...task.pptScene.brief.constraints };
+        root.querySelectorAll("[data-ppt-constraint]").forEach(node => {
+          const value = node.value.trim();
+          brief.constraints[node.dataset.pptConstraint] = value ? Number(value) : null;
+        });
         setScene(task, { ...task.pptScene, brief }); return;
       }
       if (action === "approve-outline") setScene(task, coordinator.approveOutline(task));
@@ -67,9 +73,13 @@
         const id = value; const reason = payload.reason || [...(root.querySelectorAll?.("[data-ppt-delete-reason]") || [])].find(node => node.dataset.pptDeleteReason === id)?.value || "";
         setScene(task, coordinator.setSlideDisposition(task, id, action === "keep-slide" ? "keep" : "deleted", reason));
       } else if (action === "edit-slide") {
-        const id = value; const node = [...(root.querySelectorAll?.("[data-slide-edit]") || [])].find(item => item.dataset.slideId === id);
-        const field = payload.field || node?.dataset.slideEdit;
-        setScene(task, coordinator.editSlide(task, id, { [field]: payload.value ?? node?.value }));
+        const id = value;
+        const edits = [...(root.querySelectorAll?.("[data-slide-edit]") || [])].filter(item => item.dataset.slideId === id);
+        const patch = Object.fromEntries(edits.map(node => [node.dataset.slideEdit, node.dataset.slideEdit === "body"
+          ? node.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+          : node.value]));
+        if (payload.field) patch[payload.field] = payload.value;
+        setScene(task, coordinator.editSlide(task, id, patch));
       } else if (action === "copy-prompt") await copyText?.(coordinator.getStagePrompt(task));
       else if (action === "research-preview") {
         const preview = coordinator.previewResearch(task, { objective: task.pptScene.brief.idea, queries: [task.pptScene.brief.idea], sourceTypes: ["web"], platforms: [], budget: { maxQueries: 3, maxSources: 5 } });
