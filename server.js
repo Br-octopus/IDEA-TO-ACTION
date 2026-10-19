@@ -86,8 +86,8 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
       return sendJson(res, 200, await searchClient.search(body.query.trim(), body.options));
     }
     if (req.method === 'GET' && requestUrl.pathname === '/api/social/platforms') {
-      const definitions = listSocialPlatformDefinitions().map(({ platform, displayName, apiAvailable, requiredConfig, maxResults, fields, supportsSearch, supportsDetail, supportsComments }) => ({
-        platform, displayName, apiAvailable, requiredConfig, maxResults, fields, supportsSearch, supportsDetail, supportsComments
+      const definitions = listSocialPlatformDefinitions().map(({ platform, displayName, apiAvailable, requiredConfig, maxResults, supportedFields, supportsSearch, supportsDetail, supportsComments }) => ({
+        platform, displayName, apiAvailable, requiredConfig, maxResults, supportedFields, supportsSearch, supportsDetail, supportsComments
       }));
       return sendJson(res, 200, { platforms: definitions });
     }
@@ -106,7 +106,10 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
       if (!Number.isInteger(requestedMaxResults) || requestedMaxResults < 1) {
         return sendJson(res, 400, { code: 'SOCIAL_API_INVALID_RESULT_COUNT', message: '结果数量超出平台允许范围。' });
       }
-      const maxResults = Math.min(requestedMaxResults, definition.maxResults);
+      if (requestedMaxResults > definition.maxResults) {
+        return sendJson(res, 400, { code: 'SOCIAL_API_INVALID_RESULT_COUNT', message: '结果数量超出平台允许范围。' });
+      }
+      const maxResults = requestedMaxResults;
       const client = createSocialApiClient({
         platform,
         config: config.social?.[platform] || {},

@@ -112,7 +112,7 @@ function createSocialApiClient({ platform, config = {}, fetchImpl = globalThis.f
       endpoint.searchParams.set('maxResults', String(maximum));
     }
     const headers = platform === 'reddit'
-      ? { authorization: `Bearer ${config.accessToken}`, 'user-agent': config.userAgent || 'ForwardStep/1.0' }
+      ? { authorization: `Bearer ${config.accessToken}`, 'user-agent': 'ForwardStep/1.0' }
       : { 'x-goog-api-key': config.apiKey };
     const controller = new AbortController();
     const duration = Math.min(MAX_TIMEOUT_MS, Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));

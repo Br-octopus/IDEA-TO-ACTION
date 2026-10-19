@@ -29,6 +29,7 @@ test('平台白名单说明 API 可用性、配置要求、上限与实际能力
   assert.ok(definitions.filter(item => item.apiAvailable).every(item => Number.isInteger(item.maxResults) && item.maxResults > 0));
   assert.equal(definitions.find(item => item.platform === 'xiaohongshu').maxResults, 0);
   assert.ok(definitions.filter(item => item.apiAvailable).every(item => item.supportsSearch && !item.supportsDetail && !item.supportsComments));
+  assert.ok(definitions.every(item => Array.isArray(item.supportedFields)));
   assert.equal(createSocialApiClient({ platform: 'xiaohongshu', config: { baseUrl: 'https://search.example', apiKey: 'secret' } }).configured, false);
 });
 
@@ -43,7 +44,7 @@ test('Reddit 搜索成功后统一结果字段并限制返回数量', async () =
     }
   });
   const results = await client.search('主题', { maxResults: 2 });
-  assert.equal(new URL(requested.url).origin, 'https://www.reddit.com');
+  assert.equal(new URL(requested.url).origin, 'https://oauth.reddit.com');
   assert.equal(requested.options.headers.authorization, 'Bearer reddit-secret');
   assert.ok(Array.isArray(results));
   assert.equal(results.length, 2);

@@ -104,7 +104,7 @@ test('社媒 API 路由只接受白名单平台并返回标准化结果', async 
     host: '127.0.0.1',
     config: { model: {}, search: {}, social: { reddit: { accessToken: 'server-only-secret' } } },
     socialFetchImpl: async (url, options) => {
-      assert.equal(new URL(url).origin, 'https://www.reddit.com');
+      assert.equal(new URL(url).origin, 'https://oauth.reddit.com');
       assert.equal(options.headers.authorization, 'Bearer server-only-secret');
       return response({ data: { children: [{ data: { title: '帖子', permalink: '/r/test/comments/1', selftext: '摘要', author: '用户' } }] } });
     }
@@ -142,8 +142,13 @@ test('社媒 API 路由限制查询长度和结果数量，且不将通用搜索
   });
   assert.equal(tooLong.status, 400);
 
-  const notConfigured = await fetch(`${baseUrl}/api/social/search`, {
+  const invalidCount = await fetch(`${baseUrl}/api/social/search`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'reddit', query: '主题', maxResults: 999 })
+  });
+  assert.equal(invalidCount.status, 400);
+
+  const notConfigured = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'reddit', query: '主题' })
   });
   const payload = await notConfigured.json();
   assert.equal(notConfigured.status, 503);
