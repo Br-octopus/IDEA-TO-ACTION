@@ -89,13 +89,13 @@ assert.throws(() => createPptBrief({ constraints: { minSlides: 12, maxSlides: 4 
 - Create: `prototype/ppt-scene-workflow.js`
 - Create: `tests/ppt-scene-workflow.test.js`
 
-- [ ] **Step 1: 写失败测试。** 覆盖：10 分钟却要求 30 页时给出冲突；总字数与单页字数/页数冲突时指出计算依据；未提供时长则返回带假设的建议而非假精确值；原生 PPT、图片重建、HTML 成品、HTML 转 PPT 均输出可编辑性、视觉精度、修改成本和转换限制；硬约束不能被模型草稿静默覆盖。
+- [x] **Step 1: 写失败测试。** 覆盖：10 分钟却要求 30 页时给出冲突；总字数与单页字数/页数冲突时指出计算依据；未提供时长则返回带假设的建议而非假精确值；原生 PPT、图片重建、HTML 成品、HTML 转 PPT 均输出可编辑性、视觉精度、修改成本和转换限制；硬约束不能被模型草稿静默覆盖。
 
-- [ ] **Step 2: 运行测试确认失败。** `node --test tests/ppt-scene-workflow.test.js`；预期失败。
+- [x] **Step 2: 运行测试确认失败。** `node --test tests/ppt-scene-workflow.test.js`；预期失败。
 
-- [ ] **Step 3: 实现纯函数。** `estimateSlideCount` 根据时长、内容单元和信息密度给出范围及估算假设，不写死“每分钟固定页数”；`validatePptConstraints` 分开报告冲突和偏好偏离；`recommendPptRoute` 返回结构化理由与限制；`checkSlideDraft` 检查每页职责、结论、精简文案、证据来源、视觉说明、可选演讲备注、顺序衔接和总量约束。
+- [x] **Step 3: 实现纯函数。** `estimateSlideCount` 根据时长、内容单元和信息密度给出范围及估算假设，不写死“每分钟固定页数”；`validatePptConstraints` 分开报告冲突和偏好偏离；`recommendPptRoute` 返回结构化理由与限制；`checkSlideDraft` 检查每页职责、结论、精简文案、证据来源、视觉说明、可选演讲备注、顺序衔接和总量约束。
 
-- [ ] **Step 4: 运行并提交。** `node --test tests/ppt-scene-workflow.test.js`；预期路线和约束边界测试通过。提交信息：`feat: 增加 PPT 路线与约束检查`。
+- [x] **Step 4: 运行并提交。** `node --test tests/ppt-scene-workflow.test.js`；预期路线和约束边界测试通过。提交信息：`feat: 增加 PPT 路线与约束检查`。
 
 ## Task 3: 编写阶段提示词和低 token 交付逻辑
 
