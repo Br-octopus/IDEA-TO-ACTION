@@ -87,10 +87,11 @@
           && path.length === 0
           && ["token", "secret"].includes(normalized);
         const currentMatchesPattern = /^(?:api|model|search|access|refresh|client|auth|bearer|private)(?:api)?(?:key|token|secret|credential)$/.test(normalized);
+        const currentIsOAuthCredential = /^oauth(?:[a-z0-9]+)?(?:token|key|secret|credential)$/.test(normalized);
         const currentIsSensitive = /(?:cookie|session|password|credential|authorization|profilepath|authblob)/.test(normalized)
           || /(?:api|access|refresh|session|auth|bearer|client|private|model|search)(?:key|token|secret|credential)$/.test(normalized);
         return currentIsBusinessField
-          || (!credentialFields.has(normalized) && !currentMatchesPattern && !currentIsSensitive);
+          || (!credentialFields.has(normalized) && !currentMatchesPattern && !currentIsOAuthCredential && !currentIsSensitive);
       })
       .map(([key, item]) => [key, stripModelKeys(item, options, [...path, key])]));
   }

@@ -275,6 +275,42 @@ test('备份和恢复会递归拒绝所有本地凭证与未知敏感字段', ()
   assert.equal(restored.projects[0].nested.password, undefined);
 });
 
+test('workspace 和资料库备份会剔除 OAuth token 变体', () => {
+  const state = {
+    projects: [{
+      id: 'oauth-project',
+      oauthToken: 'oauth-token-secret',
+      nested: {
+        oauth_access_token: 'oauth-access-secret',
+        oauthRefreshToken: 'oauth-refresh-secret'
+      }
+    }],
+    knowledgeEntries: [{
+      id: 'oauth-entry',
+      metadata: {
+        oauthToken: 'knowledge-oauth-token-secret',
+        oauth_access_token: 'knowledge-oauth-access-secret',
+        oauthRefreshToken: 'knowledge-oauth-refresh-secret'
+      }
+    }]
+  };
+  const backups = [
+    createBackup(state, { scope: 'workspace', now: exportedAt }),
+    createBackup(state, { scope: 'knowledge-base', now: exportedAt })
+  ];
+
+  for (const backup of backups) {
+    const serialized = JSON.stringify(backup);
+    for (const secret of [
+      'oauth-token-secret', 'oauth-access-secret', 'oauth-refresh-secret',
+      'knowledge-oauth-token-secret', 'knowledge-oauth-access-secret',
+      'knowledge-oauth-refresh-secret'
+    ]) {
+      assert.equal(serialized.includes(secret), false, `不得备份 ${secret}`);
+    }
+  }
+});
+
 test('references 凭证清洗后仍可替换和合并', () => {
   const backup = createBackup(createState(), { scope: 'workspace', now: exportedAt });
   const replaced = replaceState({}, backup);
