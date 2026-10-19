@@ -34,11 +34,12 @@ test('只能通过原生目录选择授权，列表元数据不泄露路径或�
   assert.doesNotMatch(JSON.stringify(selected), new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(JSON.stringify(selected), /Confidential/);
   const listed = await h.invoke('prompt-agent-sources:list-authorized');
-  assert.equal(listed[0].id, 'source-1');
+  assert.equal(listed.authorizations[0].id, 'source-1');
+  assert.equal(listed.storageError, null);
   const refreshed = await h.invoke('prompt-agent-sources:refresh-index', 'source-1');
   assert.equal(refreshed.files[0].title, 'Confidential title');
   assert.ok(!JSON.stringify(refreshed).includes(root));
-  assert.deepEqual(Object.keys(refreshed.files[0]).sort(), ['excerpt', 'fingerprint', 'fragments', 'id', 'keywords', 'relativePath', 'title', 'type']);
+  assert.deepEqual(Object.keys(refreshed.files[0]).sort(), ['excerpt', 'fingerprint', 'fragments', 'id', 'relativePath', 'title', 'type']);
   const persisted = fs.readFileSync(path.join(h.userDataPath, 'prompt-agent-sources.json'), 'utf8');
   assert.equal(JSON.parse(persisted).authorizations[0].root, fs.realpathSync(root));
   assert.doesNotMatch(JSON.stringify(listed), new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -93,14 +94,14 @@ test('授权重启后保留 ID 和根目录，暂停、恢复、移除状态均�
   const first = harness(root, userDataPath);
   await first.invoke('prompt-agent-sources:select-directory');
   const restarted = harness(root, userDataPath);
-  assert.deepEqual((await restarted.invoke('prompt-agent-sources:list-authorized')).map(item => item.id), ['source-1']);
+  assert.deepEqual((await restarted.invoke('prompt-agent-sources:list-authorized')).authorizations.map(item => item.id), ['source-1']);
   const refreshed = await restarted.invoke('prompt-agent-sources:refresh-index', 'source-1');
   const found = restarted.sources.searchIndex('source-1', 'late-only-needle').files[0];
   assert.ok(found.excerpt.includes('late-only-needle'));
   assert.equal(found.fragments[0].line, 4);
   assert.ok(found.excerpt.length < fs.readFileSync(path.join(root, 'notes.md'), 'utf8').length);
   await restarted.invoke('prompt-agent-sources:set-authorization-enabled', 'source-1', false);
-  assert.equal((await restarted.invoke('prompt-agent-sources:list-authorized'))[0].enabled, false);
+  assert.equal((await restarted.invoke('prompt-agent-sources:list-authorized')).authorizations[0].enabled, false);
   await assert.rejects(restarted.invoke('prompt-agent-sources:refresh-index', 'source-1'), /暂停/);
   assert.throws(() => restarted.sources.searchIndex('source-1', 'needle'), /暂停/);
   const resumed = harness(root, userDataPath);
@@ -108,7 +109,7 @@ test('授权重启后保留 ID 和根目录，暂停、恢复、移除状态均�
   assert.ok((await resumed.invoke('prompt-agent-sources:refresh-index', 'source-1')).files.length);
   await resumed.invoke('prompt-agent-sources:remove-authorization', 'source-1');
   const afterRemoval = harness(root, userDataPath);
-  assert.deepEqual(await afterRemoval.invoke('prompt-agent-sources:list-authorized'), []);
+  assert.deepEqual((await afterRemoval.invoke('prompt-agent-sources:list-authorized')).authorizations, []);
   assert.ok(refreshed.files.length);
 });
 
@@ -121,8 +122,40 @@ test('目录被删除或改成普通文件后报告失效且不刷新索引', as
   fs.rmSync(root, { recursive: true, force: true });
   fs.writeFileSync(root, 'now a file');
   const restarted = harness(root, userDataPath);
-  const [listed] = await restarted.invoke('prompt-agent-sources:list-authorized');
+  const [listed] = (await restarted.invoke('prompt-agent-sources:list-authorized')).authorizations;
   assert.equal(listed.enabled, false);
   assert.equal(listed.unavailable, true);
   await assert.rejects(restarted.invoke('prompt-agent-sources:refresh-index', 'source-1'), /失效/);
+});
+
+test('损坏授权 JSON 对 UI 显示错误并拒绝所有操作，原始文件字节保持不变', async t => {
+  const root = tempDirectory();
+  const userDataPath = tempDirectory();
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(userDataPath, { recursive: true, force: true }); });
+  const storePath = path.join(userDataPath, 'prompt-agent-sources.json');
+  const damagedBytes = Buffer.from('{ "authorizations": [ invalid }\r\n', 'utf8');
+  fs.writeFileSync(storePath, damagedBytes);
+  const h = harness(root, userDataPath);
+
+  const listed = await h.invoke('prompt-agent-sources:list-authorized');
+  assert.deepEqual(listed.authorizations, []);
+  assert.match(listed.storageError, /JSON/);
+
+  const mutations = [
+    () => h.invoke('prompt-agent-sources:select-directory'),
+    () => h.invoke('prompt-agent-sources:refresh-index', 'source-1'),
+    () => h.invoke('prompt-agent-sources:set-authorization-enabled', 'source-1', false),
+    () => h.invoke('prompt-agent-sources:set-authorization-enabled', 'source-1', true),
+    () => h.invoke('prompt-agent-sources:remove-authorization', 'source-1')
+  ];
+  for (const mutate of mutations) await assert.rejects(mutate(), /配置无法读取/);
+  assert.equal(h.calls.length, 0);
+  assert.deepEqual(fs.readFileSync(storePath), damagedBytes);
+
+  const invalidShapeBytes = Buffer.from(JSON.stringify({ authorizations: [{ id: 'source-1', root, metadata: { id: 'source-1', enabled: 'yes' } }] }), 'utf8');
+  fs.writeFileSync(storePath, invalidShapeBytes);
+  const invalidShape = harness(root, userDataPath);
+  assert.match((await invalidShape.invoke('prompt-agent-sources:list-authorized')).storageError, /格式/);
+  await assert.rejects(invalidShape.invoke('prompt-agent-sources:remove-authorization', 'source-1'), /配置无法读取/);
+  assert.deepEqual(fs.readFileSync(storePath), invalidShapeBytes);
 });

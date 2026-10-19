@@ -26,16 +26,35 @@ function createPromptAgentSources({
   }
   const storePath = path.join(userDataPath, STORE_FILENAME);
   const grants = new Map();
+  let storageError = null;
+
+  function assertStorageHealthy() {
+    if (storageError) throw new Error(`本地目录授权配置无法读取，操作已拒绝：${storageError}`);
+  }
 
   function readSavedGrants() {
     try {
       const parsed = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-      if (!Array.isArray(parsed.authorizations)) return;
+      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.authorizations)) {
+        storageError = '配置格式无效';
+        return;
+      }
+      const loadedGrants = [];
+      const loadedIds = new Set();
       for (const saved of parsed.authorizations) {
-        if (!saved || typeof saved.id !== 'string' || !saved.id || typeof saved.root !== 'string'
-          || !saved.metadata || saved.metadata.id !== saved.id) continue;
+        if (!saved || typeof saved.id !== 'string' || !saved.id || loadedIds.has(saved.id)
+          || typeof saved.root !== 'string' || !saved.root
+          || !saved.metadata || saved.metadata.id !== saved.id
+          || saved.metadata.type !== 'local-directory' || saved.metadata.permission !== 'read-only'
+          || (saved.metadata.enabled !== true && saved.metadata.enabled !== false)
+          || (saved.metadata.label !== undefined && typeof saved.metadata.label !== 'string')
+          || (saved.metadata.authorizedAt !== undefined && typeof saved.metadata.authorizedAt !== 'string')) {
+          storageError = '配置格式无效';
+          return;
+        }
+        loadedIds.add(saved.id);
         const { root, metadata } = saved;
-        grants.set(saved.id, {
+        loadedGrants.push([saved.id, {
           root,
           metadata: {
             id: saved.id,
@@ -46,10 +65,11 @@ function createPromptAgentSources({
             authorizedAt: typeof metadata.authorizedAt === 'string' ? metadata.authorizedAt : ''
           },
           index: null
-        });
+        }]);
       }
+      for (const [id, grant] of loadedGrants) grants.set(id, grant);
     } catch (error) {
-      if (error.code !== 'ENOENT') return;
+      if (error.code !== 'ENOENT') storageError = error instanceof SyntaxError ? 'JSON 格式损坏' : '读取失败';
     }
   }
 
@@ -102,6 +122,7 @@ function createPromptAgentSources({
   }
 
   async function selectDirectory() {
+    assertStorageHealthy();
     const result = await dialog.showOpenDialog({ title: '选择本地资料目录', properties: ['openDirectory'] });
     const selectedPath = result.filePaths?.[0];
     if (result.canceled || !selectedPath) return null;
@@ -132,17 +153,19 @@ function createPromptAgentSources({
   });
   ipcMain.handle(CHANNELS.list, async (_event, ...args) => {
     assertNoExtraArgs(args);
-    return [...grants.values()].map(publicMetadata);
+    return listAuthorized();
   });
   ipcMain.handle(CHANNELS.refresh, async (_event, id, ...args) => {
     assertNoExtraArgs(args);
+    assertStorageHealthy();
     const grant = getGrant(id, true);
     const freshRoot = resolveValidRoot(grant);
     grant.index = refreshSourceIndex(freshRoot, grant.index, { fs, path });
-    return grant.index;
+    return publicIndex(grant.index);
   });
   ipcMain.handle(CHANNELS.setEnabled, async (_event, id, enabled, ...args) => {
     assertNoExtraArgs(args);
+    assertStorageHealthy();
     if (typeof enabled !== 'boolean') throw new TypeError('授权状态必须是布尔值');
     const grant = getGrant(id);
     if (enabled) resolveValidRoot(grant);
@@ -152,6 +175,7 @@ function createPromptAgentSources({
   });
   ipcMain.handle(CHANNELS.remove, async (_event, id, ...args) => {
     assertNoExtraArgs(args);
+    assertStorageHealthy();
     getGrant(id);
     grants.delete(id);
     persistGrants();
@@ -160,14 +184,40 @@ function createPromptAgentSources({
 
   return {
     selectDirectory,
-    listAuthorized: () => [...grants.values()].map(publicMetadata),
+    listAuthorized,
     searchIndex(id, query, filters) {
+      assertStorageHealthy();
       const grant = getGrant(id, true);
       resolveValidRoot(grant);
       if (!grant.index) throw new Error('请先刷新本地目录索引');
       return searchSourceIndex(grant.index, query, filters);
     }
   };
+
+  function listAuthorized() {
+    return { authorizations: [...grants.values()].map(publicMetadata), storageError };
+  }
+
+  function publicIndex(index) {
+    const safeFile = item => ({
+      id: item.id,
+      relativePath: item.relativePath,
+      title: item.title,
+      type: item.type,
+      excerpt: item.excerpt,
+      fragments: item.fragments.map(fragment => ({ text: fragment.text, line: fragment.line })),
+      fingerprint: item.fingerprint
+    });
+    return {
+      version: index.version,
+      files: index.files.map(safeFile),
+      changes: {
+        added: index.changes.added.map(safeFile),
+        modified: index.changes.modified.map(safeFile),
+        deleted: [...index.changes.deleted]
+      }
+    };
+  }
 }
 
 module.exports = { CHANNELS, createPromptAgentSources };

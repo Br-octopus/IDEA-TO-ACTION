@@ -58,6 +58,27 @@ test('遍历顺序稳定，搜索可按关键词匹配，刷新检测修改和�
   assert.deepEqual(next.changes.deleted, ['b.md']);
 });
 
+test('全文搜索命中第六个非均匀段落，只返回命中短片段', t => {
+  const root = tempDirectory();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paragraphs = [
+    '短段一', '这是一段长度明显更长的普通说明文字，用来打乱按位置均匀采样所得的有限片段。',
+    '短段三', '另一个长度不一致的段落，包含大量说明但没有目标内容，需要全文索引仍能覆盖。',
+    '短段五', '目标密钥词只出现在第六个段落。', '后续段落结束'
+  ];
+  fs.writeFileSync(path.join(root, 'uneven.md'), `# 不均匀文档\n${paragraphs.join('\n\n')}`);
+  const index = refreshSourceIndex(root);
+  const serializedIndex = JSON.stringify(index);
+  assert.ok(!serializedIndex.includes('目标密钥词'));
+  assert.ok(!serializedIndex.includes('keywords'));
+  const result = searchSourceIndex(index, '目标密钥词');
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0].fragments.length, 1);
+  assert.equal(result.files[0].fragments[0].text, '目标密钥词只出现在第六个段落。');
+  assert.ok(result.files[0].fragments[0].line > 10);
+  assert.ok(!JSON.stringify(result).includes('长度明显更长'));
+});
+
 test('不跟随逃出授权根目录的符号链接', t => {
   const root = tempDirectory();
   const outside = tempDirectory();

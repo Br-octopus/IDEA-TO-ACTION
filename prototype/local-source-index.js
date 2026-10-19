@@ -5,6 +5,8 @@ const crypto = require('node:crypto');
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_FRAGMENTS = 5;
 const MAX_FRAGMENT_LENGTH = 280;
+const privateFileData = new WeakMap();
+const privateIndexData = new WeakMap();
 const TEXT_EXTENSIONS = new Set([
   '.md', '.markdown', '.txt', '.text', '.log', '.json', '.yaml', '.yml', '.js', '.cjs', '.mjs', '.jsx',
   '.ts', '.cts', '.mts', '.tsx', '.py', '.sh', '.bash', '.ps1', '.psm1', '.skill', '.workflow'
@@ -52,16 +54,17 @@ function metadataFromText(relativePath, content, type, pathImpl = path) {
   for (const fragment of fragments) fragment.text = fragment.text.slice(0, MAX_FRAGMENT_LENGTH);
   const indexedText = `${title} ${content.replace(/\s+/g, ' ')}`;
   const keywords = [...new Set((indexedText.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) || []))].slice(0, 40);
-  return {
+  const result = {
     id: relativePath,
     relativePath,
     title,
     type,
-    keywords,
     excerpt: fragments.find(fragment => !/^\s*#+\s/.test(fragment.text))?.text || fragments[0]?.text || '',
     fragments,
     fingerprint: crypto.createHash('sha256').update(content).digest('hex')
   };
+  privateFileData.set(result, { content, keywords });
+  return result;
 }
 
 function indexSourceFile(filePath, options = {}) {
@@ -122,23 +125,39 @@ function refreshSourceIndex(root, previousIndex = null, options = {}) {
     modified: files.filter(item => previous.has(item.relativePath) && previous.get(item.relativePath).fingerprint !== item.fingerprint),
     deleted: [...previous.keys()].filter(relativePath => !current.has(relativePath)).sort()
   };
-  return { version: 1, files, changes };
+  const index = { version: 1, files, changes };
+  privateIndexData.set(index, new Map(files.map(item => [item.relativePath, privateFileData.get(item)])));
+  return index;
 }
 
 function searchSourceIndex(index, query, filters = {}) {
   const terms = String(query || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
   const files = (index?.files || []).filter(item => {
     if (filters.type && item.type !== filters.type) return false;
-    if (filters.keyword && !item.keywords.includes(String(filters.keyword).toLowerCase())) return false;
-    const searchable = `${item.title} ${item.relativePath} ${item.keywords.join(' ')}`.toLowerCase();
-    if (terms.every(term => searchable.includes(term))) return true;
-    const fragments = item.fragments || [{ text: item.excerpt || '', line: 1 }];
-    return terms.every(term => `${searchable} ${fragments.map(fragment => fragment.text).join(' ')}`.toLowerCase().includes(term));
+    const privateData = privateIndexData.get(index)?.get(item.relativePath);
+    const searchable = `${item.title} ${item.relativePath} ${privateData?.content || ''}`.toLowerCase();
+    if (filters.keyword && !(privateData?.keywords || []).includes(String(filters.keyword).toLowerCase())) return false;
+    return terms.every(term => searchable.includes(term));
   });
   return { files: files.map(item => {
-    const termsInFragments = (item.fragments || []).filter(fragment => terms.every(term => fragment.text.toLowerCase().includes(term)));
-    if (!termsInFragments.length) return { ...item, fragments: [], excerpt: '' };
-    return { ...item, fragments: termsInFragments, excerpt: termsInFragments[0].text };
+    const content = privateIndexData.get(index)?.get(item.relativePath)?.content || '';
+    const lines = content.split(/\r?\n/);
+    const matchingLines = lines.flatMap((text, lineIndex) => {
+      const normalized = text.toLowerCase();
+      return terms.some(term => normalized.includes(term))
+        ? [{ text: text.trim().slice(0, MAX_FRAGMENT_LENGTH), line: lineIndex + 1 }]
+        : [];
+    }).filter(fragment => fragment.text);
+    const fragments = matchingLines.slice(0, MAX_FRAGMENTS);
+    return {
+      id: item.id,
+      relativePath: item.relativePath,
+      title: item.title,
+      type: item.type,
+      fingerprint: item.fingerprint,
+      fragments,
+      excerpt: fragments[0]?.text || ''
+    };
   }) };
 }
 
