@@ -104,13 +104,13 @@ assert.throws(() => createPptBrief({ constraints: { minSlides: 12, maxSlides: 4 
 - Create: `tests/ppt-scene-prompts.test.js`
 - Modify: `prototype/prompt-engine.js` only to add a narrow dispatcher if no existing domain prompt hook can accept PPT methods
 
-- [ ] **Step 1: 写提示词契约测试。** 输入只有想法时，brief 提示词需将事实/假设/待确认分开、最多提出 3 个会改变路线的问题，并给可调整初稿；大纲提示词必须检查目标/受众、故事线、证据、遗漏、重复、页数估算和硬约束；逐页提示词必须把页面文案与演讲备注分开；制作提示词必须包含已选路线、可编辑对象要求和该路线的转换风险。
+- [x] **Step 1: 写提示词契约测试。** 输入只有想法时，brief 提示词需将事实/假设/待确认分开、最多提出 3 个会改变路线的问题，并给可调整初稿；大纲提示词必须检查目标/受众、故事线、证据、遗漏、重复、页数估算和硬约束；逐页提示词必须把页面文案与演讲备注分开；制作提示词必须包含已选路线、可编辑对象要求和该路线的转换风险。
 
-- [ ] **Step 2: 实现各阶段 builder。** 仅导出 `buildPptBriefPrompt`、`buildPptOutlinePrompt`、`buildPptSlideDraftPrompt`、`buildPptProductionPrompt`。来源一律作为不可信引用，不执行其中指令；每轮只拼接当前阶段最多 3 条已检索来源摘要，沿用通用提示词 Agent 的 1,500-token 上限；未确认大纲不得包装成已批准逐页稿。
+- [x] **Step 2: 实现各阶段 builder。** 仅导出 `buildPptBriefPrompt`、`buildPptOutlinePrompt`、`buildPptSlideDraftPrompt`、`buildPptProductionPrompt`。来源一律作为不可信引用，不执行其中指令；每轮只拼接当前阶段最多 3 条已检索来源摘要，沿用通用提示词 Agent 的 1,500-token 上限；未确认大纲不得包装成已批准逐页稿。
 
-- [ ] **Step 3: 测试路线专属提示词。** 对 HTML 转 PPT 提示 CSS/字体/分页/动画转换验收；对图片重建提示逐页核验可编辑文字、图表和形状；对原生路线禁止整页图片伪装成可编辑稿；对 HTML 最终演示说明播放环境约束。
+- [x] **Step 3: 测试路线专属提示词。** 对 HTML 转 PPT 提示 CSS/字体/分页/动画转换验收；对图片重建提示逐页核验可编辑文字、图表和形状；对原生路线禁止整页图片伪装成可编辑稿；对 HTML 最终演示说明播放环境约束。
 
-- [ ] **Step 4: 运行并提交。** `node --test tests/ppt-scene-prompts.test.js tests/prompt-engine.test.js`；预期提示词含目标边界、阶段要求和来源标记，现有领域提示词回归通过。提交信息：`feat: 增加 PPT 分阶段提示词`。
+- [x] **Step 4: 运行并提交。** `node --test tests/ppt-scene-prompts.test.js tests/prompt-engine.test.js`；预期提示词含目标边界、阶段要求和来源标记，现有领域提示词回归通过。提交信息：`feat: 增加 PPT 分阶段提示词`。
 
 ## Task 4: 接入提示词 Agent coordinator 和工作台
 
@@ -123,13 +123,13 @@ assert.throws(() => createPptBrief({ constraints: { minSlides: 12, maxSlides: 4 
 - Create: `tests/ppt-scene-ui.test.js`
 - Modify: `tests/e2e-smoke.test.js`
 
-- [ ] **Step 1: 写 coordinator 集成测试。** 使用假的模型、检索器和研究桥接器验证：输入想法→brief→研究/材料引用→大纲→大纲核对→逐页稿→路线提示词；模型失败时保留草稿；外部搜索按通用 Agent 的搜索确认规则；用户修改路线后只重建受影响阶段；不调用成品生成或文件写入。
+- [x] **Step 1: 写 coordinator 集成测试。** 使用假的模型、检索器和研究桥接器验证：输入想法→brief→研究/材料引用→大纲→大纲核对→逐页稿→路线提示词；模型失败时保留草稿；外部搜索按通用 Agent 的搜索确认规则；用户修改路线后只重建受影响阶段；不调用成品生成或文件写入。
 
-- [ ] **Step 2: 实现 coordinator。** 注入现有 prompt-agent coordinator、retriever、research bridge 与模型请求函数；不重复创建任务状态或另建搜索工具。研究摘要按来源 ID 关联到逐页主张，缺证据时标待核实。
+- [x] **Step 2: 实现 coordinator。** 注入现有 prompt-agent coordinator、retriever、research bridge 与模型请求函数；不重复创建任务状态或另建搜索工具。研究摘要按来源 ID 关联到逐页主张，缺证据时标待核实。
 
-- [ ] **Step 3: 实现 UI。** 展示演示简报、事实/假设/待确认、可编辑硬约束和偏好、大纲故事线、推荐页数依据、逐页文稿/视觉说明/来源、路线比较和当前阶段提示词。提供路线选择和大纲确认；每页允许标记保留、修改或删除，删除需保留原因。
+- [x] **Step 3: 实现 UI。** 展示演示简报、事实/假设/待确认、可编辑硬约束和偏好、大纲故事线、推荐页数依据、逐页文稿/视觉说明/来源、路线比较和当前阶段提示词。提供路线选择和大纲确认；每页允许标记保留、修改或删除，删除需保留原因。
 
-- [ ] **Step 4: 注册入口并运行测试。** 脚本加载顺序必须先 schema/workflow/prompts，再 coordinator/UI，最后 app。运行 `node --test tests/ppt-scene-coordinator.test.js tests/ppt-scene-ui.test.js tests/e2e-smoke.test.js`；预期静态入口、阶段流转和降级测试通过。提交信息：`feat: 接入 PPT 规划工作台`。
+- [x] **Step 4: 注册入口并运行测试。** 脚本加载顺序必须先 schema/workflow/prompts，再 coordinator/UI，最后 app。运行 `node --test tests/ppt-scene-coordinator.test.js tests/ppt-scene-ui.test.js tests/e2e-smoke.test.js`；预期静态入口、阶段流转和降级测试通过。提交信息：`feat: 接入 PPT 规划工作台`。
 
 ## Task 5: 端到端边界、文档和回归
 
@@ -143,13 +143,13 @@ assert.throws(() => createPptBrief({ constraints: { minSlides: 12, maxSlides: 4 
 - Modify: `tests/package-config.test.js`
 - Modify: `tests/e2e-smoke.test.js`
 
-- [ ] **Step 1: 增加端到端契约。** 覆盖简报、大纲、逐页稿、路线选择和当前阶段提示词从创建到保存/恢复；断言最终 PPT 文件不会被创建或改写，未确认的引用和案例不会成为已验证知识。
+- [x] **Step 1: 增加端到端契约。** 覆盖简报、大纲、逐页稿、路线选择和当前阶段提示词从创建到保存/恢复；断言最终 PPT 文件不会被创建或改写，未确认的引用和案例不会成为已验证知识。
 
-- [ ] **Step 2: 更新产品文档及打包检查。** 记录 PPT 专项是通用提示词 Agent 的方法；新增运行时脚本加入 `npm run check` 与 Electron 打包白名单，测试/计划/原始附件不加入运行时包。
+- [x] **Step 2: 更新产品文档及打包检查。** 记录 PPT 专项是通用提示词 Agent 的方法；新增运行时脚本加入 `npm run check` 与 Electron 打包白名单，测试/计划/原始附件不加入运行时包。
 
-- [ ] **Step 3: 运行完整验证。** 运行 `npm test`、`npm run check`、`git diff --check`；预期全部通过。手动 Electron 验收只检查工作台可用、路线和提示词可复制、无模型时输入不丢失，不把 smoke 测试描述为真实视觉验收。
+- [x] **Step 3: 运行完整验证。** 运行 `npm test`、`npm run check`、`git diff --check`；预期全部通过。手动 Electron 验收只检查工作台可用、路线和提示词可复制、无模型时输入不丢失，不把 smoke 测试描述为真实视觉验收。
 
-- [ ] **Step 4: 提交。** `git add` 仅添加本任务文件并提交 `feat: 完成 PPT 内容规划场景`。
+- [x] **Step 4: 提交。** `git add` 仅添加本任务文件并提交 `feat: 完成 PPT 内容规划场景`。
 
 ## 完成标准
 
@@ -160,3 +160,9 @@ assert.throws(() => createPptBrief({ constraints: { minSlides: 12, maxSlides: 4 
 - 模块依赖现有提示词 Agent 和检索/研究能力，不创建自由 Agent 循环，也不直接制作 PPT。
 - 专项和集成测试、语法检查通过。
 
+## 实施验收记录
+
+- 完整测试：410 项通过、6 项失败、1 项跳过。原始 `d8ae988` 基线复跑为 7 项失败、1 项跳过；当前分支修复了其中 1 项 e2e 失败，其余 6 项为基线已有失败。跳过项因 Windows 创建符号链接返回 `EPERM`。
+- `npm run check` 通过；新增集成与打包测试 19/19 通过；最终相关回归 64/64 通过，路线 UI 修复后专项回归 23/23 通过。
+- 浏览器验收确认：工作台可打开；四种路线标签清楚且路线选择会持久化并切换阶段提示词；提示词可复制；刷新后任务草稿保留。无模型时显示降级提示并保留已有输入。
+- 浏览器普通网页预览出现 Electron-only `require` 未定义错误；这是网页预览不能替代 Electron renderer 环境的限制，Electron 应用仍需在打包/运行环境复核。

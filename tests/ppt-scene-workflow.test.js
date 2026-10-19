@@ -87,10 +87,14 @@ test('估算拒绝布尔时长、非整数页数范围和相反的页数边界',
 
 test('四条路线均比较可编辑性、视觉精度、修改成本和转换限制', () => {
   const result = recommendPptRoute({ route: 'undecided' });
+  const titles = result.options.map(option => option.title);
+
+  assert.equal(new Set(titles).size, 4, '四条路线标题应各不相同');
 
   for (const route of ['native-ppt', 'image-rebuild', 'html-final', 'html-to-ppt']) {
     const option = result.options.find(item => item.id === route);
     assert.ok(option, `缺少路线 ${route}`);
+    assert.ok(option.title?.trim(), `${route} 缺少可读标题`);
     for (const field of ['editability', 'visualFidelity', 'modificationCost', 'conversionLimitations']) {
       assert.ok(option[field], `${route} 缺少 ${field}`);
     }

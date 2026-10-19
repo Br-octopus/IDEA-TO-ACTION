@@ -58,12 +58,16 @@ test('工作台展示简报分类、大纲故事线、页数依据、逐页内�
   for (const key of ['minSlides', 'maxSlides', 'maxWordsPerSlide']) assert.match(mount.innerHTML, new RegExp(`data-ppt-constraint="${key}"`));
   assert.match(mount.innerHTML, /data-ppt-action="approve-outline"/);
   assert.match(mount.innerHTML, /data-ppt-action="choose-route"/);
+  for (const title of ['原生可编辑 PPT', '图片参考后重建 PPT', 'HTML 网页成品', 'HTML 制作后转换为 PPT']) {
+    assert.ok(mount.innerHTML.includes(title), `路线比较应渲染${title}`);
+  }
+  assert.equal((mount.innerHTML.match(/data-ppt-action="choose-route"/g) || []).length, 4);
   assert.match(mount.innerHTML, /data-ppt-action="delete-slide"/);
   assert.match(mount.innerHTML, /data-ppt-delete-reason=/);
 });
 
 test('所有动态内容均转义，且工作台操作贯通大纲确认和路线选择', async () => {
-  const { handlers, mount, calls, ui } = fixture();
+  const { handlers, mount, state, calls, ui } = fixture();
   ui.render();
 
   assert.equal(mount.innerHTML.includes('<script>brief</script>'), false);
@@ -74,6 +78,9 @@ test('所有动态内容均转义，且工作台操作贯通大纲确认和路�
   await handlers.click({ target: { dataset: { pptAction: 'approve-outline' }, closest() { return this; } } });
   await handlers.click({ target: { dataset: { pptAction: 'choose-route', route: 'native-ppt' }, closest() { return this; } } });
   assert.deepEqual(calls, ['approve', ['route', 'native-ppt']]);
+  assert.equal(state.promptAgentTasks[0].pptScene.route.selected, 'native-ppt');
+  assert.equal(state.promptAgentTasks[0].pptScene.brief.route, 'native-ppt');
+  assert.match(mount.innerHTML, /原生可编辑 PPT · 推荐 · 已选/);
 });
 
 test('页面支持保留、修改和带原因删除，并在模型失败时显示已有草稿', async () => {

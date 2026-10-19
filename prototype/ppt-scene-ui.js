@@ -68,7 +68,7 @@
         setScene(task, { ...task.pptScene, brief }); return;
       }
       if (action === "approve-outline") setScene(task, coordinator.approveOutline(task));
-      else if (action === "choose-route") setScene(task, coordinator.chooseRoute(task, value));
+      else if (action === "choose-route") setScene(task, coordinator.chooseRoute(task, value).pptScene);
       else if (action === "keep-slide" || action === "delete-slide") {
         const id = value; const reason = payload.reason || [...(root.querySelectorAll?.("[data-ppt-delete-reason]") || [])].find(node => node.dataset.pptDeleteReason === id)?.value || "";
         setScene(task, coordinator.setSlideDisposition(task, id, action === "keep-slide" ? "keep" : "deleted", reason));

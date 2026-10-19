@@ -14,6 +14,7 @@
   const ROUTES = Object.freeze([
     {
       id: 'native-ppt',
+      title: '原生可编辑 PPT',
       editability: '文字、图表和形状可作为 PowerPoint 原生对象直接编辑。',
       visualFidelity: '复杂效果可能需要简化，视觉表现取决于 PowerPoint 对象能力。',
       modificationCost: '后续修改成本低到中；结构清楚时可直接调整对象。',
@@ -22,6 +23,7 @@
     },
     {
       id: 'image-rebuild',
+      title: '图片参考后重建 PPT',
       editability: '整页图片不可独立编辑；重建后的文字、图表和形状可编辑。',
       visualFidelity: '视觉稿可高度贴近目标效果，重建后仍可能有位置和识别误差。',
       modificationCost: '先出图较快；后续逐页重建和核验成本高。',
@@ -30,6 +32,7 @@
     },
     {
       id: 'html-final',
+      title: 'HTML 网页成品',
       editability: '可通过修改 HTML、CSS 和脚本编辑；不是 PowerPoint 原生对象。',
       visualFidelity: '浏览器中可保留网页排版、动效和交互表现。',
       modificationCost: '熟悉网页技术时迭代成本低；不熟悉时需要网页开发支持。',
@@ -38,6 +41,7 @@
     },
     {
       id: 'html-to-ppt',
+      title: 'HTML 制作后转换为 PPT',
       editability: '转换成功的文本、图形可编辑，但结果取决于转换工具和页面结构。',
       visualFidelity: '可保留部分 HTML 视觉设计，复杂布局可能出现差异。',
       modificationCost: '前期可复用 HTML；转换后需要逐页修复和核对。',
