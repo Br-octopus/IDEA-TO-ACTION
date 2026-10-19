@@ -188,6 +188,37 @@ test('Agent 澄清和拒绝联网决定在持久化、迁移及重载后保留',
   assert.equal(restored.stage, 'plan');
 });
 
+test('PPT 场景只持久化规范化 brief 和草稿字段', () => {
+  const storage = memoryStorage();
+  const saved = saveState(storage, {
+    promptAgentTasks: [{
+      id: 'ppt-task', type: 'advance-idea', goal: '说明新流程',
+      pptScene: {
+        brief: {
+          idea: '说明新流程', audience: '客服', route: 'native-ppt',
+          constraints: { minSlides: 6, maxSlides: 10, maxWordsPerSlide: 35 },
+          materials: [{ id: 'f1', role: 'both', kind: 'pptx', body: '原文件正文不应保存' }],
+          apiKey: 'ppt-secret'
+        },
+        draft: { title: '流程', slides: [{ id: 's1', title: '分流', body: ['立即处理'] }], unknown: 'drop-me' },
+        unknown: 'drop-me-too'
+      }
+    }]
+  });
+  const serialized = storage.getItem(STORAGE_KEY);
+  const loaded = loadState(storage).state.promptAgentTasks[0].pptScene;
+
+  assert.equal(saved.promptAgentTasks[0].pptScene.brief.route, 'native-ppt');
+  assert.equal(loaded.brief.materials[0].role, 'both');
+  assert.equal(loaded.brief.apiKey, undefined);
+  assert.equal(loaded.brief.materials[0].body, undefined);
+  assert.equal(loaded.draft.unknown, undefined);
+  assert.equal(loaded.unknown, undefined);
+  assert.equal(serialized.includes('ppt-secret'), false);
+  assert.equal(serialized.includes('原文件正文不应保存'), false);
+  assert.equal(serialized.includes('drop-me'), false);
+});
+
 test('已保存的知识选择允许在保留公开资料选择时清空', () => {
   const state = migrateState({
     researchSelection: [catalog[0].id],
