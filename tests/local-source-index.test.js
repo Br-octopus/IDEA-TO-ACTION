@@ -30,6 +30,8 @@ test('发现受支持文本文件并排除私密、二进制、超限和构建�
   assert.deepEqual(entries.map(item => item.relativePath), ['config.yaml', 'guide.md', 'script.ts']);
   assert.equal(entries[1].title, '发布工作流');
   assert.ok(entries[1].excerpt.includes('自动化部署步骤'));
+  assert.ok(entries[1].fragments.length <= 5);
+  assert.ok(entries[1].fragments.reduce((size, fragment) => size + fragment.text.length, 0) <= 1400);
   assert.ok(entries.every(item => !('content' in item) && !('absolutePath' in item)));
   assert.equal(indexSourceFile(path.join(root, 'guide.md')).relativePath, 'guide.md');
 });
@@ -39,9 +41,14 @@ test('遍历顺序稳定，搜索可按关键词匹配，刷新检测修改和�
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'b.md'), '# Beta\n缓存刷新策略');
   fs.writeFileSync(path.join(root, 'a.md'), '# Alpha\n本地工作流');
+  fs.writeFileSync(path.join(root, 'long.md'), `# Long\n${Array.from({ length: 18 }, (_, index) => `行${index + 1}`).join('\n')}\n后半段专属检索词`);
   const first = refreshSourceIndex(root);
-  assert.deepEqual(first.files.map(item => item.relativePath), ['a.md', 'b.md']);
+  assert.deepEqual(first.files.map(item => item.relativePath), ['a.md', 'b.md', 'long.md']);
   assert.equal(searchSourceIndex(first, '缓存').files[0].relativePath, 'b.md');
+  const lateMatch = searchSourceIndex(first, '后半段专属检索词').files[0];
+  assert.ok(lateMatch.excerpt.includes('后半段专属检索词'));
+  assert.ok(lateMatch.fragments[0].line > 10);
+  assert.ok(!('content' in lateMatch));
   fs.writeFileSync(path.join(root, 'a.md'), '# Alpha\n更新后的工作流');
   fs.unlinkSync(path.join(root, 'b.md'));
   fs.writeFileSync(path.join(root, 'c.md'), '# Gamma\n新增文档');

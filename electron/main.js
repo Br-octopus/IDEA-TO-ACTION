@@ -449,7 +449,7 @@ ipcMain.handle('backup:list', async () => getBackupStore().listBackups());
 ipcMain.handle('backup:read', async (_event, filename) => getBackupStore().readBackup(filename));
 
 registerSocialHandlers();
-createPromptAgentSources({ fs, dialog, ipcMain });
+createPromptAgentSources({ fs, path, userDataPath: app.getPath('userData'), dialog, ipcMain });
 
 app.whenReady().then(() => createWindow()).catch(reportStartupError);
 

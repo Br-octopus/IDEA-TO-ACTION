@@ -3,6 +3,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const MAX_FILE_BYTES = 1024 * 1024;
+const MAX_FRAGMENTS = 5;
+const MAX_FRAGMENT_LENGTH = 280;
 const TEXT_EXTENSIONS = new Set([
   '.md', '.markdown', '.txt', '.text', '.log', '.json', '.yaml', '.yml', '.js', '.cjs', '.mjs', '.jsx',
   '.ts', '.cts', '.mts', '.tsx', '.py', '.sh', '.bash', '.ps1', '.psm1', '.skill', '.workflow'
@@ -12,21 +14,21 @@ const EXCLUDED_DIRECTORIES = new Set([
   '.next', '.nuxt', '.venv', 'venv', '__pycache__', '.tox', '.cache', '.turbo', '.parcel-cache', '.pytest_cache', '.pnpm-store'
 ]);
 
-function isContained(root, candidate) {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+function isContained(root, candidate, pathImpl = path) {
+  const relative = pathImpl.relative(root, candidate);
+  return relative === '' || (!pathImpl.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${pathImpl.sep}`));
 }
 
-function resolveContainedPath(filePath, rootPath, fileSystem) {
+function resolveContainedPath(filePath, rootPath, fileSystem, pathImpl = path) {
   const root = fileSystem.realpathSync(rootPath);
   const candidate = fileSystem.realpathSync(filePath);
-  if (!isContained(root, candidate)) throw new Error('文件路径超出授权目录');
+  if (!isContained(root, candidate, pathImpl)) throw new Error('文件路径超出授权目录');
   return { root, candidate };
 }
 
-function classifyFile(filePath) {
-  const name = path.basename(filePath).toLowerCase();
-  const extension = path.extname(name);
+function classifyFile(filePath, pathImpl = path) {
+  const name = pathImpl.basename(filePath).toLowerCase();
+  const extension = pathImpl.extname(name);
   if (name === '.env' || name.startsWith('.env.') || name.startsWith('.env-')
     || /(^|[._-])(id_rsa|id_ed25519|private|secret)([._-]|$)/i.test(name)
     || ['.pem', '.key', '.p12', '.pfx', '.der'].includes(extension)) return null;
@@ -35,32 +37,43 @@ function classifyFile(filePath) {
     ? 'document' : 'source';
 }
 
-function metadataFromText(relativePath, content, type) {
+function metadataFromText(relativePath, content, type, pathImpl = path) {
   const lines = content.split(/\r?\n/);
   const heading = lines.find(line => /^\s*#\s+\S/.test(line));
-  const title = heading ? heading.replace(/^\s*#\s+/, '').trim().slice(0, 160) : path.basename(relativePath);
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  const keywords = [...new Set((`${title} ${normalized}`.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) || []))].slice(0, 40);
+  const title = heading ? heading.replace(/^\s*#\s+/, '').trim().slice(0, 160) : pathImpl.basename(relativePath);
+  const nonemptyLines = lines.flatMap((line, index) => {
+    const text = line.replace(/\s+/g, ' ').trim();
+    if (!text) return [];
+    return [{ text, line: index + 1 }];
+  });
+  const fragments = nonemptyLines.length <= MAX_FRAGMENTS
+    ? nonemptyLines
+    : Array.from({ length: MAX_FRAGMENTS }, (_, index) => nonemptyLines[Math.round(index * (nonemptyLines.length - 1) / (MAX_FRAGMENTS - 1))]);
+  for (const fragment of fragments) fragment.text = fragment.text.slice(0, MAX_FRAGMENT_LENGTH);
+  const indexedText = `${title} ${content.replace(/\s+/g, ' ')}`;
+  const keywords = [...new Set((indexedText.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) || []))].slice(0, 40);
   return {
     id: relativePath,
     relativePath,
     title,
     type,
     keywords,
-    excerpt: normalized.slice(0, 280),
+    excerpt: fragments.find(fragment => !/^\s*#+\s/.test(fragment.text))?.text || fragments[0]?.text || '',
+    fragments,
     fingerprint: crypto.createHash('sha256').update(content).digest('hex')
   };
 }
 
 function indexSourceFile(filePath, options = {}) {
   const fileSystem = options.fs || fs;
-  const requestedRoot = options.root || path.dirname(path.resolve(filePath));
-  const { root, candidate } = resolveContainedPath(filePath, requestedRoot, fileSystem);
-  const relativePath = path.relative(root, candidate).split(path.sep).join('/');
+  const pathImpl = options.path || path;
+  const requestedRoot = options.root || pathImpl.dirname(pathImpl.resolve(filePath));
+  const { root, candidate } = resolveContainedPath(filePath, requestedRoot, fileSystem, pathImpl);
+  const relativePath = pathImpl.relative(root, candidate).split(pathImpl.sep).join('/');
   if (!relativePath || relativePath.split('/').some(part => EXCLUDED_DIRECTORIES.has(part.toLowerCase()))) {
     throw new Error('文件位于不受支持的目录');
   }
-  const type = classifyFile(candidate);
+  const type = classifyFile(candidate, pathImpl);
   if (!type) return null;
   const stat = fileSystem.statSync(candidate);
   if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return null;
@@ -69,11 +82,12 @@ function indexSourceFile(filePath, options = {}) {
   let content;
   try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { return null; }
-  return metadataFromText(relativePath, content, type);
+  return metadataFromText(relativePath, content, type, pathImpl);
 }
 
 function listSourceFiles(rootPath, options = {}) {
   const fileSystem = options.fs || fs;
+  const pathImpl = options.path || path;
   const root = fileSystem.realpathSync(rootPath);
   const results = [];
   function visit(directory) {
@@ -81,7 +95,7 @@ function listSourceFiles(rootPath, options = {}) {
       .sort((a, b) => a.name.localeCompare(b.name, 'en'));
     for (const entry of entries) {
       if (entry.name.toLowerCase() === '.git') continue;
-      const fullPath = path.join(directory, entry.name);
+      const fullPath = pathImpl.join(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
         if (!EXCLUDED_DIRECTORIES.has(entry.name.toLowerCase())) visit(fullPath);
@@ -99,8 +113,8 @@ function listSourceFiles(rootPath, options = {}) {
   return results;
 }
 
-function refreshSourceIndex(root, previousIndex = null) {
-  const files = listSourceFiles(root);
+function refreshSourceIndex(root, previousIndex = null, options = {}) {
+  const files = listSourceFiles(root, options);
   const previous = new Map((previousIndex?.files || []).map(item => [item.relativePath, item]));
   const current = new Map(files.map(item => [item.relativePath, item]));
   const changes = {
@@ -116,10 +130,16 @@ function searchSourceIndex(index, query, filters = {}) {
   const files = (index?.files || []).filter(item => {
     if (filters.type && item.type !== filters.type) return false;
     if (filters.keyword && !item.keywords.includes(String(filters.keyword).toLowerCase())) return false;
-    const haystack = `${item.title} ${item.relativePath} ${item.keywords.join(' ')} ${item.excerpt}`.toLowerCase();
-    return terms.every(term => haystack.includes(term));
+    const searchable = `${item.title} ${item.relativePath} ${item.keywords.join(' ')}`.toLowerCase();
+    if (terms.every(term => searchable.includes(term))) return true;
+    const fragments = item.fragments || [{ text: item.excerpt || '', line: 1 }];
+    return terms.every(term => `${searchable} ${fragments.map(fragment => fragment.text).join(' ')}`.toLowerCase().includes(term));
   });
-  return { files };
+  return { files: files.map(item => {
+    const termsInFragments = (item.fragments || []).filter(fragment => terms.every(term => fragment.text.toLowerCase().includes(term)));
+    if (!termsInFragments.length) return { ...item, fragments: [], excerpt: '' };
+    return { ...item, fragments: termsInFragments, excerpt: termsInFragments[0].text };
+  }) };
 }
 
 module.exports = { MAX_FILE_BYTES, listSourceFiles, indexSourceFile, refreshSourceIndex, searchSourceIndex };

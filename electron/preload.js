@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
     selectDirectory: () => ipcRenderer.invoke('prompt-agent-sources:select-directory'),
     listAuthorized: () => ipcRenderer.invoke('prompt-agent-sources:list-authorized'),
     refreshIndex: id => ipcRenderer.invoke('prompt-agent-sources:refresh-index', id),
+    setAuthorizationEnabled: (id, enabled) => ipcRenderer.invoke('prompt-agent-sources:set-authorization-enabled', id, enabled),
     removeAuthorization: id => ipcRenderer.invoke('prompt-agent-sources:remove-authorization', id)
   })
 }));
