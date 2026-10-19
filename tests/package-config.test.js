@@ -26,6 +26,17 @@ test('所有社媒研究运行时脚本均纳入 npm run check', () => {
   }
 });
 
+test('PPT 场景全部运行时脚本均纳入 npm run check', () => {
+  for (const script of [
+    'prototype/ppt-scene-schema.js',
+    'prototype/ppt-scene-workflow.js',
+    'prototype/ppt-scene-prompts.js',
+    'prototype/ppt-scene-coordinator.js'
+  ]) {
+    assert.ok(packageJson.scripts.check.includes(`node --check ${script}`), `缺少语法检查：${script}`);
+  }
+});
+
 test('Windows 构建同时包含 NSIS 和 portable', () => {
   assert.deepEqual(build.win.target, ['nsis', 'portable']);
   assert.equal(build.appId, 'com.forwardstep.app');

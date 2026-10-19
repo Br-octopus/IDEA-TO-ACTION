@@ -5,6 +5,8 @@ const { createPromptAgentCoordinator } = require('../prototype/prompt-agent-coor
 const schema = require('../prototype/prompt-agent-schema.js');
 const workflow = require('../prototype/prompt-agent-workflow.js');
 const prompts = require('../prototype/prompt-agent-prompts.js');
+const { createPptSceneCoordinator } = require('../prototype/ppt-scene-coordinator.js');
+const { createEmptyState, loadState, saveState } = require('../prototype/storage.js');
 
 function makeScope(overrides = {}) {
   return {
@@ -203,4 +205,101 @@ test('coordinator 只向桥接传研究范围白名单字段，执行前必须�
 
   assert.equal(result.status, 'complete');
   assert.equal(JSON.stringify(result).includes('完整文章正文'), false);
+});
+
+test('PPT brief 到逐页稿、路线提示词和存储恢复形成端到端闭环', async () => {
+  const modelStages = [];
+  const coordinator = createPptSceneCoordinator({
+    promptAgentCoordinator: {
+      selectMaterials: async () => [{
+        id: 'public-guide', title: '公开指南', summary: '仅供参考', verificationStatus: 'unverified'
+      }]
+    },
+    requestModel: async request => {
+      modelStages.push(request.stage);
+      if (request.stage === 'brief') return { brief: { audience: '业务负责人', audienceAction: '批准试点', preserveItems: ['样本数据'] } };
+      if (request.stage === 'outline') return { outline: {
+        title: '试点方案', storyLine: '问题、证据、行动',
+        slides: [{ id: 'outline-1', page: 1, title: '先做小范围验证', claim: '验证成本可控', purpose: '提出建议' }]
+      } };
+      if (request.stage === 'slides') return { draft: { title: '试点方案', slides: [{
+        id: 'slide-1', page: 1, title: '先做小范围验证', claim: '验证成本可控',
+        body: ['保留样本数据'], visualDescription: '展示样本和验证步骤', speakerNotes: '补充口头说明'
+      }] } };
+      throw new Error(`不应调用的阶段：${request.stage}`);
+    }
+  });
+  let task = coordinator.createTask({
+    id: 'ppt-e2e', goal: '为试点申请资源',
+    pptScene: { brief: { audience: '业务负责人', preserveItems: ['样本数据'] } }
+  });
+  task = (await coordinator.generateBrief(task)).task;
+  task = (await coordinator.gatherMaterials(task)).task;
+  task = coordinator.chooseRoute(task, 'native-ppt');
+  task = (await coordinator.generateOutline(task)).task;
+  task = coordinator.approveOutline(task);
+  task = (await coordinator.generateSlides(task)).task;
+
+  assert.deepEqual(modelStages, ['brief', 'outline', 'slides']);
+  assert.equal(task.pptScene.brief.preserveItems[0], '样本数据');
+  assert.equal(task.pptScene.sources[0].verificationStatus, 'unverified');
+  assert.equal(task.pptScene.route.selected, 'native-ppt');
+  assert.equal(task.pptScene.outline.slides.length, 1);
+  assert.equal(task.pptScene.outline.slides[0].evidenceStatus, 'needs-verification');
+  assert.equal(task.pptScene.draft.slides[0].speakerNotes, '补充口头说明');
+  const routePrompt = coordinator.getStagePrompt(task);
+  assert.match(routePrompt, /native-ppt/);
+  assert.match(routePrompt, /保留及待修改页面/);
+  assert.match(routePrompt, /不代做最终文件/);
+  assert.doesNotMatch(routePrompt, /speakerNotes|口头说明/);
+  assert.doesNotMatch(routePrompt, /writeFile|pptxgen/i);
+
+  const values = new Map();
+  const storage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+  saveState(storage, { ...createEmptyState(), promptAgentTasks: [task] });
+  const restored = loadState(storage).state.promptAgentTasks[0];
+  assert.equal(restored.pptScene.brief.idea, '为试点申请资源');
+  assert.equal(restored.pptScene.route.selected, 'native-ppt');
+  assert.equal(restored.pptScene.outline.slides[0].title, '先做小范围验证');
+  assert.equal(restored.pptScene.sources[0].verificationStatus, 'unverified');
+  assert.equal(restored.pptScene.draft.slides[0].body[0], '保留样本数据');
+  assert.equal((restored.cases || []).length, 0, '未确认的 PPT 复盘不得自动进入案例库');
+});
+
+test('PPT 扩展搜索预算须确认，模型失败时原有逐页草稿可恢复', async () => {
+  const researchBridge = createPromptAgentResearchBridge();
+  const coordinator = createPptSceneCoordinator({
+    researchBridge,
+    requestModel: async ({ stage }) => {
+      if (stage === 'slides') throw new Error('model offline');
+      return { outline: { slides: [{ id: 'outline-1', page: 1, title: '待验证页面' }] } };
+    }
+  });
+  let task = coordinator.createTask({ id: 'ppt-failure', goal: '准备汇报' });
+  const preview = coordinator.previewResearch(task, makeScope({
+    queries: ['q1', 'q2', 'q3', 'q4'],
+    budget: { maxQueries: 4, maxSources: 8 }
+  }));
+  assert.equal(preview.requiresBudgetConfirmation, true);
+  assert.throws(() => coordinator.approveResearch(task, preview.id), /需确认/);
+  coordinator.approveResearch(task, preview.id, {
+    confirmBudget: true, budget: { maxQueries: 4, maxSources: 8 }
+  });
+
+  task = (await coordinator.generateOutline(task)).task;
+  task = coordinator.approveOutline(task);
+  task = { ...task, pptScene: {
+    ...task.pptScene,
+    draft: { title: '已有草稿', slides: [{ id: 'saved-slide', page: 1, title: '不要丢失' }] }
+  } };
+  const failed = await coordinator.generateSlides(task);
+  assert.equal(failed.error.code, 'model_failure');
+  assert.equal(failed.task.pptScene.draft.slides[0].title, '不要丢失');
+
+  const values = new Map();
+  const storage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+  saveState(storage, { ...createEmptyState(), promptAgentTasks: [failed.task] });
+  const restored = loadState(storage).state.promptAgentTasks[0];
+  assert.equal(restored.pptScene.draft.title, '已有草稿');
+  assert.equal(restored.pptScene.draft.slides[0].title, '不要丢失');
 });
