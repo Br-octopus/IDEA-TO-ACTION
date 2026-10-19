@@ -4,7 +4,6 @@
   else root.ForwardStepPromptAgentWorkflow = api;
 })(typeof globalThis === 'undefined' ? this : globalThis, function () {
   const TERMINAL_STATUSES = new Set(['completed']);
-  const RESEARCH_REJECTION = '用户已拒绝本任务联网研究';
 
   function invalidTransition(task, event) {
     const error = new Error(`不允许的提示词 Agent 状态迁移: ${task.status || '未知'} -> ${event}`);
@@ -28,11 +27,13 @@
     }
     return {
       ...task,
-      status: 'clarifying',
-      stage: 'clarification',
-      clarificationCount: Math.min(3, Number(task.clarificationCount) || 0),
-      clarifications: [],
-      researchDecision: (task.assumptions || []).includes(RESEARCH_REJECTION) ? 'rejected' : 'none'
+      status: task.status === undefined ? 'clarifying' : task.status,
+      stage: task.stage || 'clarification',
+      clarificationCount: task.clarificationCount === undefined
+        ? 0
+        : Math.min(3, Number(task.clarificationCount) || 0),
+      clarifications: task.clarifications === undefined ? [] : task.clarifications,
+      researchDecision: task.researchDecision === undefined ? 'none' : task.researchDecision
     };
   }
 
@@ -70,7 +71,7 @@
 
   function requestExternalResearch(task, scope) {
     assertActive(task, 'request_external_research');
-    if (task.researchDecision === 'rejected' || (task.assumptions || []).includes(RESEARCH_REJECTION)) {
+    if (task.researchDecision === 'rejected') {
       throw new Error('用户已拒绝联网，本任务不能再次申请搜索');
     }
     if (task.status === 'awaiting-research-approval') throw invalidTransition(task, 'request_external_research');
@@ -104,7 +105,6 @@
     }
     return {
       ...task,
-      assumptions: [...new Set([...(task.assumptions || []), RESEARCH_REJECTION])],
       status: task.researchReturn?.status || 'planning',
       stage: task.researchReturn?.stage || 'planning',
       researchDecision: 'rejected'

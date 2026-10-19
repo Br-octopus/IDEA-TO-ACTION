@@ -170,6 +170,24 @@ test('旧状态迁移新增 Agent 集合默认为空，保存时只持久化规�
   assert.equal(serialized.includes('derived index'), false);
 });
 
+test('Agent 澄清和拒绝联网决定在持久化、迁移及重载后保留', () => {
+  const storage = memoryStorage();
+  const task = {
+    id: 'task-restore', type: 'advance-idea', goal: '目标', status: 'planning', stage: 'plan',
+    clarifications: [{ question: '面向谁？', answer: '新手' }], researchDecision: 'rejected'
+  };
+
+  saveState(storage, { promptAgentTasks: [task] });
+  const loaded = loadState(storage).state;
+  const restored = migrateState(loaded).promptAgentTasks[0];
+
+  assert.deepEqual(restored.clarifications, task.clarifications);
+  assert.equal(restored.researchDecision, 'rejected');
+  assert.deepEqual(restored.assumptions, []);
+  assert.equal(restored.status, 'planning');
+  assert.equal(restored.stage, 'plan');
+});
+
 test('已保存的知识选择允许在保留公开资料选择时清空', () => {
   const state = migrateState({
     researchSelection: [catalog[0].id],

@@ -13,6 +13,22 @@ test('三类入口保留任务类型并从澄清阶段开始', () => {
   }
 });
 
+test('创建流程保留已有进度与研究决定，只为缺省字段补默认值', () => {
+  const existing = createPromptAgentTask({
+    goal: '恢复任务', status: 'ready', stage: 'draft', clarificationCount: 1,
+    clarifications: [{ question: '对象？', answer: '编辑' }], researchDecision: 'approved'
+  });
+  const resumed = workflow.createPromptAgentFlow(existing);
+  assert.equal(resumed.status, 'ready');
+  assert.equal(resumed.stage, 'draft');
+  assert.deepEqual(resumed.clarifications, [{ question: '对象？', answer: '编辑' }]);
+  assert.equal(resumed.researchDecision, 'approved');
+
+  const incomplete = workflow.createPromptAgentFlow({ type: 'advance-idea' });
+  assert.equal(incomplete.status, 'clarifying');
+  assert.equal(incomplete.stage, 'clarification');
+});
+
 test('每次只记录一个问题，最多三个关键追问，信息足够可先形成草稿', () => {
   let task = workflow.createPromptAgentFlow(createPromptAgentTask({ goal: '完成目标' }));
   task = workflow.recordClarification(task, { question: '对象是谁？', answer: '新手' });
@@ -41,10 +57,24 @@ test('非阻断缺口作为假设保留，拒绝联网后不能再次申请搜�
   assert.equal(task.status, 'awaiting-research-approval');
   task = workflow.rejectExternalResearch(task);
   assert.equal(task.researchDecision, 'rejected');
+  assert.equal(task.assumptions.includes('用户已拒绝本任务联网研究'), false);
   assert.throws(() => workflow.requestExternalResearch(task, { objective: '再次搜索' }), /已拒绝联网/);
   assert.throws(() => workflow.approveExternalResearch(task), /等待联网确认/);
   const restored = workflow.createPromptAgentFlow(normalizePromptAgentTask(task));
   assert.throws(() => workflow.requestExternalResearch(restored, { objective: '恢复后再次搜索' }), /已拒绝联网/);
+});
+
+test('规范化恢复后保留澄清问答和拒绝联网决定', () => {
+  let task = workflow.createPromptAgentFlow(createPromptAgentTask({ goal: '目标' }));
+  task = workflow.recordClarification(task, { question: '面向谁？', answer: '新手' });
+  task = workflow.requestExternalResearch(task, { objective: '查询资料' });
+  task = workflow.rejectExternalResearch(task);
+  const restored = workflow.createPromptAgentFlow(normalizePromptAgentTask(task));
+
+  assert.deepEqual(restored.clarifications, [{ question: '面向谁？', answer: '新手' }]);
+  assert.equal(restored.researchDecision, 'rejected');
+  assert.deepEqual(restored.assumptions, []);
+  assert.throws(() => workflow.requestExternalResearch(restored, { objective: '再次查询' }), /已拒绝联网/);
 });
 
 test('批准联网只在待确认状态有效，路线只允许选择现有步骤', () => {

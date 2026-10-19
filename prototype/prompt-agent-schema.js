@@ -5,9 +5,12 @@
 })(typeof globalThis === "undefined" ? this : globalThis, function () {
   const TASK_TYPES = Object.freeze(["advance-idea", "optimize-prompt", "diagnose-ai-result"]);
   const REVIEW_LABELS = Object.freeze(["成功", "失败", "待验证"]);
+  const RESEARCH_DECISIONS = Object.freeze(["none", "pending", "approved", "rejected"]);
+  const LEGACY_RESEARCH_REJECTION = "用户已拒绝本任务联网研究";
   const TASK_FIELDS = new Set([
     "id", "type", "goal", "target", "currentState", "constraints", "successCriteria",
-    "preserveItems", "facts", "assumptions", "missingInfo", "clarificationCount", "steps",
+    "preserveItems", "facts", "assumptions", "missingInfo", "clarificationCount", "clarifications",
+    "researchDecision", "steps",
     "currentStepId", "researchBudget", "review", "status", "stage", "createdAt", "updatedAt"
   ]);
   const STEP_FIELDS = new Set([
@@ -91,9 +94,18 @@
       successCriteria: textList(source.successCriteria),
       preserveItems: textList(source.preserveItems),
       facts: textList(source.facts),
-      assumptions: textList(source.assumptions),
+      assumptions: textList(source.assumptions).filter(item => item !== LEGACY_RESEARCH_REJECTION),
       missingInfo: textList(source.missingInfo),
       clarificationCount: count(source.clarificationCount, 3),
+      clarifications: Array.isArray(source.clarifications)
+        ? source.clarifications.slice(0, 3).map(item => ({
+          question: text(isObject(item) ? item.question : ""),
+          answer: text(isObject(item) ? item.answer : "")
+        })).filter(item => item.question && item.answer)
+        : [],
+      researchDecision: RESEARCH_DECISIONS.includes(source.researchDecision)
+        ? source.researchDecision
+        : (Array.isArray(source.assumptions) && source.assumptions.includes(LEGACY_RESEARCH_REJECTION) ? "rejected" : "none"),
       steps,
       currentStepId: stepIds.has(source.currentStepId) ? source.currentStepId : "",
       researchBudget: {
@@ -103,7 +115,7 @@
         usedSources: count(rawBudget.usedSources, 5)
       },
       review,
-      status: ["clarifying", "planning", "ready", "reviewing", "completed"].includes(source.status) ? source.status : "clarifying",
+      status: ["clarifying", "planning", "ready", "reviewing", "completed", "awaiting-research-approval"].includes(source.status) ? source.status : "clarifying",
       stage: text(source.stage, 60),
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)

@@ -57,6 +57,25 @@ test('复盘标签只允许成功、失败或待验证', () => {
   assert.equal(normalizePromptAgentTask({ review: { label: '自动保存' } }).review.label, '待验证');
 });
 
+test('联网决定和澄清问答按白名单、长度及数量限制规范化', () => {
+  const task = normalizePromptAgentTask({
+    researchDecision: 'rejected',
+    clarifications: [
+      { question: '  问题  ', answer: ' 答复 ' },
+      ...Array.from({ length: 4 }, (_, index) => ({ question: `问题${index}`, answer: '答复' }))
+    ]
+  });
+
+  assert.equal(task.researchDecision, 'rejected');
+  assert.equal(task.clarifications.length, 3);
+  assert.deepEqual(task.clarifications[0], { question: '问题', answer: '答复' });
+  assert.equal(task.clarifications[0].question.length, 2);
+  assert.equal(normalizePromptAgentTask({ researchDecision: 'invalid' }).researchDecision, 'none');
+  const legacy = normalizePromptAgentTask({ assumptions: ['用户已拒绝本任务联网研究', '真实假设'] });
+  assert.equal(legacy.researchDecision, 'rejected');
+  assert.deepEqual(legacy.assumptions, ['真实假设']);
+});
+
 test('Agent 状态只保留白名单摘要和授权来源元数据', () => {
   const state = sanitizePromptAgentState({
     promptAgentTasks: [{ id: 'task-1', type: 'advance-idea', goal: '目标' }],
