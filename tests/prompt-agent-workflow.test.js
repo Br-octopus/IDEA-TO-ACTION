@@ -91,3 +91,43 @@ test('批准联网只在待确认状态有效，路线只允许选择现有步�
   assert.equal(task.researchDecision, 'approved');
   assert.throws(() => workflow.transitionPromptAgentTask(task, { type: 'finish' }), /不允许/);
 });
+
+test('联网确认预览固定查询、来源类型、平台和默认预算，超限需单独确认预算', () => {
+  const base = workflow.createPromptAgentFlow(createPromptAgentTask({ goal: '评估工具' }));
+  const pending = workflow.requestExternalResearch(base, {
+    objective: '比较隐私友好的笔记工具',
+    queries: ['隐私笔记工具', '本地笔记同步', '端到端加密笔记'],
+    sourceTypes: ['官方文档', '评测'],
+    platforms: ['web']
+  });
+  assert.equal(pending.status, 'awaiting-research-approval');
+  assert.deepEqual(pending.researchScope.budget, { maxQueries: 3, maxSources: 5 });
+  assert.equal(pending.researchScope.queries.length, 3);
+  assert.equal(pending.researchScope.platforms[0], 'web');
+
+  const overBudget = workflow.requestExternalResearch(base, {
+    objective: '扩展比较', queries: ['q1', 'q2', 'q3', 'q4'],
+    platforms: ['web'], budget: { maxQueries: 4, maxSources: 7 }
+  });
+  assert.equal(overBudget.status, 'awaiting-research-budget-approval');
+  assert.equal(overBudget.researchScope.budget.requiresConfirmation, true);
+  assert.throws(() => workflow.approveExternalResearch(overBudget), /预算/);
+  const budgetConfirmed = workflow.approveExternalResearchBudget(overBudget);
+  assert.equal(budgetConfirmed.status, 'awaiting-research-approval');
+  assert.equal(budgetConfirmed.researchScope.budget.maxQueries, 4);
+  assert.equal(workflow.approveExternalResearch(budgetConfirmed).researchDecision, 'approved');
+});
+
+test('联网范围只保留白名单摘要字段，不持久化文章原文或聊天记录', () => {
+  const base = workflow.createPromptAgentFlow(createPromptAgentTask({ goal: '核实说法' }));
+  const pending = workflow.requestExternalResearch(base, {
+    objective: '核实说法', queries: ['核实说法 官方来源'], platforms: ['web'],
+    sourceTypes: ['官方文档'], pastedArticle: '用户粘贴的完整文章',
+    chatHistory: ['完整对话'], arbitraryInput: '不可透传'
+  });
+  const normalized = normalizePromptAgentTask(pending);
+  assert.equal(normalized.researchScope.pastedArticle, undefined);
+  assert.equal(normalized.researchScope.chatHistory, undefined);
+  assert.equal(normalized.researchScope.arbitraryInput, undefined);
+  assert.deepEqual(normalized.researchScope.queries, ['核实说法 官方来源']);
+});

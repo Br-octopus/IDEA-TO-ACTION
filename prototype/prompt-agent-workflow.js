@@ -1,8 +1,11 @@
 (function (root, factory) {
-  const api = factory();
+  const schema = typeof module === 'object' && module.exports
+    ? require('./prompt-agent-schema.js')
+    : root.ForwardStepPromptAgentSchema;
+  const api = factory(schema);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.ForwardStepPromptAgentWorkflow = api;
-})(typeof globalThis === 'undefined' ? this : globalThis, function () {
+})(typeof globalThis === 'undefined' ? this : globalThis, function (schema) {
   const TERMINAL_STATUSES = new Set(['completed']);
 
   function invalidTransition(task, event) {
@@ -78,18 +81,49 @@
     if (!scope || typeof scope !== 'object' || Array.isArray(scope) || !String(scope.objective || '').trim()) {
       throw new TypeError('联网研究范围必须包含 objective');
     }
+    const normalizedScope = schema.normalizePromptAgentResearchScope({
+      ...scope,
+      queries: Array.isArray(scope.queries) && scope.queries.length ? scope.queries : [scope.objective],
+      sourceTypes: Array.isArray(scope.sourceTypes) && scope.sourceTypes.length ? scope.sourceTypes : ['web'],
+      platforms: Array.isArray(scope.platforms) && scope.platforms.length ? scope.platforms : ['web']
+    });
+    if (!normalizedScope.objective || !normalizedScope.queries.length || !normalizedScope.sourceTypes.length) {
+      throw new TypeError('联网研究范围必须包含目标、查询和来源类型');
+    }
+    const requestedQueries = Math.max(normalizedScope.queries.length, normalizedScope.budget.maxQueries);
+    const requestedSources = normalizedScope.budget.maxSources;
+    const requiresConfirmation = requestedQueries > 3 || requestedSources > 5;
+    normalizedScope.budget.maxQueries = Math.min(10, requestedQueries);
+    normalizedScope.budget.maxSources = Math.min(20, requestedSources);
+    if (requiresConfirmation) normalizedScope.budget.requiresConfirmation = true;
+    return {
+      ...task,
+      status: requiresConfirmation ? 'awaiting-research-budget-approval' : 'awaiting-research-approval',
+      stage: 'research-approval',
+      researchDecision: 'pending',
+      researchScope: normalizedScope,
+      researchReturn: { status: task.status, stage: task.stage }
+    };
+  }
+
+  function approveExternalResearchBudget(task) {
+    assertTask(task);
+    if (task.status !== 'awaiting-research-budget-approval' || task.researchDecision !== 'pending') {
+      throw new Error('当前任务不在等待预算确认状态');
+    }
+    const researchScope = schema.normalizePromptAgentResearchScope(task.researchScope);
     return {
       ...task,
       status: 'awaiting-research-approval',
-      stage: 'research-approval',
-      researchDecision: 'pending',
-      researchScope: { ...scope },
-      researchReturn: { status: task.status, stage: task.stage }
+      researchScope: { ...researchScope, budget: { ...researchScope.budget, requiresConfirmation: false } }
     };
   }
 
   function approveExternalResearch(task) {
     assertTask(task);
+    if (task.status === 'awaiting-research-budget-approval' || task.researchScope?.budget?.requiresConfirmation) {
+      throw new Error('超出默认预算，必须先确认预算');
+    }
     if (task.status !== 'awaiting-research-approval' || task.researchDecision !== 'pending') {
       if (task.status !== 'awaiting-research-approval') throw new Error('当前任务不在等待联网确认状态');
       throw invalidTransition(task, 'approve_external_research');
@@ -99,7 +133,7 @@
 
   function rejectExternalResearch(task) {
     assertTask(task);
-    if (task.status !== 'awaiting-research-approval' || task.researchDecision !== 'pending') {
+    if (!['awaiting-research-approval', 'awaiting-research-budget-approval'].includes(task.status) || task.researchDecision !== 'pending') {
       if (task.status !== 'awaiting-research-approval') throw new Error('当前任务不在等待联网确认状态');
       throw invalidTransition(task, 'reject_external_research');
     }
@@ -107,7 +141,8 @@
       ...task,
       status: task.researchReturn?.status || 'planning',
       stage: task.researchReturn?.stage || 'planning',
-      researchDecision: 'rejected'
+      researchDecision: 'rejected',
+      researchScope: { ...task.researchScope, budget: { ...task.researchScope?.budget, requiresConfirmation: false } }
     };
   }
 
@@ -142,6 +177,7 @@
     recordClarification,
     setTaskDraft,
     requestExternalResearch,
+    approveExternalResearchBudget,
     approveExternalResearch,
     rejectExternalResearch,
     selectPromptStep,

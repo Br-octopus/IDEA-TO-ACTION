@@ -10,7 +10,7 @@
   const TASK_FIELDS = new Set([
     "id", "type", "goal", "target", "currentState", "constraints", "successCriteria",
     "preserveItems", "facts", "assumptions", "missingInfo", "clarificationCount", "clarifications",
-    "researchDecision", "steps",
+    "researchDecision", "researchScope", "researchReturn", "steps",
     "currentStepId", "researchBudget", "review", "status", "stage", "createdAt", "updatedAt"
   ]);
   const STEP_FIELDS = new Set([
@@ -46,6 +46,25 @@
     return value.map(item => text(item)).filter(Boolean).slice(0, limit);
   }
 
+  function normalizePromptAgentResearchScope(input) {
+    const source = isObject(input) ? input : {};
+    const allowedSourceTypes = new Set(["web", "social", "official-docs", "community", "github", "官方文档", "评测", "案例"]);
+    const allowedPlatforms = new Set(["web", "xiaohongshu", "reddit", "youtube"]);
+    const rawBudget = isObject(source.budget) ? source.budget : {};
+    const budget = {
+      maxQueries: count(rawBudget.maxQueries, 10, 3),
+      maxSources: count(rawBudget.maxSources, 20, 5)
+    };
+    if (rawBudget.requiresConfirmation === true) budget.requiresConfirmation = true;
+    return {
+      objective: text(source.objective, 300),
+      queries: Array.isArray(source.queries) ? source.queries.map(item => text(item, 240)).filter(Boolean).slice(0, 10) : [],
+      sourceTypes: textList(source.sourceTypes, 8).filter(item => allowedSourceTypes.has(item)),
+      platforms: textList(source.platforms, 3).map(item => item.toLowerCase()).filter(item => allowedPlatforms.has(item)),
+      budget
+    };
+  }
+
   function count(value, maximum, fallback = 0) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.max(0, Math.min(maximum, Math.floor(number))) : fallback;
@@ -75,6 +94,7 @@
     if (source.type !== undefined && !TASK_TYPES.includes(source.type)) throw new TypeError("Agent 任务类型无效");
     const rawBudget = isObject(source.researchBudget) ? source.researchBudget : {};
     const rawReview = isObject(source.review) ? source.review : {};
+    const rawResearchReturn = isObject(source.researchReturn) ? source.researchReturn : {};
     const steps = Array.isArray(source.steps) ? source.steps.map(normalizePromptAgentStep).filter(step => step.id) : [];
     const stepIds = new Set(steps.map(step => step.id));
     const review = {
@@ -106,6 +126,11 @@
       researchDecision: RESEARCH_DECISIONS.includes(source.researchDecision)
         ? source.researchDecision
         : (Array.isArray(source.assumptions) && source.assumptions.includes(LEGACY_RESEARCH_REJECTION) ? "rejected" : "none"),
+      researchScope: normalizePromptAgentResearchScope(source.researchScope),
+      researchReturn: {
+        status: text(rawResearchReturn.status, 60),
+        stage: text(rawResearchReturn.stage, 60)
+      },
       steps,
       currentStepId: stepIds.has(source.currentStepId) ? source.currentStepId : "",
       researchBudget: {
@@ -115,7 +140,7 @@
         usedSources: count(rawBudget.usedSources, 5)
       },
       review,
-      status: ["clarifying", "planning", "ready", "reviewing", "completed", "awaiting-research-approval"].includes(source.status) ? source.status : "clarifying",
+      status: ["clarifying", "planning", "ready", "reviewing", "completed", "awaiting-research-approval", "awaiting-research-budget-approval"].includes(source.status) ? source.status : "clarifying",
       stage: text(source.stage, 60),
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
@@ -168,6 +193,7 @@
     createPromptAgentTask,
     normalizePromptAgentTask,
     normalizePromptAgentStep,
+    normalizePromptAgentResearchScope,
     normalizePromptAgentSource,
     sanitizePromptAgentState
   };

@@ -6,11 +6,12 @@
     typeof module === "object" && module.exports ? require("./knowledge-search.js") : root.ForwardStepKnowledgeSearch,
     typeof module === "object" && module.exports ? require("./retriever.js") : root.ForwardStepRetriever,
     typeof module === "object" && module.exports ? require("./prompt-engine.js") : root.ForwardStepPromptEngine,
-    typeof module === "object" && module.exports ? require("./method-cards.js") : root.ForwardStepMethodCards
+    typeof module === "object" && module.exports ? require("./method-cards.js") : root.ForwardStepMethodCards,
+    typeof module === "object" && module.exports ? require("./prompt-agent-research-bridge.js") : root.ForwardStepPromptAgentResearchBridge
   );
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.ForwardStepPromptAgentCoordinator = api;
-})(typeof globalThis === "undefined" ? this : globalThis, function (defaultSchema, defaultWorkflow, defaultPrompts, defaultKnowledgeSearch, defaultRetriever, promptEngine, defaultMethodCards) {
+})(typeof globalThis === "undefined" ? this : globalThis, function (defaultSchema, defaultWorkflow, defaultPrompts, defaultKnowledgeSearch, defaultRetriever, promptEngine, defaultMethodCards, defaultResearchBridge) {
   const asText = value => Array.isArray(value) ? value.join("、") : String(value || "").trim();
   const asList = value => Array.isArray(value) ? value : value ? [value] : [];
   const LOCAL_SEARCH_QUERY_LIMIT = 4;
@@ -24,6 +25,10 @@
     const getState = dependencies.getState || (() => ({}));
     const searchLocalSources = dependencies.searchLocalSources || (async () => []);
     const requestModel = dependencies.requestModel;
+    const researchBridge = dependencies.researchBridge || defaultResearchBridge?.createPromptAgentResearchBridge?.({
+      searchWeb: dependencies.searchWeb,
+      createSocialResearchPlan: dependencies.createSocialResearchPlan
+    });
     const timeoutMs = Math.max(1, Number(dependencies.timeoutMs) || 30000);
     const active = new Map();
 
@@ -298,7 +303,21 @@
       return true;
     }
 
-    return { selectMaterials, runStage, cancel };
+    return {
+      selectMaterials,
+      runStage,
+      cancel,
+      previewExternalResearch: scope => requireResearchBridge().preview(scope),
+      approveExternalResearch: (requestId, confirmation) => requireResearchBridge().approve(requestId, confirmation),
+      rejectExternalResearch: requestId => requireResearchBridge().reject(requestId),
+      runExternalResearch: (requestId, options) => requireResearchBridge().execute(requestId, options),
+      collectSocialResearchResult: (task, maximum) => requireResearchBridge().collectSocialResearchResult(task, maximum)
+    };
+
+    function requireResearchBridge() {
+      if (!researchBridge) throw new Error("外部研究桥接服务尚未配置");
+      return researchBridge;
+    }
   }
 
   return { createPromptAgentCoordinator };

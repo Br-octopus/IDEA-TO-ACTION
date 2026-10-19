@@ -122,11 +122,11 @@
 - Test: `tests/prompt-agent-coordinator.test.js`
 - Test: `tests/prompt-agent-integration.test.js`
 
-- [ ] **Step 1: 写确认与预算测试。** 外部研究请求先产生查询目标、来源类型和预算预览；未确认不能调用搜索/研究服务。默认上限为 3 个查询、5 个来源；超限必须重新确认。搜索不包含用户粘贴的完整文章或个人敏感原文。
-- [ ] **Step 2: 实现通用网页搜索接入。** 复用现有 `server/search-client.js` 和发送安全预览，结果结构保留标题、URL、可得日期、摘要、适用性和局限；来源数量与实际查询次数计入预算。
-- [ ] **Step 3: 实现社媒研究窄交接。** 仅当任务确需小红书、Reddit、YouTube 等平台资料时，通过 `prompt-agent-research-bridge.js` 提交带明确问题、平台范围、查询/结果预算的研究任务；复用既有研究 Agent 的计划确认流程。只接收结构化摘要、来源和研究局限，不传递聊天记录，也不触发 Agent 间循环调用。保持研究 Agent 自身工作流不变。
-- [ ] **Step 4: 测试降级和取消。** 搜索不可用时提供手动查询指令并标注未完成；研究部分失败时保留已有来源并标明缺口；用户取消或预算耗尽后不得继续调用。
-- [ ] **Step 5: 运行跨能力专项测试。** 运行 `node --test tests/prompt-agent-integration.test.js tests/prompt-agent-coordinator.test.js`；预期确认门、预算、引用和失败降级通过。
+- [x] **Step 1: 写确认与预算测试。** 外部研究请求先产生查询目标、来源类型和预算预览；未确认不能调用搜索/研究服务。默认上限为 3 个查询、5 个来源；超限必须重新确认。搜索不包含用户粘贴的完整文章或个人敏感原文。
+- [x] **Step 2: 实现通用网页搜索接入。** 复用现有 `server/search-client.js` 和发送安全预览，结果结构保留标题、URL、可得日期、摘要、适用性和局限；来源数量与实际查询次数计入预算。
+- [x] **Step 3: 实现社媒研究窄交接。** 仅当任务确需小红书、Reddit、YouTube 等平台资料时，通过 `prompt-agent-research-bridge.js` 提交带明确问题、平台范围、查询/结果预算的研究任务；复用既有研究 Agent 的计划确认流程。只接收结构化摘要、来源和研究局限，不传递聊天记录，也不触发 Agent 间循环调用。保持研究 Agent 自身工作流不变。
+- [x] **Step 4: 测试降级和取消。** 搜索不可用时提供手动查询指令并标注未完成；研究部分失败时保留已有来源并标明缺口；用户取消或预算耗尽后不得继续调用。
+- [x] **Step 5: 运行跨能力专项测试。** 运行 `node --test tests/prompt-agent-integration.test.js tests/prompt-agent-coordinator.test.js`；预期确认门、预算、引用和失败降级通过。
 
 ## Task 6: 提示词 Agent 工作台和用户确认交互
 
