@@ -13,6 +13,7 @@ const {
   appendReferenceContext,
   createSearchStub
 } = require('../prototype/research-catalog');
+const knowledgeSearch = require('../prototype/knowledge-search.js');
 const { createEmptyState, confirmCase } = require('../prototype/storage');
 
 const root = path.resolve(__dirname, '..');
@@ -42,9 +43,14 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
     assert.ok(html.includes('id="' + id + '"'), 'index.html 缺少 id: ' + id);
   }
   assert.ok(html.includes('资料库'), '应包含资料库入口');
+  assert.ok(html.includes('导出备份'), '资料库应提供备份导出入口');
+  assert.ok(html.includes('导入备份'), '资料库应提供备份导入入口');
+  assert.ok(html.includes('最近备份'), '资料库应显示最近备份状态');
   assert.ok(html.includes('从资料库移除'), '必须区分移除资料库与删除原始数据');
   assert.ok(html.includes('删除手动资料'), '批量删除必须明确限于手动资料');
-  assert.ok(html.includes('最近备份'), '应显示最近备份提示');  assert.ok(html.includes('<option value="pinned">置顶</option>'), '应提供置顶筛选');
+  assert.ok(html.includes('<option value="favorite">收藏</option>'), '应提供收藏筛选');
+  assert.ok(html.includes('<option value="recent">最近使用</option>'), '应提供最近使用筛选');
+  assert.ok(html.includes('<option value="pinned">置顶</option>'), '应提供置顶筛选');
   const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
   for (const phrase of ['当前版本', '最近复盘', '复盘次数', '适用场景', '不适用场景', '查看历史', '对比版本', '暂不复用', '删除案例']) {
     assert.match(app, new RegExp(phrase), '案例资料卡缺少版本或适用边界能力: ' + phrase);
@@ -63,6 +69,12 @@ test('资料库页面包含搜索、筛选和新增摘要的界面骨架', () =>
   assert.ok(app.includes('beginKnowledgeEntryEdit(entry)'), '手动资料编辑按钮必须绑定可执行事件');
   assert.ok(app.includes('data-knowledge-source'), '派生资料来源按钮必须存在');
   assert.ok(app.includes('handleKnowledgeSourceAction(entry)'), '派生资料来源按钮必须绑定可执行事件');
+  const searchResult = knowledgeSearch.searchKnowledge([
+    { id: 'smoke-entry', title: '提示词复核', summary: '检查验收标准', keywords: ['review', '验收'] }
+  ], 'review');
+  assert.deepEqual(searchResult.map(item => item.id), ['smoke-entry']);
+  assert.ok(searchResult[0].matchedFields.includes('keywords'), '搜索结果应保留命中字段解释');
+  assert.ok(knowledgeSearch.suggestSearchTerms('不存在的复核词', [{ title: '提示词复核', keywords: ['review'] }]).length <= 3, '无结果搜索应提供有界建议');
   assert.ok(app.includes('knowledgeForm.dataset.editId = entry.id'), '手动资料编辑必须设置 edit id');
   assert.match(app, /当前来源暂不支持直接编辑，资料卡和原始项目均未删除/, '不可编辑来源必须给出明确提示');
   assert.ok(html.includes('不要粘贴完整仓库'), '应提示不要粘贴完整仓库');
@@ -102,6 +114,9 @@ test('发送面板接入安全预览并保留编辑与失败状态契约', () =>
   assert.match(app, /send-preview-confirm"\)\.disabled\s*=\s*!serviceConfig\.model\?\.configured/);
   assert.match(app, /sendDraft\.confirmedRisk/);
   assert.match(app, /if \(succeeded\) closeSendPanel\(\);/);
+  assert.match(app, /近似 token/);
+  assert.match(app, /高风险/);
+  assert.match(app, /确认高风险内容后再发送/);
 });
 
 test('MVP 主流程可在静态边界串联，不等同于真实 Electron UI 验收', () => {
