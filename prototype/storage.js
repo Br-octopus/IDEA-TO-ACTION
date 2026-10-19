@@ -18,6 +18,11 @@
     : typeof globalThis === "undefined"
       ? null
       : globalThis.ForwardStepPromptAgentSchema;
+  const pptSceneSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./ppt-scene-schema.js")
+    : typeof globalThis === "undefined"
+      ? null
+      : globalThis.ForwardStepPptSceneSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
@@ -333,7 +338,25 @@
     if (!promptAgentSchema || typeof promptAgentSchema.sanitizePromptAgentState !== "function") {
       return { promptAgentTasks: [], promptAgentSources: [] };
     }
-    return promptAgentSchema.sanitizePromptAgentState(state);
+    const sanitized = promptAgentSchema.sanitizePromptAgentState(state);
+    const sceneSchema = pptSceneSchema || globalThis.ForwardStepPptSceneSchema;
+    if (!sceneSchema || typeof sceneSchema.normalizePptScene !== "function" || !Array.isArray(state?.promptAgentTasks)) {
+      return sanitized;
+    }
+    const scenesById = new Map();
+    for (const task of state.promptAgentTasks) {
+      if (!task || typeof task.id !== "string" || !task.pptScene) continue;
+      const normalizedId = task.id.trim().slice(0, 100);
+      if (!scenesById.has(normalizedId)) scenesById.set(normalizedId, []);
+      scenesById.get(normalizedId).push(sceneSchema.normalizePptScene(task.pptScene));
+    }
+    return {
+      ...sanitized,
+      promptAgentTasks: sanitized.promptAgentTasks.map(task => {
+        const scenes = scenesById.get(task.id);
+        return scenes?.length ? { ...task, pptScene: scenes.shift() } : task;
+      })
+    };
   }
 
   function migrateState(input) {

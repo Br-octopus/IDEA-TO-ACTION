@@ -579,7 +579,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (view === "plans") renderPlans();
     if (view === "library") renderLibrary();
     if (view === "references") refreshKnowledgeView();
-    if (view === "prompt-agent") window.ForwardStepPromptAgentUIController?.render();
+    if (view === "prompt-agent") {
+      window.ForwardStepPromptAgentUIController?.render();
+      window.ForwardStepPptSceneUIController?.render();
+    }
   }
   document.querySelectorAll("[data-view]").forEach(node => node.addEventListener("click", () => go(node.dataset.view)));
   if (window.ForwardStepSocialResearchCoordinator && window.ForwardStepSocialResearchUI && desktopApi?.social) {
@@ -699,6 +702,25 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         knowledgeEntries = getKnowledgeIndex();
       }
     });
+    if (window.ForwardStepPptSceneCoordinator && window.ForwardStepPptSceneUI) {
+      const pptCoordinator = window.ForwardStepPptSceneCoordinator.createPptSceneCoordinator({
+        promptAgentCoordinator,
+        retriever: window.ForwardStepRetriever?.createRetriever?.(),
+        requestModel: ({ prompt, stage }) => window.ForwardStepPromptAgentModelRequest({
+          messages: [{ role: "user", content: prompt }], options: { purpose: `ppt-${stage}` }
+        })
+      });
+      window.ForwardStepPptSceneUIController = window.ForwardStepPptSceneUI.createPptSceneUI({
+        document,
+        coordinator: pptCoordinator,
+        sceneSchema: window.ForwardStepPptSceneSchema,
+        taskSchema: window.ForwardStepPromptAgentSchema,
+        getState: () => state,
+        persistState(nextState) { state = saveState(localStorage, nextState); return state; },
+        copyText,
+        notify: toast
+      });
+    }
   }
   document.querySelectorAll(".domain").forEach(button => button.addEventListener("click", () => {
     selectedDomain = button.dataset.domain;

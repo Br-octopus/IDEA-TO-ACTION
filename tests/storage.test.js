@@ -84,6 +84,8 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     '/prototype/social-research-schema.js',
     '/prototype/social-research-workflow.js',
     '/prototype/social-research-prompts.js',
+    '/prototype/prompt-agent-schema.js',
+    '/prototype/ppt-scene-schema.js',
     '/prototype/storage.js',
     '/prototype/app.js'
   ];
@@ -99,6 +101,8 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     const socialResearchSchemaScriptIndex = html.indexOf('src="/prototype/social-research-schema.js"');
     const socialResearchWorkflowScriptIndex = html.indexOf('src="/prototype/social-research-workflow.js"');
     const socialResearchPromptsScriptIndex = html.indexOf('src="/prototype/social-research-prompts.js"');
+    const promptAgentSchemaScriptIndex = html.indexOf('src="/prototype/prompt-agent-schema.js"');
+    const pptSceneSchemaScriptIndex = html.indexOf('src="/prototype/ppt-scene-schema.js"');
     const storageScriptIndex = html.indexOf('src="/prototype/storage.js"');
     const appScriptIndex = html.indexOf('src="/prototype/app.js"');
     assert.ok(schemaScriptIndex >= 0, `${pagePath} 应先引用 knowledge-schema.js`);
@@ -108,7 +112,9 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     assert.ok(knowledgeSearchScriptIndex < socialResearchSchemaScriptIndex, `${pagePath} 中 knowledge-search.js 应在 social-research-schema.js 前加载`);
     assert.ok(socialResearchSchemaScriptIndex < socialResearchWorkflowScriptIndex, `${pagePath} 中 social-research-schema.js 应在工作流前加载`);
     assert.ok(socialResearchWorkflowScriptIndex < socialResearchPromptsScriptIndex, `${pagePath} 中工作流应在提示词前加载`);
-    assert.ok(socialResearchPromptsScriptIndex < storageScriptIndex, `${pagePath} 中提示词应在 storage.js 前加载`);
+    assert.ok(socialResearchPromptsScriptIndex < promptAgentSchemaScriptIndex, `${pagePath} 中提示词应在 Agent schema 前加载`);
+    assert.ok(promptAgentSchemaScriptIndex < pptSceneSchemaScriptIndex, `${pagePath} 中 PPT schema 应在 storage.js 前加载`);
+    assert.ok(pptSceneSchemaScriptIndex < storageScriptIndex, `${pagePath} 中 PPT schema 应在 storage.js 前加载`);
     assert.ok(storageScriptIndex < appScriptIndex, `${pagePath} 中 storage.js 应在 app.js 前加载`);
     for (const scriptPath of paths) {
       assert.ok(html.includes(`src="${scriptPath}"`), `${pagePath} 应引用 ${scriptPath}`);
@@ -117,7 +123,7 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     }
 
     const context = {};
-    for (const scriptPath of paths.slice(0, 9)) {
+    for (const scriptPath of paths.slice(0, -1)) {
       const source = fs.readFileSync(require.resolve(`..${scriptPath}`), 'utf8');
       vm.runInNewContext(source, context, { filename: scriptPath });
     }
@@ -126,6 +132,7 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     assert.equal(typeof context.ForwardStepSocialResearchSchema.sanitizeResearchState, 'function');
     assert.equal(typeof context.ForwardStepSocialResearchWorkflow.createResearchPlan, 'function');
     assert.equal(typeof context.ForwardStepSocialResearchPrompts.buildResearchPlanPrompt, 'function');
+    assert.equal(typeof context.ForwardStepPptSceneSchema.normalizePptScene, 'function');
     const migrated = context.ForwardStepStorage.migrateState({
       researchTasks: [{ id: 'browser-task-1', topic: '浏览器迁移研究' }],
       platformConnections: {
@@ -141,6 +148,38 @@ test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一�
     assert.equal(migrated.platformConnections.reddit.platform, 'reddit');
     assert.equal(migrated.platformConnections.reddit.supportsSearch, true);
     assert.deepEqual(migrated.researchAttachments.map(item => item.id), ['browser-attachment-1']);
+
+    const browserStorage = memoryStorage();
+    context.ForwardStepStorage.saveState(browserStorage, {
+      promptAgentTasks: [{
+        id: ' browser-ppt-task ', type: 'advance-idea', goal: '介绍新流程',
+        pptScene: {
+          brief: {
+            idea: '介绍新流程', audience: '一线客服', durationMinutes: 10, route: 'native-ppt',
+            apiKey: 'browser-ppt-credential-sentinel',
+            materials: [{ id: 'f1', role: 'content', kind: 'pptx', body: 'browser-ppt-original-sentinel' }]
+          },
+          draft: {
+            title: '新客服流程', originalAttachmentBody: 'browser-ppt-draft-original-sentinel',
+            slides: [{ id: 's1', title: '分流', body: ['按优先级处理'] }]
+          }
+        }
+      }]
+    });
+    const browserSerialized = browserStorage.getItem(STORAGE_KEY);
+    const restoredPptScene = context.ForwardStepStorage.loadState(browserStorage).state.promptAgentTasks[0].pptScene;
+    assert.equal(JSON.parse(browserSerialized).promptAgentTasks[0].id, 'browser-ppt-task');
+    assert.equal(restoredPptScene.brief.audience, '一线客服');
+    assert.equal(restoredPptScene.brief.durationMinutes, 10);
+    assert.equal(restoredPptScene.brief.route, 'native-ppt');
+    assert.equal(restoredPptScene.draft.slides[0].title, '分流');
+    for (const sentinel of [
+      'browser-ppt-credential-sentinel',
+      'browser-ppt-original-sentinel',
+      'browser-ppt-draft-original-sentinel'
+    ]) {
+      assert.equal(browserSerialized.includes(sentinel), false, `浏览器存储不应包含 ${sentinel}`);
+    }
   }
 });
 
@@ -186,6 +225,54 @@ test('Agent 澄清和拒绝联网决定在持久化、迁移及重载后保留',
   assert.deepEqual(restored.assumptions, []);
   assert.equal(restored.status, 'planning');
   assert.equal(restored.stage, 'plan');
+});
+
+test('PPT 场景持久化扩展白名单并丢弃附件原文与凭证', () => {
+  const storage = memoryStorage();
+  const saved = saveState(storage, {
+    promptAgentTasks: [{
+      id: ' ppt-task ', type: 'advance-idea', goal: '说明新流程',
+      pptScene: {
+        brief: {
+          idea: '说明新流程', audience: '客服', route: 'native-ppt',
+          constraints: { minSlides: 6, maxSlides: 10, maxWordsPerSlide: 35 },
+          materials: [{ id: 'f1', role: 'both', kind: 'pptx', body: '原文件正文不应保存' }],
+          apiKey: 'ppt-secret'
+        },
+        status: 'needs-review', stage: 'outline-review', outlineStatus: 'approved',
+        route: { selected: 'native-ppt', recommended: 'native-ppt' },
+        sources: [{ id: 'source-1', title: '流程手册', summary: '已核对分流步骤', content: '附件原文不可保存', apiKey: 'source-secret' }],
+        outline: { title: '客服流程', storyLine: '先识别再分流', reviewSummary: '覆盖主要路径', slides: [{ id: 'o1', page: 1, title: '识别', claim: '先判断紧急度', sourceIds: ['source-1'], evidenceStatus: 'cited' }] },
+        draft: { title: '流程', slides: [{ id: 's1', title: '分流', body: ['立即处理'], disposition: 'deleted', deleteReason: '改用新流程', originalAttachmentBody: '不得持久化' }], unknown: 'drop-me' },
+        unknown: 'drop-me-too', originalAttachmentBody: '私有附件原文'
+      }
+    }]
+  });
+  const serialized = storage.getItem(STORAGE_KEY);
+  const loaded = loadState(storage).state.promptAgentTasks[0].pptScene;
+
+  assert.equal(saved.promptAgentTasks[0].pptScene.brief.route, 'native-ppt');
+  assert.equal(saved.promptAgentTasks[0].id, 'ppt-task');
+  assert.equal(loaded.brief.materials[0].role, 'both');
+  assert.equal(loaded.brief.apiKey, undefined);
+  assert.equal(loaded.brief.materials[0].body, undefined);
+  assert.equal(loaded.draft.unknown, undefined);
+  assert.equal(loaded.draft.slides[0].disposition, 'deleted');
+  assert.equal(loaded.draft.slides[0].deleteReason, '改用新流程');
+  assert.equal(loaded.outline.storyLine, '先识别再分流');
+  assert.equal(loaded.outline.slides[0].evidenceStatus, 'cited');
+  assert.equal(loaded.sources[0].summary, '已核对分流步骤');
+  assert.equal(loaded.status, 'needs-review');
+  assert.equal(loaded.stage, 'outline-review');
+  assert.equal(loaded.outlineStatus, 'approved');
+  assert.equal(loaded.route.selected, 'native-ppt');
+  assert.equal(loaded.unknown, undefined);
+  assert.equal(serialized.includes('ppt-secret'), false);
+  assert.equal(serialized.includes('source-secret'), false);
+  assert.equal(serialized.includes('附件原文不可保存'), false);
+  assert.equal(serialized.includes('私有附件原文'), false);
+  assert.equal(serialized.includes('原文件正文不应保存'), false);
+  assert.equal(serialized.includes('drop-me'), false);
 });
 
 test('已保存的知识选择允许在保留公开资料选择时清空', () => {
