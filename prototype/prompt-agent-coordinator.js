@@ -13,6 +13,7 @@
 })(typeof globalThis === "undefined" ? this : globalThis, function (defaultSchema, defaultWorkflow, defaultPrompts, defaultKnowledgeSearch, defaultRetriever, promptEngine, defaultMethodCards) {
   const asText = value => Array.isArray(value) ? value.join("、") : String(value || "").trim();
   const asList = value => Array.isArray(value) ? value : value ? [value] : [];
+  const LOCAL_SEARCH_QUERY_LIMIT = 4;
 
   function createPromptAgentCoordinator(dependencies = {}) {
     const schema = dependencies.schema || defaultSchema;
@@ -32,19 +33,109 @@
       return workflow.createPromptAgentFlow(domain ? { ...normalized, domain } : normalized);
     }
 
-    function taskQuery(task, stage) {
-      return [task.goal, task.target, task.currentState, task.constraints, asText(task.successCriteria), stage].filter(Boolean).join(" ").slice(0, 240);
+    function queryTerms(value) {
+      const source = String(value || "").trim();
+      if (!source) return [];
+      if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+        try {
+          return [...new Intl.Segmenter("zh", { granularity: "word" }).segment(source)]
+            .filter(item => item.isWordLike)
+            .map(item => item.segment.trim())
+            .filter(term => [...term].length > 1);
+        } catch { /* 使用正则回退。 */ }
+      }
+      const tokens = source.match(/[a-z0-9]+|[\u3400-\u9fff]{2,}/gi) || [];
+      return tokens.flatMap(token => /[\u3400-\u9fff]/.test(token) && [...token].length > 4
+        ? Array.from({ length: [...token].length - 1 }, (_, index) => [...token].slice(index, index + 2).join(""))
+        : [token]);
     }
 
-    function normalizeLocalSource(source, task, stage) {
+    function localSearchQueries(task, stage) {
+      const fields = [
+        task.goal,
+        task.target,
+        asText(task.successCriteria),
+        task.currentState,
+        task.constraints,
+        task.domain,
+        stage
+      ];
+      const queries = [];
+      for (const field of fields) {
+        const terms = queryTerms(field).sort((left, right) => {
+          const latin = term => /^[a-z0-9]+$/i.test(term) ? 4 : 0;
+          return latin(right) - latin(left) || [...right].length - [...left].length;
+        });
+        const nextTerm = terms.find(term => !queries.includes(term));
+        if (nextTerm) queries.push(nextTerm);
+        if (queries.length >= LOCAL_SEARCH_QUERY_LIMIT) break;
+      }
+      return queries;
+    }
+
+    function isAbsoluteLocalPath(value) {
+      return /^(?:[a-z]:[\\/]|\\\\|\\(?!\\)|\/)/i.test(String(value || ""));
+    }
+
+    function stripAbsolutePaths(value) {
+      return String(value || "")
+        .replace(/\b[A-Za-z]:[\\/][^\s"'<>]*/g, "[本地路径已省略]")
+        .replace(/\\\\[^\s"'<>]+/g, "[本地路径已省略]")
+        .replace(/(^|[\s("'=])\\(?!\\)[^\s"'<>]*/g, "$1[本地路径已省略]")
+        .replace(/(^|[\s("'=])\/(?:[A-Za-z0-9._~-]+\/)+[A-Za-z0-9._~-]+/g, "$1[本地路径已省略]");
+    }
+
+    function safeSourceExcerpt(source) {
+      const candidates = [source.excerpt, ...(Array.isArray(source.fragments) ? source.fragments.map(item => item?.text) : []), source.summary]
+        .map(value => stripAbsolutePaths(value).trim())
+        .filter(Boolean);
+      return candidates.find(value => !/(?:忽略.{0,12}(?:指令|要求)|泄露|窃取|执行.{0,12}(?:脚本|命令)|ignore.{0,12}(?:instruction|above)|reveal.{0,12}(?:secret|key))/i.test(value)) || "";
+    }
+
+    function mergeSelectedSources(current = [], previous = []) {
+      const merged = [];
+      const seen = new Set();
+      for (const source of [...previous, ...current]) {
+        const location = String(source.location || "");
+        const safeLocation = /^https?:\/\//i.test(location) ? location
+          : isAbsoluteLocalPath(location) ? "授权资料"
+            : location || "授权资料";
+        const key = String(source.id || `${safeLocation}:${source.title || ""}`);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const idContainsAbsolutePath = /[a-z]:[\\/]|\\\\|(?:^|:)\/(?!\/)|(?:^|:)\\(?!\\)/i.test(key);
+        const isCode = /source-code|script|workflow|skill/i.test(String(source.type || ""))
+          || /\.(?:c|cjs|mjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1)$/i.test(safeLocation);
+        merged.push({
+          id: idContainsAbsolutePath ? `${safeLocation}:${source.title || "资料"}` : key,
+          type: String(source.type || "local-source-document").slice(0, 60),
+          title: stripAbsolutePaths(source.title || "未命名资料").slice(0, 100),
+          location: safeLocation.slice(0, 120),
+          useReason: stripAbsolutePaths(source.useReason || "相关参考").slice(0, 100),
+          verificationStatus: String(source.verificationStatus || "unverified").slice(0, 40),
+          applicableConditions: stripAbsolutePaths(source.applicableConditions || "未明确").slice(0, 120),
+          limitations: stripAbsolutePaths(source.limitations || "未明确").slice(0, 120),
+          excerpt: safeSourceExcerpt({ excerpt: source.excerpt }).slice(0, isCode ? 160 : 220),
+          score: Number(source.score) || 0
+        });
+        if (merged.length === 3) break;
+      }
+      return merged;
+    }
+
+    function normalizeLocalSource(source, task, stage, includeSourceSnippets = false) {
       const relativePath = String(source.relativePath || source.path || "").replace(/\\/g, "/");
       const location = /^([a-z]:|\/|\\\\)/i.test(relativePath) ? "授权资料" : relativePath || "授权资料";
-      const isSourceCode = source.type === "source" || /\.(?:c|cjs|mjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1)$/i.test(relativePath);
-      const excerpt = isSourceCode ? "" : String(source.excerpt || source.fragments?.map(item => item.text).filter(Boolean).join(" ") || source.summary || "").slice(0, 220);
+      const isWorkflow = /\.workflow$/i.test(relativePath) || /workflow/i.test(String(source.type || ""));
+      const isSkill = /skill/i.test(String(source.type || "")) || /(^|\/)skills?\//i.test(relativePath);
+      const isSourceCode = source.type === "source" || /script/i.test(String(source.type || ""))
+        || /\.(?:c|cjs|mjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1)$/i.test(relativePath);
+      const rawExcerpt = safeSourceExcerpt(source);
+      const excerpt = stripAbsolutePaths(rawExcerpt).slice(0, isSourceCode || isWorkflow || isSkill ? 160 : 220);
       const applicableConditions = String(source.applicableConditions || [task.domain || task.target, stage].filter(Boolean).join("；") || "任务相关").slice(0, 180);
       return {
         id: `local:${location}`,
-        type: source.type === "source" ? "local-source-code" : "local-source-document",
+        type: isWorkflow ? "local-source-workflow" : isSkill ? "local-source-skill" : isSourceCode ? "local-source-code" : "local-source-document",
         title: String(source.title || "本地资料").slice(0, 120),
         location,
         useReason: `与“${String(task.goal || task.target || "当前任务").slice(0, 55)}”及${stage}阶段相关`,
@@ -63,7 +154,7 @@
     async function selectMaterials(taskInput, options = {}) {
       const task = normalizeTask(taskInput);
       const stage = String(options.stage || task.stage || "clarification");
-      const query = taskQuery(task, stage);
+      const queries = localSearchQueries(task, stage);
       const state = getState() || {};
       const entries = knowledgeSearch.collectKnowledgeEntries(state, {
         references: state.references || [],
@@ -72,17 +163,27 @@
       if (!Array.isArray(state.methodCards) && typeof defaultMethodCards?.methodCardsToKnowledgeEntries === "function") {
         entries.push(...defaultMethodCards.methodCardsToKnowledgeEntries());
       }
-      let localResult = [];
-      try {
-        localResult = await searchLocalSources(query, { task, domain: task.domain || task.target, stage });
-      } catch {
-        // 本地索引不可用时继续使用现有知识库，不阻断本轮建议。
+      const localByPath = new Map();
+      for (const query of queries) {
+        try {
+          const result = await searchLocalSources(query, { task, domain: task.domain || task.target, stage });
+          const matches = Array.isArray(result) ? result : result?.files || [];
+          for (const source of matches) {
+            const sourcePath = String(source.relativePath || source.path || source.id || source.title || "").replace(/\\/g, "/");
+            const key = /^([a-z]:|\/|\\\\)/i.test(sourcePath) ? `private:${source.title || ""}` : sourcePath;
+            const previous = localByPath.get(key);
+            if (!previous) localByPath.set(key, source);
+            else if (!previous.excerpt && source.excerpt) localByPath.set(key, source);
+          }
+        } catch {
+          // 单路检索失败不影响其他聚焦查询和知识库结果。
+        }
       }
-      const localSources = Array.isArray(localResult) ? localResult : localResult?.files || [];
       const candidates = [
         ...entries,
-        ...localSources.map(source => normalizeLocalSource(source, task, stage))
+        ...[...localByPath.values()].map(source => normalizeLocalSource(source, task, stage))
       ];
+      const query = [task.goal, task.target, task.currentState, task.constraints, asText(task.successCriteria)].filter(Boolean).join(" ").slice(0, 240);
       const ranked = typeof retriever?.searchPromptAgentMaterials === "function"
         ? await retriever.searchPromptAgentMaterials(candidates, query, { domain: task.domain || task.target, stage, limit: 20 })
         : await retriever.search(candidates, query, { limit: 20 });
@@ -90,7 +191,9 @@
         const local = String(entry.id || "").startsWith("local:");
         const isCase = entry.type === "success-case" || entry.type === "failure-case" || entry.type === "review-insight";
         const status = entry.verificationStatus || "unverified";
-        const applicableConditions = String(entry.applicableConditions || [
+        const applicableConditions = String([
+          entry.applicableConditions,
+          asText(entry.applicableCases) && `适用案例：${asText(entry.applicableCases)}`,
           asText(entry.domains) && `领域：${asText(entry.domains)}`,
           asText(entry.stages) && `阶段：${asText(entry.stages)}`,
           isCase && entry.limitations && `案例证据/适用条件：${entry.limitations}`
@@ -132,7 +235,8 @@
       const originalTask = taskInput && typeof taskInput === "object" ? taskInput : {};
       const task = normalizeTask(originalTask);
       const stage = String(options.stage || task.stage || "clarification");
-      const selectedSources = await selectMaterials(task, { stage });
+      const freshSources = await selectMaterials(task, { stage });
+      const selectedSources = mergeSelectedSources(freshSources, originalTask.selectedSources);
       const basePrompt = buildStageBase(task, stage);
       const sourceContext = promptEngine.buildPromptAgentSourceContext(selectedSources, { maxChars: 1350, limit: 3 });
       const prompt = sourceContext ? `${basePrompt}\n\n${sourceContext}` : basePrompt;

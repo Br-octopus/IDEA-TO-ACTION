@@ -370,13 +370,38 @@
 
   // Prompt Agent 的排序是显式入口，避免改变资料库页面既有的搜索顺序。
   function selectPromptAgentEntries(entries = [], query, { domain = "", stage = "", limit = 20 } = {}) {
-    const ranked = searchKnowledge(entries, query, { limit: 20 }).map((entry, index) => {
+    const sourceEntries = Array.isArray(entries) ? entries : [];
+    const queryTermList = queryTerms(query);
+    const candidates = new Map();
+    for (let offset = 0; offset < sourceEntries.length; offset += 20) {
+      const batch = sourceEntries.slice(offset, offset + 20)
+        .map((entry, index) => ({ ...entry, __promptAgentIndex: offset + index }));
+      for (const result of searchKnowledge(batch, query, { limit: 20 })) {
+        const { __promptAgentIndex, ...entry } = result;
+        candidates.set(__promptAgentIndex, entry);
+      }
+    }
+    sourceEntries.forEach((entry, index) => {
+      const conditions = [entry.applicableConditions, entry.applicability, entry.limitations, entry.applicableCases]
+        .flatMap(value => Array.isArray(value) ? value : [value])
+        .filter(Boolean).join(" ").toLocaleLowerCase();
+      const matchingTerms = queryTermList.filter(term => conditions.includes(term));
+      const domains = Array.isArray(entry.domains) ? entry.domains : [entry.domains].filter(Boolean);
+      const stages = Array.isArray(entry.stages) ? entry.stages : [entry.stages].filter(Boolean);
+      const matchesDomain = domain && domains.some(value => String(value).includes(domain) || domain.includes(String(value)));
+      const matchesStage = stage && stages.includes(stage);
+      if ((matchingTerms.length || matchesDomain || matchesStage) && !candidates.has(index)) {
+        candidates.set(index, { ...entry, score: 0, matchedTerms: [], matchedFields: [] });
+      }
+    });
+    const ranked = [...candidates.entries()].map(([inputIndex, entry]) => {
       const domains = Array.isArray(entry.domains) ? entry.domains : [entry.domains].filter(Boolean);
       const stages = Array.isArray(entry.stages) ? entry.stages : [entry.stages].filter(Boolean);
       const typeWeight = {
         "user-prompt": 5,
-        "success-case": 5,
-        "failure-case": 5,
+        "success-case": 8,
+        "failure-case": 9,
+        "review-insight": 4,
         "method-card": 4,
         "github-summary": 2
       }[entry.type] || 1;
@@ -385,7 +410,15 @@
       const domainWeight = domain && domains.some(value => String(value).includes(domain) || domain.includes(String(value))) ? 8 : 0;
       const stageWeight = stage && stages.includes(stage) ? 5 : 0;
       const unverifiedPenalty = entry.verificationStatus === "unverified" ? 2 : 0;
-      return { ...entry, promptAgentScore: (entry.score || 0) + typeWeight + verificationWeight + domainWeight + stageWeight - unverifiedPenalty, __order: index };
+      const conditions = [entry.applicableConditions, entry.applicability, entry.limitations, entry.applicableCases]
+        .flatMap(value => Array.isArray(value) ? value : [value])
+        .filter(Boolean).join(" ").toLocaleLowerCase();
+      const conditionWeight = queryTermList.filter(term => conditions.includes(term)).length * 12;
+      return {
+        ...entry,
+        promptAgentScore: (entry.score || 0) + typeWeight + verificationWeight + domainWeight + stageWeight + conditionWeight - unverifiedPenalty,
+        __order: inputIndex
+      };
     });
     return ranked.sort((left, right) => right.promptAgentScore - left.promptAgentScore || left.__order - right.__order)
       .slice(0, Math.max(0, Math.min(20, Number(limit) || 20)))
