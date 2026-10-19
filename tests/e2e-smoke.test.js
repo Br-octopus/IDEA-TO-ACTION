@@ -255,3 +255,19 @@ test('浏览器导入入口先确认安全备份，再打开文件选择并导�
   assert.ok(app.includes('browserImportGate = null;'), '令牌必须在 change 前后清理，防止重复导入');
   assert.ok(app.indexOf('consumeBrowserImportGate(importGate);') < app.indexOf('await importBackupContent(await file.text(), importGate);'), '未通过令牌检查不能调用导入');
 });
+
+test('社媒研究入口加载 UI 并贯通计划、平台准备、结果和报告区域', () => {
+  const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
+  const ui = fs.readFileSync(path.join(root, 'prototype', 'social-research-ui.js'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
+  for (const id of [
+    'view-social-research', 'social-research-entry', 'social-research-plan-confirm',
+    'social-platform-preparation', 'social-research-status', 'social-research-results',
+    'social-research-save-selection', 'social-research-report'
+  ]) assert.ok(html.includes(`id="${id}"`), `研究工作台缺少 ${id}`);
+  assert.ok(html.indexOf('src="/prototype/social-research-ui.js"') < html.indexOf('src="/prototype/app.js"'));
+  assert.match(app, /createSocialResearchCoordinator\(/);
+  assert.match(app, /ForwardStepSocialResearchUI\.createSocialResearchUI\(/);
+  assert.match(ui, /data-report-result/);
+  assert.match(ui, /data-save-result/);
+});

@@ -440,13 +440,24 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function go(view) {
     document.querySelectorAll(".view").forEach(node => node.classList.toggle("active", node.id === `view-${view}`));
     document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === view));
-    const labels = { home: "新建规划", plans: "我的计划", article: "文章改写", library: "提示词库", references: "GitHub 参考", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
+    const labels = { home: "新建规划", plans: "我的计划", article: "文章改写", library: "提示词库", references: "GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
     document.getElementById("breadcrumb").textContent = `工作台　/　${labels[view] || "新建规划"}`;
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (view === "plans") renderPlans();
     if (view === "library") renderLibrary();
   }
   document.querySelectorAll("[data-view]").forEach(node => node.addEventListener("click", () => go(node.dataset.view)));
+  if (window.ForwardStepSocialResearchCoordinator && window.ForwardStepSocialResearchUI && desktopApi?.social) {
+    const coordinator = window.ForwardStepSocialResearchCoordinator.createSocialResearchCoordinator({
+      desktopApi,
+      initialState: state,
+      persistState(nextState) { state = saveState(localStorage, nextState); return state; }
+    });
+    window.ForwardStepSocialResearchUI.createSocialResearchUI({
+      document, desktopApi, coordinator, getState: () => state,
+      persistState(nextState) { state = saveState(localStorage, nextState); return state; }
+    });
+  }
   document.querySelectorAll(".domain").forEach(button => button.addEventListener("click", () => {
     selectedDomain = button.dataset.domain;
     document.querySelectorAll(".domain").forEach(item => item.classList.toggle("selected", item === button));
