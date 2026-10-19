@@ -59,11 +59,11 @@
 - Test: `tests/storage.test.js`
 - Test: `tests/workspace-backup.test.js`
 
-- [ ] **Step 1: 写失败测试，固定任务和阶段摘要字段。** 覆盖输入类型（推进想法、优化提示词、诊断 AI 结果）、事实/假设/待确认分离、最多三个追问计数、可编辑路线、当前步骤、研究预算和复盘标签（成功/失败/待验证）。
-- [ ] **Step 2: 运行专项测试确认失败。** 运行 `node --test tests/prompt-agent-schema.test.js`；预期模块或接口尚不存在。
-- [ ] **Step 3: 实现规范化和状态白名单。** 固定接口为 `createPromptAgentTask(input)`、`normalizePromptAgentTask(input)`、`normalizePromptAgentStep(input)`、`sanitizePromptAgentState(state)`。拒绝未知敏感字段；长原文不进入任务摘要。
-- [ ] **Step 4: 加入状态迁移与备份测试。** 旧状态迁移后新增数组默认为空；备份保留允许的任务摘要、案例确认状态和来源授权元数据，不包含索引内容、凭证、原始外部文章或未保存附件。
-- [ ] **Step 5: 运行专项回归。** 运行 `node --test tests/prompt-agent-schema.test.js tests/storage.test.js tests/workspace-backup.test.js`；预期全部通过。
+- [x] **Step 1: 写失败测试，固定任务和阶段摘要字段。** 覆盖输入类型（推进想法、优化提示词、诊断 AI 结果）、事实/假设/待确认分离、最多三个追问计数、可编辑路线、当前步骤、研究预算和复盘标签（成功/失败/待验证）。
+- [x] **Step 2: 运行专项测试确认失败。** 运行 `node --test tests/prompt-agent-schema.test.js`；预期模块或接口尚不存在。
+- [x] **Step 3: 实现规范化和状态白名单。** 固定接口为 `createPromptAgentTask(input)`、`normalizePromptAgentTask(input)`、`normalizePromptAgentStep(input)`、`sanitizePromptAgentState(state)`。拒绝未知敏感字段；长原文不进入任务摘要。
+- [x] **Step 4: 加入状态迁移与备份测试。** 旧状态迁移后新增数组默认为空；备份保留允许的任务摘要、案例确认状态和来源授权元数据，不包含索引内容、凭证、原始外部文章或未保存附件。
+- [x] **Step 5: 运行专项回归。** 运行 `node --test tests/prompt-agent-schema.test.js tests/storage.test.js tests/workspace-backup.test.js`；预期全部通过。
 
 ## Task 2: 确定性阶段工作流和提示词构建
 
@@ -73,11 +73,11 @@
 - Test: `tests/prompt-agent-workflow.test.js`
 - Test: `tests/prompt-agent-prompts.test.js`
 
-- [ ] **Step 1: 写工作流失败测试。** 覆盖三类入口、单轮最多一个问题、累计最多三个关键问题、信息充分后可先产出初稿、非阻断缺口转为假设、用户拒绝联网后不得发出搜索请求、只为选中的当前步骤生成完整提示词。
-- [ ] **Step 2: 实现纯函数状态迁移。** 复用 Task 1 的 `createPromptAgentTask(input)` 和 schema 规范化接口；工作流固定提供 `createPromptAgentFlow(task)`、`recordClarification(task, answer)`、`setTaskDraft(task, draft)`、`requestExternalResearch(task, scope)`、`approveExternalResearch(task)`、`rejectExternalResearch(task)`、`selectPromptStep(task, stepId)`、`transitionPromptAgentTask(task, event)`。状态非法迁移返回可识别错误，不静默跳转。
-- [ ] **Step 3: 测试各提示词输出边界。** 断言澄清/诊断输出目标、对象、现状、约束、成功标准和保留项；路线包含步骤目标、输入、产出和检查；复盘引用具体差异并给出成功/失败/待验证建议及依据；不得直接输出改写后的文章、代码或目标成果。
-- [ ] **Step 4: 实现阶段提示词构建函数。** 提供 `buildClarificationPrompt(task)`、`buildDiagnosisPrompt(task)`、`buildRoutePrompt(task, evidence)`、`buildStepPrompt(task, step)`、`buildResultReviewPrompt(task, externalResult, feedback)`。每次只传当前阶段摘要和被选中的引用，不拼接完整聊天历史。
-- [ ] **Step 5: 运行专项测试。** 运行 `node --test tests/prompt-agent-workflow.test.js tests/prompt-agent-prompts.test.js`；预期边界测试全部通过。
+- [x] **Step 1: 写工作流失败测试。** 覆盖三类入口、单轮最多一个问题、累计最多三个关键问题、信息充分后可先产出初稿、非阻断缺口转为假设、用户拒绝联网后不得发出搜索请求、只为选中的当前步骤生成完整提示词。
+- [x] **Step 2: 实现纯函数状态迁移。** 复用 Task 1 的 `createPromptAgentTask(input)` 和 schema 规范化接口；工作流固定提供 `createPromptAgentFlow(task)`、`recordClarification(task, answer)`、`setTaskDraft(task, draft)`、`requestExternalResearch(task, scope)`、`approveExternalResearch(task)`、`rejectExternalResearch(task)`、`selectPromptStep(task, stepId)`、`transitionPromptAgentTask(task, event)`。状态非法迁移返回可识别错误，不静默跳转。
+- [x] **Step 3: 测试各提示词输出边界。** 断言澄清/诊断输出目标、对象、现状、约束、成功标准和保留项；路线包含步骤目标、输入、产出和检查；复盘引用具体差异并给出成功/失败/待验证建议及依据；不得直接输出改写后的文章、代码或目标成果。
+- [x] **Step 4: 实现阶段提示词构建函数。** 提供 `buildClarificationPrompt(task)`、`buildDiagnosisPrompt(task)`、`buildRoutePrompt(task, evidence)`、`buildStepPrompt(task, step)`、`buildResultReviewPrompt(task, externalResult, feedback)`。每次只传当前阶段摘要和被选中的引用，不拼接完整聊天历史。
+- [x] **Step 5: 运行专项测试。** 运行 `node --test tests/prompt-agent-workflow.test.js tests/prompt-agent-prompts.test.js`；预期边界测试全部通过。
 
 ## Task 3: 授权目录自动发现与轻量资料索引
 
@@ -89,11 +89,11 @@
 - Test: `tests/local-source-index.test.js`
 - Test: `tests/electron-prompt-agent-sources.test.js`
 
-- [ ] **Step 1: 写索引器失败测试。** 使用临时目录覆盖 Markdown、纯文本、JSON/YAML、Skill、工作流及 JS/TS/Python/Shell/PowerShell 源码的发现；覆盖文件更新/删除、路径越界、超过 1 MiB、`.git`、依赖目录、构建产物、二进制和 `.env`/私钥排除。
-- [ ] **Step 2: 实现纯本地发现和索引。** 固定接口为 `listSourceFiles(root, options)`、`indexSourceFile(path, options)`、`refreshSourceIndex(root, previousIndex)`、`searchSourceIndex(index, query, filters)`。只生成文件元信息、标题、关键词与片段，不调用模型或执行文件内容。
-- [ ] **Step 3: 写 Electron 授权测试。** 验证选择目录后只允许该目录内读取，拒绝未授权绝对路径和路径穿越；renderer 仅能调用目录选择、授权列表、索引刷新、索引移除等明确 API。
-- [ ] **Step 4: 接入安全 IPC。** 目录选择由主进程原生对话框完成；授权来源使用稳定 ID 和用户选择的目录，不向模型发送本地绝对路径；preload 不暴露通用 filesystem 或 shell 能力。
-- [ ] **Step 5: 运行索引和 IPC 专项测试。** 运行 `node --test tests/local-source-index.test.js tests/electron-prompt-agent-sources.test.js`；预期授权边界和排除规则全部通过。
+- [x] **Step 1: 写索引器失败测试。** 使用临时目录覆盖 Markdown、纯文本、JSON/YAML、Skill、工作流及 JS/TS/Python/Shell/PowerShell 源码的发现；覆盖文件更新/删除、路径越界、超过 1 MiB、`.git`、依赖目录、构建产物、二进制和 `.env`/私钥排除。
+- [x] **Step 2: 实现纯本地发现和索引。** 固定接口为 `listSourceFiles(root, options)`、`indexSourceFile(path, options)`、`refreshSourceIndex(root, previousIndex)`、`searchSourceIndex(index, query, filters)`。只生成文件元信息、标题、关键词与片段，不调用模型或执行文件内容。
+- [x] **Step 3: 写 Electron 授权测试。** 验证选择目录后只允许该目录内读取，拒绝未授权绝对路径和路径穿越；renderer 仅能调用目录选择、授权列表、索引刷新、索引移除等明确 API。
+- [x] **Step 4: 接入安全 IPC。** 目录选择由主进程原生对话框完成；授权来源使用稳定 ID 和用户选择的目录，不向模型发送本地绝对路径；preload 不暴露通用 filesystem 或 shell 能力。
+- [x] **Step 5: 运行索引和 IPC 专项测试。** 运行 `node --test tests/local-source-index.test.js tests/electron-prompt-agent-sources.test.js`；预期授权边界和排除规则全部通过。
 
 ## Task 4: 自动选材、案例权重和模型协调器
 
