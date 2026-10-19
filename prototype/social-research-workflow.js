@@ -12,7 +12,8 @@
     pages: 0,
     details: 0,
     durationMs: 0,
-    attachmentBytes: 0
+    attachmentBytes: 0,
+    analysisTokens: 0
   });
 
   function budgetError(message) {
@@ -123,7 +124,8 @@
       pages: Number(current.pages || 0) + Number(usage.pages || 0),
       details: Number(current.details || 0) + Number(usage.details || 0),
       durationMs: Number(current.durationMs || 0) + Number(usage.durationMs || 0),
-      attachmentBytes: Number(current.attachmentBytes || 0) + Number(usage.attachmentBytes || 0)
+      attachmentBytes: Number(current.attachmentBytes || 0) + Number(usage.attachmentBytes || 0),
+      analysisTokens: Number(current.analysisTokens || 0) + Number(usage.analysisTokens || 0)
     };
     if (platform && queryCount) nextUsage.queriesByPlatform[platform] = Number(nextUsage.queriesByPlatform[platform] || 0) + queryCount;
     const checks = [
@@ -132,7 +134,8 @@
       [nextUsage.pages, budget.maxPages, '翻页数'],
       [nextUsage.details, budget.maxDetails, '详情数'],
       [nextUsage.durationMs, budget.maxDurationMs, '执行时间'],
-      [nextUsage.attachmentBytes, budget.maxAttachmentBytes, '附件大小']
+      [nextUsage.attachmentBytes, budget.maxAttachmentBytes, '附件大小'],
+      [nextUsage.analysisTokens, budget.maxAnalysisTokens, '模型分析 token 数']
     ];
     for (const [actual, limit, label] of checks) {
       if (Number.isFinite(Number(actual)) && Number(actual) > Number(limit)) throw budgetError(`${label}超出预算`);
@@ -143,10 +146,17 @@
   function decideConnectionMode(platform, connection = {}, preference = 'auto') {
     const choice = ['api', 'browser', 'auto'].includes(preference) ? preference : 'auto';
     if (choice === 'browser') return 'browser';
-    if (choice === 'api') return connection.apiAvailable && connection.status !== 'failed' && connection.status !== 'expired'
-      ? 'api' : 'browser';
-    return connection.apiAvailable && connection.status !== 'failed' && connection.status !== 'expired'
-      ? 'api' : 'browser';
+    const unavailableStatuses = new Set(['not-ready', 'needs-recheck', 'checking', 'failed', 'expired', 'restricted']);
+    const apiAvailable = connection.apiAvailable === true && !unavailableStatuses.has(connection.status);
+    if (choice === 'api') {
+      if (!apiAvailable) {
+        const error = new Error(`API unavailable: ${platform} 的 API 不可用或尚未准备`);
+        error.code = 'api_unavailable';
+        throw error;
+      }
+      return 'api';
+    }
+    return apiAvailable ? 'api' : 'browser';
   }
 
   function shouldFallbackToBrowser(apiResult = {}, capability = {}) {

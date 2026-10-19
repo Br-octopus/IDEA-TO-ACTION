@@ -77,7 +77,8 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
     { pages: 3 },
     { details: 3 },
     { durationMs: 1001 },
-    { attachmentBytes: 101 }
+    { attachmentBytes: 101 },
+    { analysisTokens: 10001 }
   ];
   const originalUsage = structuredClone(task.usage);
   for (const usage of cases) expectBudgetExceeded(task, usage);
@@ -95,6 +96,10 @@ test('补搜只允许在已批准预算剩余额度内进行', () => {
   assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, true);
   const used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 2 });
   assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'reddit', queries: 1 }).allowed, false);
+  const analysisUsed = workflow.consumeResearchBudget(task, { analysisTokens: 9000 });
+  assert.equal(analysisUsed.usage.analysisTokens, 9000);
+  assert.equal(workflow.canRequestSupplementarySearch(analysisUsed, { analysisTokens: 1001 }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(analysisUsed, { analysisTokens: 1000 }).allowed, true);
   assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'tiktok', platforms: ['tiktok'] }).allowed, false);
 });
 
@@ -103,6 +108,15 @@ test('连接偏好尊重能力和明确选择，并在 auto 下检查 API 结果
   assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'auto'), 'api');
   assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'browser'), 'browser');
   assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'api'), 'api');
+  assert.throws(
+    () => workflow.decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'api'),
+    error => error.code === 'api_unavailable' && /API/.test(error.message)
+  );
+  assert.throws(
+    () => workflow.decideConnectionMode('reddit', { apiAvailable: true, status: 'not-ready' }, 'api'),
+    error => error.code === 'api_unavailable'
+  );
+  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'auto'), 'browser');
   const capability = { minimumResults: 2, requiredFields: ['url', 'title'] };
   for (const apiResult of [
     { error: 'authentication' }, { error: 'timeout' }, { error: 'rate_limit' },
