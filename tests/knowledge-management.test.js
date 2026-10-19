@@ -3,7 +3,9 @@ const test = require('node:test');
 const vm = require('node:vm');
 const appSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
 const managementContext = { Date };
-vm.runInNewContext(appSource.slice(0, appSource.indexOf('(() => {')), managementContext);
+const pageRuntimeStart = appSource.indexOf('if (typeof window !== "undefined" && typeof document !== "undefined") {');
+assert.ok(pageRuntimeStart > 0, 'app.js 必须包含页面运行时代码边界');
+vm.runInNewContext(appSource.slice(0, pageRuntimeStart), managementContext);
 const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'consumeBrowserImportGate', 'filterKnowledgeEntriesByScope', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
 const { normalizeKnowledgeEntry } = require('../prototype/knowledge-schema.js');const { createBackup, validateBackup, replaceState } = require('../prototype/workspace-backup.js');
 
