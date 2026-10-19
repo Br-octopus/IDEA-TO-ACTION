@@ -10,11 +10,12 @@
   const SCHEMA_VERSION = 1;
   const SCOPES = new Set(["workspace", "knowledge-base"]);
   const WORKSPACE_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
+  const OPTIONAL_WORKSPACE_COLLECTIONS = ["promptAgentTasks", "promptAgentSources"];
   const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
   const WORKSPACE_DATA_FIELDS = [
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata",
-    "researchTasks", "platformConnections", "researchAttachments"
+    "researchTasks", "platformConnections", "researchAttachments", "promptAgentTasks", "promptAgentSources"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeMetadata"
@@ -309,6 +310,12 @@
     if (storage && typeof storage.sanitizeResearchState === "function") {
       Object.assign(sanitized, storage.sanitizeResearchState(source));
     }
+    if (storage && typeof storage.sanitizePromptAgentState === "function") {
+      const promptAgentSource = typeof storage.stripModelKeys === "function"
+        ? storage.stripModelKeys(source)
+        : source;
+      Object.assign(sanitized, storage.sanitizePromptAgentState(promptAgentSource));
+    }
     return sanitized;
   }
 
@@ -350,15 +357,19 @@
     data.researchTasks = Array.isArray(state.researchTasks) ? clone(state.researchTasks) : [];
     data.platformConnections = isObject(state.platformConnections) ? clone(state.platformConnections) : {};
     data.researchAttachments = Array.isArray(state.researchAttachments) ? clone(state.researchAttachments) : [];
+    data.promptAgentTasks = Array.isArray(state.promptAgentTasks) ? clone(state.promptAgentTasks) : [];
+    data.promptAgentSources = Array.isArray(state.promptAgentSources) ? clone(state.promptAgentSources) : [];
     return data;
   }
 
   function countData(data) {
-    return ["projects", "prompts", "cases", "knowledgeEntries", "references", ...RESEARCH_COLLECTIONS]
+    return ["projects", "prompts", "cases", "knowledgeEntries", "references", ...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS]
       .filter(field => Array.isArray(data[field]))
       .reduce((counts, field) => {
         // 旧备份摘要不包含新增研究集合的零计数，保持旧调用方的结构兼容。
-        if (!RESEARCH_COLLECTIONS.includes(field) || data[field].length > 0) counts[field] = data[field].length;
+        if (![...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS].includes(field) || data[field].length > 0) {
+          counts[field] = data[field].length;
+        }
         return counts;
       }, {});
   }
@@ -422,7 +433,7 @@
     const collections = value.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
     const allowedDataFields = value.scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
     validateAllowedKeys(value.data, allowedDataFields, "数据");
-    validateAllowedKeys(value.counts, [...collections, ...RESEARCH_COLLECTIONS], "统计");
+    validateAllowedKeys(value.counts, [...collections, ...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS], "统计");
     collections.forEach(field => {
       if (!Array.isArray(value.data[field])) throw new TypeError(`备份核心数据无效：${field}`);
     });
@@ -436,6 +447,15 @@
       }
       if (Object.hasOwn(value.data, "researchAttachments") && !Array.isArray(value.data.researchAttachments)) {
         throw new TypeError("备份核心数据无效：researchAttachments");
+      }
+      for (const field of OPTIONAL_WORKSPACE_COLLECTIONS) {
+        if (Object.hasOwn(value.data, field)) {
+          validateCollection(value.data, field);
+          if (Object.hasOwn(value.counts, field)
+            && (!Number.isInteger(value.counts[field]) || value.counts[field] !== value.data[field].length)) {
+            throw new TypeError(`备份统计无效：${field}`);
+          }
+        }
       }
       if (Object.hasOwn(value.data, "platformConnections") && !isObject(value.data.platformConnections)) {
         throw new TypeError("备份平台连接状态无效：platformConnections");
@@ -456,7 +476,7 @@
   function validateBackup(value) {
     const collections = validateBackupStructure(value);
     collections.forEach(field => validateCollection(value.data, field));
-    for (const field of RESEARCH_COLLECTIONS) {
+    for (const field of [...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS]) {
       if (Array.isArray(value.data[field])) validateCollection(value.data, field);
     }
     return true;
@@ -572,7 +592,7 @@
         state[field] = mergeCollection(state[field], data[field], report, field);
       }
     }
-    for (const field of RESEARCH_COLLECTIONS) {
+    for (const field of [...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS]) {
       if (Array.isArray(data[field])) {
         state[field] = mergeCollection(state[field], data[field], report, field);
       }

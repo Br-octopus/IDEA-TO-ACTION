@@ -151,6 +151,25 @@ test('资料选择迁移去重并限制为最多五条', () => {
   assert.deepEqual(migrateState({}).researchSelection, []);
 });
 
+test('旧状态迁移新增 Agent 集合默认为空，保存时只持久化规范化摘要', () => {
+  const migrated = migrateState({ schemaVersion: 3, projects: [], prompts: [] });
+  assert.deepEqual(migrated.promptAgentTasks, []);
+  assert.deepEqual(migrated.promptAgentSources, []);
+
+  const storage = memoryStorage();
+  const saved = saveState(storage, {
+    promptAgentTasks: [{ id: 'task-1', type: 'advance-idea', goal: '拆解产品想法', apiKey: 'secret' }],
+    promptAgentSources: [{ id: 'source-1', label: '工作目录', permission: 'read', absolutePath: 'C:/private' }],
+    promptAgentIndex: [{ content: 'derived index' }]
+  });
+  const serialized = storage.getItem(STORAGE_KEY);
+
+  assert.equal(saved.promptAgentTasks[0].goal, '拆解产品想法');
+  assert.equal(JSON.parse(serialized).promptAgentSources[0].absolutePath, undefined);
+  assert.equal(serialized.includes('secret'), false);
+  assert.equal(serialized.includes('derived index'), false);
+});
+
 test('已保存的知识选择允许在保留公开资料选择时清空', () => {
   const state = migrateState({
     researchSelection: [catalog[0].id],
