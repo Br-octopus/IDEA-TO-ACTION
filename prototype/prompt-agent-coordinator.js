@@ -23,9 +23,14 @@
     const getState = dependencies.getState || (() => ({}));
     const searchLocalSources = dependencies.searchLocalSources || (async () => []);
     const requestModel = dependencies.requestModel;
-    const persistTask = dependencies.persistTask;
     const timeoutMs = Math.max(1, Number(dependencies.timeoutMs) || 30000);
     const active = new Map();
+
+    function normalizeTask(input) {
+      const normalized = schema.normalizePromptAgentTask(input);
+      const domain = String(input?.domain || "").trim();
+      return workflow.createPromptAgentFlow(domain ? { ...normalized, domain } : normalized);
+    }
 
     function taskQuery(task, stage) {
       return [task.goal, task.target, task.currentState, task.constraints, asText(task.successCriteria), stage].filter(Boolean).join(" ").slice(0, 240);
@@ -34,7 +39,8 @@
     function normalizeLocalSource(source, task, stage) {
       const relativePath = String(source.relativePath || source.path || "").replace(/\\/g, "/");
       const location = /^([a-z]:|\/|\\\\)/i.test(relativePath) ? "授权资料" : relativePath || "授权资料";
-      const excerpt = String(source.excerpt || source.fragments?.map(item => item.text).filter(Boolean).join(" ") || source.summary || "").slice(0, 220);
+      const isSourceCode = source.type === "source" || /\.(?:c|cjs|mjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1)$/i.test(relativePath);
+      const excerpt = isSourceCode ? "" : String(source.excerpt || source.fragments?.map(item => item.text).filter(Boolean).join(" ") || source.summary || "").slice(0, 220);
       const applicableConditions = String(source.applicableConditions || [task.domain || task.target, stage].filter(Boolean).join("；") || "任务相关").slice(0, 180);
       return {
         id: `local:${location}`,
@@ -55,7 +61,7 @@
     }
 
     async function selectMaterials(taskInput, options = {}) {
-      const task = workflow.createPromptAgentFlow(schema.normalizePromptAgentTask(taskInput));
+      const task = normalizeTask(taskInput);
       const stage = String(options.stage || task.stage || "clarification");
       const query = taskQuery(task, stage);
       const state = getState() || {};
@@ -124,7 +130,7 @@
 
     async function runStage(taskInput, options = {}) {
       const originalTask = taskInput && typeof taskInput === "object" ? taskInput : {};
-      const task = workflow.createPromptAgentFlow(schema.normalizePromptAgentTask(originalTask));
+      const task = normalizeTask(originalTask);
       const stage = String(options.stage || task.stage || "clarification");
       const selectedSources = await selectMaterials(task, { stage });
       const basePrompt = buildStageBase(task, stage);
@@ -154,8 +160,15 @@
           new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(Object.assign(new Error("请求已中止"), { name: "AbortError" })), { once: true }))
         ]);
         const updatedTask = { ...originalTask, draft: result, selectedSources };
-        if (typeof persistTask === "function") await persistTask(schema.normalizePromptAgentTask(updatedTask));
-        return { task: updatedTask, draft: result, selectedSources };
+        return {
+          task: updatedTask,
+          draft: result,
+          selectedSources,
+          persistence: {
+            status: "not-persisted",
+            reason: "Task schema 未定义 draft；本轮生成结果仅保留在返回值中"
+          }
+        };
       } catch (error) {
         const cancelled = externallyCancelled || error?.name === "AbortError" && !timedOut;
         return {

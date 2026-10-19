@@ -98,6 +98,66 @@ test('模型每轮只收到当前阶段任务摘要和选中资料；失败保�
   assert.equal(result.error.code, 'model_failure');
 });
 
+test('成功生成的草稿不会经白名单 schema 规范化后被误报为已持久化', async () => {
+  const { calls, task, coordinator } = fixture({
+    requestModel: async () => ({ summary: '新生成草稿' })
+  });
+  const result = await coordinator.runStage({ ...task, draft: { summary: '旧草稿' } }, { stage: 'clarification' });
+
+  assert.deepEqual(result.draft, { summary: '新生成草稿' });
+  assert.deepEqual(result.task.draft, { summary: '新生成草稿' });
+  assert.equal(result.persistence.status, 'not-persisted');
+  assert.equal(calls.persisted.length, 0);
+});
+
+test('schema 规范化后仍将输入 task domain 用于本地资料检索与领域加权', async () => {
+  let searchedDomain = '';
+  let selectedDomain = '';
+  const { task, coordinator } = fixture({
+    searchLocalSources: async (_query, options) => {
+      searchedDomain = options.domain;
+      return [];
+    },
+    retriever: {
+      async searchPromptAgentMaterials(_entries, _query, options) {
+        selectedDomain = options.domain;
+        return [];
+      }
+    }
+  });
+  await coordinator.selectMaterials({ ...task, domain: '软件开发' }, { stage: 'planning' });
+
+  assert.equal(searchedDomain, '软件开发');
+  assert.equal(selectedDomain, '软件开发');
+});
+
+test('源码资料只传相对位置和元数据，脚本正文、执行能力及绝对路径不进入模型', async () => {
+  const calls = [];
+  const { task, coordinator } = fixture({
+    searchLocalSources: async () => [{
+      id: 'C:/private/project/deploy.py',
+      path: 'C:/private/project/deploy.py',
+      relativePath: 'scripts/deploy.py',
+      title: 'Python CSV 脚本',
+      type: 'source',
+      excerpt: 'SCRIPT_BODY_MARKER subprocess.run(...)',
+      content: 'PRIVATE_SCRIPT_CONTENT',
+      execute: () => { throw new Error('不得调用'); }
+    }],
+    requestModel: async request => { calls.push(request); return '草稿'; }
+  });
+  const result = await coordinator.runStage(task, { stage: 'planning' });
+  const modelInput = JSON.stringify(calls);
+  const selectedInput = JSON.stringify(result.selectedSources);
+
+  assert.equal(modelInput.includes('SCRIPT_BODY_MARKER'), false);
+  assert.equal(modelInput.includes('PRIVATE_SCRIPT_CONTENT'), false);
+  assert.equal(modelInput.includes('subprocess.run'), false);
+  assert.equal(modelInput.includes('C:/private/project'), false);
+  assert.equal(selectedInput.includes('C:/private/project'), false);
+  assert.equal(result.selectedSources[0].location, 'scripts/deploy.py');
+});
+
 test('取消和超时不清除现有草稿或已选证据', async () => {
   const { task, coordinator } = fixture({
     getState: () => ({ prompts: [{ id: 'p', title: 'CSV 方法', note: '参考摘要' }] }),
