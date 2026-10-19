@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createPptSceneCoordinator } = require('../prototype/ppt-scene-coordinator.js');
+const { createPromptAgentResearchBridge } = require('../prototype/prompt-agent-research-bridge.js');
+const { createPromptAgentCoordinator } = require('../prototype/prompt-agent-coordinator.js');
+const promptAgentSchema = require('../prototype/prompt-agent-schema.js');
+const promptAgentWorkflow = require('../prototype/prompt-agent-workflow.js');
+const promptAgentPrompts = require('../prototype/prompt-agent-prompts.js');
 
 function fixture(overrides = {}) {
   const calls = { model: [], materialStages: [], retrieval: [], research: [] };
@@ -19,14 +24,14 @@ function fixture(overrides = {}) {
     async execute(id) {
       calls.research.push(['execute', id]);
       if (!this.approved.has(id)) throw new Error('研究计划必须先确认');
-      return { status: 'complete', results: [{ id: 'web:guide', title: '官方流程指南', url: 'https://example.test/guide', summary: '说明新流程的分流步骤。', date: '2026-10-20' }], errors: [], usedQueries: 1, usedSources: 1 };
+      return { status: 'complete', results: [{ id: 'provider-id-is-ignored', title: '官方流程指南', url: 'https://example.test/guide', summary: '说明新流程的分流步骤。', date: '2026-10-20' }], errors: [], usedQueries: 1, usedSources: 1 };
     }
   };
   const responses = {
     brief: JSON.stringify({ idea: '说明客服分流流程', audience: '一线客服', audienceAction: '按新流程分流', facts: ['新流程下周启用'], assumptions: ['听众熟悉旧流程'], hardRequirements: ['解释升级条件'], preferences: ['少用术语'], constraints: { minSlides: 2, maxSlides: 4 } }),
-    outline: JSON.stringify({ title: '从识别到升级', storyLine: '先识别紧急度，再完成分流，最后说明升级条件。', rationale: '两页可覆盖判断与执行。', slides: [{ id: 'o1', page: 1, purpose: '建立判断标准', title: '先判断紧急程度', claim: '按紧急程度分流', sourceIds: ['web:guide'], transition: '转入执行步骤' }, { id: 'o2', page: 2, purpose: '说明后续动作', title: '按规则完成升级', claim: '不确定时升级处理', sourceIds: [], transition: '结束' }] }),
+    outline: JSON.stringify({ title: '从识别到升级', storyLine: '先识别紧急度，再完成分流，最后说明升级条件。', rationale: '两页可覆盖判断与执行。', slides: [{ id: 'o1', page: 1, purpose: '建立判断标准', title: '先判断紧急程度', claim: '按紧急程度分流', sourceIds: ['web:example.test/guide'], transition: '转入执行步骤' }, { id: 'o2', page: 2, purpose: '说明后续动作', title: '按规则完成升级', claim: '不确定时升级处理', sourceIds: [], transition: '结束' }] }),
     'outline-review': JSON.stringify({ summary: '故事线完整，第二页的升级依据需要补证。', issues: ['第 2 页缺少来源引用。'] }),
-    slides: JSON.stringify({ title: '客服分流', slides: [{ id: 's1', page: 1, purpose: '建立判断标准', title: '先判断紧急程度', body: ['先收集关键信息'], visualDescription: '用三级流程图呈现', sourceIds: ['web:guide'] }, { id: 's2', page: 2, purpose: '说明后续动作', title: '按规则完成升级', body: ['无法判断时转人工'], visualDescription: '突出升级入口', sourceIds: [] }] })
+    slides: JSON.stringify({ title: '客服分流', slides: [{ id: 's1', page: 1, purpose: '建立判断标准', title: '先判断紧急程度', body: ['先收集关键信息'], visualDescription: '用三级流程图呈现', sourceIds: ['web:example.test/guide'] }, { id: 's2', page: 2, purpose: '说明后续动作', title: '按规则完成升级', body: ['无法判断时转人工'], visualDescription: '突出升级入口', sourceIds: [] }] })
   };
   const promptAgentCoordinator = {
     async selectMaterials(task, options) {
@@ -71,13 +76,13 @@ test('完整规划链路复用 Agent 资料与研究授权，并让页面主张�
   coordinator.approveResearch(task, preview.id);
   task = (await coordinator.runResearch(task, preview.id)).task;
   assert.deepEqual(calls.research.map(call => call[0]), ['preview', 'approve', 'execute']);
-  assert.ok(task.pptScene.sources.some(source => source.id === 'web:guide'));
+  assert.ok(task.pptScene.sources.some(source => source.id === 'web:example.test/guide'));
 
   task = (await coordinator.generateOutline(task)).task;
   assert.equal(task.pptScene.outline.storyLine.includes('分流'), true);
   assert.equal(task.pptScene.outline.slides[0].evidenceStatus, 'cited');
   assert.equal(task.pptScene.outline.slides[1].evidenceStatus, 'needs-verification');
-  assert.deepEqual(task.pptScene.outline.slides[1].suggestedSourceIds, ['web:guide']);
+  assert.deepEqual(task.pptScene.outline.slides[1].suggestedSourceIds, ['web:example.test/guide']);
   assert.ok(calls.retrieval.some(query => query.includes('不确定时升级处理')));
 
   task = (await coordinator.reviewOutline(task)).task;
@@ -139,4 +144,41 @@ test('删除页面必须保留原因，且删除页不会进入路线提示词',
   assert.equal(next.pptScene.draft.slides[0].disposition, 'deleted');
   assert.equal(next.pptScene.draft.slides[0].deleteReason, '该步骤已被新制度取代');
   assert.doesNotMatch(coordinator.getStagePrompt(next, 'route-prompt'), /不适用步骤/);
+});
+
+test('真实确认式网页研究为无 id 搜索结果生成稳定来源 ID 并可供大纲引用', async () => {
+  const bridge = createPromptAgentResearchBridge({
+    searchWeb: async () => ({ results: [{
+      title: '分流规则指南', url: 'https://Example.test/guide/?campaign=weekly#overview', summary: '说明客服升级步骤。'
+    }] })
+  });
+  const promptAgentCoordinator = createPromptAgentCoordinator({
+    schema: promptAgentSchema,
+    workflow: promptAgentWorkflow,
+    prompts: promptAgentPrompts,
+    researchBridge: bridge,
+    getState: () => ({}),
+    requestModel: async () => '{}'
+  });
+  const pptCoordinator = createPptSceneCoordinator({
+    promptAgentCoordinator,
+    requestModel: async ({ stage }) => stage === 'outline' ? JSON.stringify({
+      title: '客服分流', storyLine: '按规则识别并升级',
+      slides: [{ id: 'o1', page: 1, title: '按规则升级', claim: '按分流规则完成升级', sourceIds: ['web:example.test/guide'] }]
+    }) : '{}'
+  });
+  const task = pptCoordinator.createTask({ id: 'real-bridge-ppt', goal: '说明客服分流规则' });
+  const preview = pptCoordinator.previewResearch(task, {
+    objective: '核对客服分流规则', queries: ['客服分流规则'], sourceTypes: ['web'], platforms: []
+  });
+  assert.equal(preview.status, 'awaiting-confirmation');
+  pptCoordinator.approveResearch(task, preview.id);
+  const researched = await pptCoordinator.runResearch(task, preview.id);
+
+  assert.equal(researched.error, undefined);
+  assert.equal(researched.task.pptScene.sources[0].id, 'web:example.test/guide');
+  assert.match(researched.task.pptScene.brief.sourceIds[0], /^web:.+/);
+  const outlined = await pptCoordinator.generateOutline(researched.task);
+  assert.equal(outlined.task.pptScene.outline.slides[0].evidenceStatus, 'cited');
+  assert.deepEqual(outlined.task.pptScene.outline.slides[0].sourceIds, ['web:example.test/guide']);
 });

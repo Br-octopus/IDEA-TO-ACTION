@@ -19,6 +19,14 @@
     };
     const sceneOf = task => schema.normalizePptScene(task?.pptScene || {});
     const withScene = (task, scene) => ({ ...task, pptScene: schema.normalizePptScene(scene) });
+    const sourceIdFromUrl = value => {
+      try {
+        const url = new URL(String(value || ""));
+        if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+        const path = url.pathname.replace(/\/+$/, "") || "/";
+        return `web:${url.host.toLowerCase()}${path}`.slice(0, 120);
+      } catch { return ""; }
+    };
     const callModel = async (task, stage, prompt) => {
       try { return { value: parse(await requestModel({ stage, prompt, task })) }; }
       catch (error) { return { error: { code: "model_failure", message: error?.message || "模型请求失败" } }; }
@@ -75,8 +83,9 @@
         if (!result || result.status !== "complete") return fail(task, { code: "research_incomplete", message: "研究未完成，现有草稿已保留" });
         const scene = sceneOf(task);
         const sources = [...scene.sources, ...(result.results || []).map(item => ({
-          id: item.id, title: item.title, url: item.url, summary: item.summary || item.snippet || "", date: item.date || "", verificationStatus: "unverified"
-        }))];
+          id: sourceIdFromUrl(item.url || item.link), title: item.title, url: item.url || item.link,
+          summary: item.summary || item.snippet || "", date: item.date || "", verificationStatus: "unverified"
+        })).filter(source => source.id)];
         return { task: save(task, { sources, brief: { ...scene.brief, sourceIds: sources.map(item => item.id) } }) };
       } catch (error) { throw error; }
     }
