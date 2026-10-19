@@ -108,6 +108,27 @@ test('IPC 注册完整白名单，校验平台和 shape，凭证不接收也不�
   const invoke = (channel, ...args) => harness.handlers.get(channel)({}, ...args);
   assert.equal((await invoke('social:get-status', 'not-real')).code, 'UNSUPPORTED_PLATFORM');
   assert.equal((await invoke('social:open-login', 'reddit', '../escape')).code, 'INVALID_REQUEST');
+  for (const channel of ['social:fetch-detail', 'social:capture-evidence']) {
+    const validPayload = { profileId: 'p', resultId: 'result-1', url: 'https://www.reddit.com/r/test/comments/123/example/' };
+    for (const payload of [
+      { ...validPayload, profileId: '../escape' },
+      { ...validPayload, resultId: '' },
+      { ...validPayload, resultId: ' '.repeat(513) },
+      { ...validPayload, resultId: 'x'.repeat(513) },
+      { ...validPayload, url: 'javascript:alert(1)' },
+      { ...validPayload, url: 'file:///etc/passwd' },
+      { ...validPayload, url: 'https://reddit.com.attacker.invalid/post' },
+      { ...validPayload, url: 'https://attacker.invalid/reddit.com/post' },
+      { ...validPayload, url: 'https://evil.reddit.com/r/test/' },
+      { ...validPayload, url: 'https://old.reddit.com/r/test/' },
+      { ...validPayload, url: 'https://user:pass@reddit.com/post' },
+      { ...validPayload, url: 'https://reddit.com/' + 'x'.repeat(2048) }
+    ]) {
+      assert.equal((await invoke(channel, 'reddit', payload)).code, 'INVALID_REQUEST', `${channel}: ${payload.url}`);
+    }
+    assert.equal((await invoke(channel, 'reddit', validPayload)).status, 'unsupported');
+    assert.equal((await invoke(channel, 'reddit', { ...validPayload, url: 'https://reddit.com/r/test/' })).status, 'unsupported');
+  }
   assert.equal((await invoke('social:search', 'reddit', { query: 'x', profileId: 'p', endpoint: 'https://attacker.invalid' })).code, 'INVALID_REQUEST');
   assert.equal((await invoke('social:search', 'reddit', { query: 'x', profileId: 'p', apiKey: 'secret' })).code, 'INVALID_REQUEST');
   const forcedApi = await invoke('social:search', 'reddit', { query: 'coffee', profileId: 'p', mode: 'api' });
@@ -125,8 +146,15 @@ test('IPC 注册完整白名单，校验平台和 shape，凭证不接收也不�
   assert.equal(secondLogin.status, 'ready');
   const statuses = await invoke('social:get-status', 'reddit');
   assert.deepEqual(JSON.parse(JSON.stringify(statuses.profiles.map(item => item.profileId).sort())), ['p', 'second']);
-  await invoke('social:close', 'reddit', 'second');
-  assert.equal((await invoke('social:get-status', 'reddit')).profiles.find(item => item.profileId === 'p').status, 'ready');
+  await invoke('social:clear-profile', 'reddit', 'p');
+  const afterClear = await invoke('social:get-status', 'reddit');
+  assert.deepEqual(JSON.parse(JSON.stringify(afterClear.profiles.map(item => item.profileId))), ['second']);
+  assert.equal(afterClear.profiles[0].status, 'ready');
+  const secondCheck = await invoke('social:check', 'reddit', 'second');
+  assert.equal(secondCheck.status, 'ok');
+  assert.equal(secondCheck.platform, 'reddit');
+  assert.equal(secondCheck.ready, true);
+  assert.match(secondCheck.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
   const blocked = await invoke('social:search', 'youtube', { query: 'coffee', profileId: 'p', mode: 'browser', script: 'alert(1)' });
   assert.equal(blocked.code, 'INVALID_REQUEST');
 });

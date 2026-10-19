@@ -28,6 +28,11 @@ const SOCIAL_START_URLS = Object.freeze({
   reddit: 'https://www.reddit.com/',
   youtube: 'https://www.youtube.com/'
 });
+const SOCIAL_RESULT_DOMAINS = Object.freeze({
+  xiaohongshu: new Set(['www.xiaohongshu.com', 'xiaohongshu.com']),
+  reddit: new Set(['www.reddit.com', 'reddit.com']),
+  youtube: new Set(['www.youtube.com', 'youtube.com'])
+});
 const SOCIAL_MODES = new Set(['auto', 'api', 'browser']);
 
 function isDevelopment() {
@@ -106,6 +111,25 @@ function validateSocialPlatform(platform) {
 
 function validateSocialProfileId(profileId) {
   if (typeof profileId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(profileId)) {
+    throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  }
+}
+
+function validateSocialResultPayload(platform, payload) {
+  validateSocialPayload(payload, ['profileId', 'resultId', 'url']);
+  validateSocialProfileId(payload.profileId);
+  if (typeof payload.resultId !== 'string' || !payload.resultId.trim() || payload.resultId.length > 512
+    || typeof payload.url !== 'string' || !payload.url || payload.url.trim() !== payload.url || payload.url.length > 2048) {
+    throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  }
+
+  let resultUrl;
+  try { resultUrl = new URL(payload.url); }
+  catch { throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' }); }
+
+  const hostname = resultUrl.hostname.toLowerCase();
+  if (!['http:', 'https:'].includes(resultUrl.protocol) || resultUrl.username || resultUrl.password
+    || !SOCIAL_RESULT_DOMAINS[platform].has(hostname)) {
     throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
   }
 }
@@ -206,15 +230,13 @@ function registerSocialHandlers() {
   });
   ipcMain.handle('social:fetch-detail', async (_event, platform, payload) => {
     try {
-      validateSocialPlatform(platform); validateSocialPayload(payload, ['profileId', 'resultId', 'url']);
-      validateSocialProfileId(payload.profileId);
+      validateSocialPlatform(platform); validateSocialResultPayload(platform, payload);
       return await getSocialAdapter(platform, payload.profileId).fetchDetail(payload);
     } catch (error) { return socialError(error); }
   });
   ipcMain.handle('social:capture-evidence', async (_event, platform, payload) => {
     try {
-      validateSocialPlatform(platform); validateSocialPayload(payload, ['profileId', 'resultId', 'url']);
-      validateSocialProfileId(payload.profileId);
+      validateSocialPlatform(platform); validateSocialResultPayload(platform, payload);
       return await getSocialAdapter(platform, payload.profileId).captureEvidence(payload, {});
     } catch (error) { return socialError(error); }
   });
