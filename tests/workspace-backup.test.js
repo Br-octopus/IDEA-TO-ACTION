@@ -406,6 +406,49 @@ test('替换和合并外部手工备份时清洗条目内敏感字段', () => {
   }
 });
 
+test('合并顶层合法但条目含未知和敏感字段的外部备份时按条目 schema 清洗', () => {
+  const backup = createBackup({
+    projects: [{ id: 'external-project', title: '外部项目' }]
+  }, { scope: 'workspace', now: exportedAt });
+  Object.assign(backup.data.projects[0], {
+    unknownField: '不应进入状态',
+    apiKey: '不应泄露的 apiKey',
+    password: '不应泄露的 password'
+  });
+
+  const result = mergeState({ projects: [], prompts: [], cases: [], knowledgeEntries: [] }, backup);
+  const project = result.state.projects[0];
+  const serialized = JSON.stringify(result.state);
+
+  assert.equal(project.title, '外部项目');
+  assert.equal(project.unknownField, undefined);
+  assert.equal(project.apiKey, undefined);
+  assert.equal(project.password, undefined);
+  assert.equal(serialized.includes('不应进入状态'), false);
+  assert.equal(serialized.includes('不应泄露的 apiKey'), false);
+  assert.equal(serialized.includes('不应泄露的 password'), false);
+});
+
+test('备份遇到循环引用或 BigInt 时抛出可识别的序列化错误', () => {
+  const circular = {};
+  circular.self = circular;
+
+  for (const source of [
+    { projects: [{ id: 'circular', metadata: circular }] },
+    { projects: [{ id: 'bigint', order: 1n }] }
+  ]) {
+    assert.throws(
+      () => createBackup(source, { scope: 'workspace', now: exportedAt }),
+      error => (
+        error.name === 'BackupSerializationError'
+        && error.code === 'BACKUP_SERIALIZATION_FAILED'
+        && error.cause instanceof Error
+        && error.message.includes(error.cause.message)
+      )
+    );
+  }
+});
+
 test('未知命名的敏感对象字段不会进入完整工作区或资料库备份', () => {
   const state = createState();
   state.projects[0].privateTokenValue = 'private-token-value';

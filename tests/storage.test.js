@@ -541,7 +541,32 @@ test('迁移写回失败会返回内存状态和告警，后续保存可重试�
   const retryStorage = memoryStorage();
   saveState(retryStorage, state);
   assert.equal(JSON.parse(retryStorage.getItem(STORAGE_KEY)).projects[0].goalSummary, '保留内存计划');
-  assert.throws(() => saveState({ setItem() { throw new Error('quota exceeded'); } }, source), /quota exceeded/);
+  assert.throws(
+    () => saveState({ setItem() { throw new Error('quota exceeded'); } }, source),
+    error => (
+      error.name === 'StorageWriteError'
+      && error.code === 'STORAGE_WRITE_FAILED'
+      && error.cause instanceof Error
+      && error.message.includes('quota exceeded')
+    )
+  );
+});
+
+test('保存遇到不可序列化输入时抛出可识别的写入错误并保留原因', () => {
+  const state = {
+    ...createEmptyState(),
+    projects: [{ id: 'p1', goalSummary: 1n }]
+  };
+
+  assert.throws(
+    () => saveState(memoryStorage(), state),
+    error => (
+      error.name === 'StorageWriteError'
+      && error.code === 'STORAGE_WRITE_FAILED'
+      && error.cause instanceof TypeError
+      && error.message.includes(error.cause.message)
+    )
+  );
 });
 
 test('本地存储 getter、getItem 和 JSON 解析异常均抛出可识别错误', () => {

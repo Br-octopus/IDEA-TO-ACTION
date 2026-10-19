@@ -58,6 +58,14 @@
     }
   }
 
+  class StorageWriteError extends Error {
+    constructor(message, cause) {
+      super(message, { cause });
+      this.name = "StorageWriteError";
+      this.code = "STORAGE_WRITE_FAILED";
+    }
+  }
+
   function resolveStorage(storage) {
     if (storage !== undefined) return storage;
     try {
@@ -371,9 +379,14 @@
   function saveState(storage, state) {
     const store = resolveStorage(storage);
     if (!store) return createEmptyState();
-    const sanitized = migrateState(state);
-    store.setItem(STORAGE_KEY, JSON.stringify(sanitized));
-    return sanitized;
+    try {
+      const sanitized = migrateState(state);
+      store.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+      return sanitized;
+    } catch (error) {
+      const detail = error instanceof Error && error.message ? error.message : String(error);
+      throw new StorageWriteError(`本地数据写入失败：${detail}`, error);
+    }
   }
 
   function addPromptVersion(state, prompt) {
@@ -544,5 +557,5 @@
     return next;
   }
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, migrateState, loadState, saveState, StorageWriteError, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

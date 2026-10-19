@@ -24,6 +24,14 @@
   const SCALAR_OR_LIST = { kind: "scalar-or-list" };
   const LIST = { kind: "list" };
 
+  class BackupSerializationError extends Error {
+    constructor(message, cause) {
+      super(message, { cause });
+      this.name = "BackupSerializationError";
+      this.code = "BACKUP_SERIALIZATION_FAILED";
+    }
+  }
+
   function object(fields) {
     return { kind: "object", fields };
   }
@@ -241,7 +249,15 @@
 
   function clone(value) {
     if (value === undefined) return undefined;
-    return JSON.parse(JSON.stringify(value));
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) throw new TypeError("值无法序列化为 JSON");
+      return JSON.parse(serialized);
+    } catch (error) {
+      if (error && error.code === "BACKUP_SERIALIZATION_FAILED") throw error;
+      const detail = error instanceof Error && error.message ? error.message : String(error);
+      throw new BackupSerializationError(`备份数据序列化失败：${detail}`, error);
+    }
   }
 
   function isScalar(value) {
@@ -523,6 +539,7 @@
   }
 
   function mergeState(currentState, backup) {
+    // 先校验备份顶层契约；条目内容复用同一 schema 清洗，id 兼容性则由 mergeCollection 单独报告。
     const collections = validateBackupStructure(backup);
     const state = sanitizeState(currentState);
     const data = sanitizeBackupData(backup.scope, backup.data);
@@ -556,5 +573,12 @@
     };
   }
 
-  return { createBackup, validateBackup, getBackupSummary, replaceState, mergeState };
+  return {
+    BackupSerializationError,
+    createBackup,
+    validateBackup,
+    getBackupSummary,
+    replaceState,
+    mergeState
+  };
 });
