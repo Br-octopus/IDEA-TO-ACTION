@@ -417,3 +417,10 @@ test('显式轮次偏好候选及记忆例子有限长白名单，缺省不添�
   assert.equal(memory.example, '正例');
   assert.equal(memory.counterexample, '反例');
 });
+
+test('自动记忆原候选关联显式保留且限长，缺省不增加字段', () => {
+  assert.equal('sourcePreferenceKey' in schema.normalizeWritingMemory({}), false);
+  const memory = schema.normalizeWritingMemory({ preference: '编辑后的偏好', sourcePreferenceKey: '原'.repeat(600) });
+  assert.equal(memory.sourcePreferenceKey.length, 500);
+  assert.deepEqual(schema.normalizeWritingMemory(JSON.parse(JSON.stringify(memory))), memory);
+});
