@@ -28,7 +28,7 @@ const packInput = {
 
 test('写作包规范化保留完整契约并过滤所有嵌套未知字段和凭证', () => {
   const pack = schema.normalizeWritingPack(packInput);
-  assert.deepEqual(Object.keys(pack), ['id', 'name', 'layer', 'genre', 'taskType', 'version', 'builtin', 'basePackId', 'enabled', 'applicability', 'clarifications', 'materials', 'requirements', 'methods', 'prompts', 'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs', 'nextSteps', 'examples', 'sources', 'createdAt', 'updatedAt']);
+  assert.deepEqual(Object.keys(pack), ['id', 'name', 'layer', 'genre', 'taskType', 'version', 'builtin', 'basePackId', 'enabled', 'applicability', 'targetFields', 'memoryNamespace', 'checkDimensions', 'outputRequirements', 'riskReminders', 'styleBaseline', 'clarifications', 'materials', 'requirements', 'methods', 'prompts', 'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs', 'nextSteps', 'examples', 'sources', 'createdAt', 'updatedAt']);
   assert.equal(pack.builtin, false);
   assert.equal(pack.applicability.tasks[0], 'review');
   assert.equal(pack.clarifications[0].required, true);
@@ -67,6 +67,21 @@ test('设置和包集合使用白名单、唯一 ID 与有界条目', () => {
   assert.ok(collection.every(item => item.builtin === false));
   assert.throws(() => schema.normalizeWritingPackCollection([packInput, packInput]), /唯一|重复/);
   assert.ok(schema.normalizeWritingPackCollection(Array.from({ length: 100 }, (_, i) => ({ ...packInput, id: `p${i}` }))).length <= schema.WRITING_PACK_LIMITS.packs);
+});
+
+test('对象包、对象设置及集合成员缺少或为空白 ID 时拒绝', () => {
+  for (const id of [undefined, '', '   ']) {
+    const pack = { ...packInput, id };
+    delete pack.id;
+    if (id !== undefined) pack.id = id;
+    assert.throws(() => schema.normalizeWritingPack(pack), /id|ID/);
+    const setting = { id, enabled: true };
+    assert.throws(() => schema.normalizeWritingPackSettings(setting), /id|ID/);
+    assert.throws(() => schema.normalizeWritingPackCollection([pack]), /id|ID/);
+  }
+  assert.doesNotThrow(() => schema.normalizeWritingPack(null));
+  assert.doesNotThrow(() => schema.normalizeWritingPackSettings(null));
+  assert.deepEqual(schema.normalizeWritingPackCollection([null]), []);
 });
 
 test('异常输入安全降级且不修改调用方对象', () => {

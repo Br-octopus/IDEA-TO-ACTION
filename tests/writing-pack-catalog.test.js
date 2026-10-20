@@ -13,6 +13,13 @@ test('catalog 的普通文章内置包等价于现有 article 配置并含完整
   assert.equal(pack.builtin, true);
   assert.equal(pack.layer, 'genre');
   assert.equal(pack.genre, 'article');
+  assert.equal(pack.applicability.description, config.applicability);
+  assert.deepEqual(pack.targetFields, config.targetFields);
+  assert.deepEqual(pack.checkDimensions, config.checkDimensions);
+  assert.deepEqual(pack.outputRequirements, config.outputRequirements);
+  assert.deepEqual(pack.riskReminders, config.riskReminders);
+  assert.deepEqual(pack.styleBaseline, config.styleBaseline);
+  assert.equal(pack.memoryNamespace, config.memoryNamespace);
   assert.deepEqual(pack.checks.map(item => item.statement), config.checkDimensions);
   assert.deepEqual(pack.style.map(item => item.statement), config.styleBaseline);
   assert.deepEqual(pack.repairs.map(item => item.action), config.riskReminders);
