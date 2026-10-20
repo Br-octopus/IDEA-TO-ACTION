@@ -25,6 +25,14 @@
     const failedRounds = new WeakSet();
     let persistence = Promise.resolve();
     function state() { return getState() || {}; }
+    function availableWritingPacks() {
+      if (typeof dependencies.getWritingPacks === 'function') return dependencies.getWritingPacks() || [];
+      return Array.isArray(dependencies.writingPacks) ? dependencies.writingPacks : (state().writingPacks || []);
+    }
+    function writingPackSettings() {
+      if (typeof dependencies.getWritingPackSettings === 'function') return dependencies.getWritingPackSettings() || [];
+      return Array.isArray(dependencies.writingPackSettings) ? dependencies.writingPackSettings : (state().writingPackSettings || []);
+    }
     function loadMemories() {
       for (const item of state().writingMemories || []) {
         const memory = schema.normalizeWritingMemory(item);
@@ -112,7 +120,36 @@
       )).sort((a, b) => priority[a.scope] - priority[b.scope] || b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, 3).map(copy);
     }
-    function inputFor(w, round) { return { ...w, round, memories: getRelevantMemories(w.genre, w.id) }; }
+    function inputFor(w, round) {
+      return { ...w, round, memories: getRelevantMemories(w.genre, w.id),
+        writingPacks: availableWritingPacks(), writingPackSettings: writingPackSettings() };
+    }
+    function selectedPackIds(w, round) {
+      if (Array.isArray(round?.packSelections)) return round.packSelections;
+      return Array.isArray(w.article.packSelections) ? w.article.packSelections : [];
+    }
+    function selectPacksForTask(w, round, taskType) {
+      return prompts.selectWritingPacks({ workspace: w, packs: availableWritingPacks(), packSettings: writingPackSettings(),
+        selectedIds: selectedPackIds(w, round), taskType, snapshot: round?.packSnapshot });
+    }
+    function ensurePackSnapshot(w, round) {
+      if (round.packSnapshot) return round.packSnapshot;
+      const revision = selectPacksForTask(w, round, 'revision');
+      const diagnosis = selectPacksForTask(w, round, 'diagnosis');
+      const packIds = new Set([...revision.packs, ...diagnosis.packs].map(item => item.id));
+      const entries = [...revision.entries, ...diagnosis.entries].filter((item, index, all) =>
+        all.findIndex(other => `${other.packId}:${other.id}:${other.taskType || ''}` === `${item.packId}:${item.id}:${item.taskType || ''}`) === index);
+      // 来源 ID 只在包内唯一，快照按“包 + 来源”保留，避免跨包同名互相覆盖。
+      const sources = [...revision.sources, ...diagnosis.sources].filter((item, index, all) =>
+        all.findIndex(other => `${other.packId}:${other.id}` === `${item.packId}:${item.id}`) === index);
+      const skipped = [...revision.skipped, ...diagnosis.skipped].filter((item, index, all) =>
+        all.findIndex(other => `${other.id}:${other.reason}` === `${item.id}:${item.reason}`) === index);
+      round.packSnapshot = schema.normalizeWritingPackSnapshot({
+        packs: [...packIds].map(id => [...revision.packs, ...diagnosis.packs].find(item => item.id === id)),
+        entries, sources, skipped
+      });
+      return round.packSnapshot;
+    }
     function validateProfile(profile, articleId) {
       if (!profile) return;
       if (profile.scope && !['general', 'genre', 'article'].includes(profile.scope)
@@ -309,6 +346,7 @@
     function getResearchState(id) { return copy(researchState(workspace(id))); }
     function generate(w, round, refreshDiagnosis = false) {
       validateInput(w, round);
+      ensurePackSnapshot(w, round);
       const input = inputFor(w, round);
       const localDiagnosis = prompts.buildLocalWritingDiagnosis(input);
       const isLocal = round.diagnosis.startsWith(`${localDiagnosis.label}\n`);
@@ -358,6 +396,13 @@
       for (const field of Object.keys(normalized)) {
         if (Object.hasOwn(patch, field) && !['id', 'genre', 'createdAt', 'updatedAt', 'saveEnabled'].includes(field)) w.article[field] = normalized[field];
       }
+      if (Object.hasOwn(patch, 'packSelections')) {
+        const currentRound = w.rounds.at(-1);
+        if (currentRound) {
+          currentRound.packSelections = copy(w.article.packSelections || []);
+          delete currentRound.packSnapshot;
+        }
+      }
       w.article.updatedAt = now();
       invalidateModels(w);
       if (typeof patch.constraints === 'string') w.article.constraints = patch.constraints;
@@ -378,6 +423,8 @@
       const previous = w.rounds.at(-1);
       const round = schema.normalizeWritingRound({ ...input, ...references(input), id: newId('round'), articleId: id,
         parentRoundId: previous?.id || '', draft: input.draft ?? w.article.draft, diagnosis: '', prompt: '', createdAt: now(), updatedAt: now() });
+      if (Object.hasOwn(input, 'packSelections')) w.article.packSelections = round.packSelections;
+      else if (Array.isArray(w.article.packSelections)) round.packSelections = copy(w.article.packSelections);
       // 用户的原始强约束和正文不能在生成失败时被规范化截掉。
       for (const field of ['draft', 'feedback', 'userFeedback']) if (typeof input[field] === 'string') round[field] = input[field];
       if (input.draft === undefined) round.draft = w.article.draft;
@@ -464,6 +511,7 @@
       const round = roundFor(id, options.roundId);
       const version = sessionVersions.get(w);
       validateInput(w, round);
+      ensurePackSnapshot(w, round);
       if (typeof dependencies.requestModel !== 'function') throw failure('MODEL_UNAVAILABLE', '未配置模型发送预览');
       const prompt = prompts.buildWritingDiagnosisPrompt(inputFor(w, round));
       const token = {};

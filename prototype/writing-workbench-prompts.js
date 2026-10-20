@@ -1,11 +1,158 @@
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./writing-workbench-schema.js'));
-  else root.WritingWorkbenchPrompts = factory(root.WritingWorkbenchSchema);
-})(typeof globalThis === 'undefined' ? this : globalThis, function (schema) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(
+    require('./writing-workbench-schema.js'), require('./writing-pack-schema.js'), require('./writing-pack-catalog.js'));
+  else root.WritingWorkbenchPrompts = factory(root.WritingWorkbenchSchema, root.WritingPackSchema, root.WritingPackCatalog);
+})(typeof globalThis === 'undefined' ? this : globalThis, function (schema, packSchema, packCatalog) {
   'use strict';
   const PRIORITY = '当前用户要求 > 样本/用户更正 > 适用记忆 > 平台基线 > 临时判断';
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const list = value => Array.isArray(value) ? value : [];
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function fallbackBuiltinPack() {
+    const config = schema.getWritingGenreConfig?.('article') || schema.WRITING_GENRE_CONFIGS?.article;
+    if (!config) return null;
+    const sourceId = 'writing-workbench-article';
+    const source = { id: sourceId, title: '现有普通文章规则', url: '', locator: 'WRITING_GENRE_CONFIGS.article',
+      version: '当前代码基线', license: '项目内部规则', checkedAt: '未核对',
+      limitations: '未作独立外部来源核验', verificationStatus: 'unverified' };
+    return {
+      id: 'builtin-article', name: config.name, layer: 'genre', genre: 'article', taskType: 'article', version: 1,
+      builtin: true, basePackId: '', enabled: true, applicability: { tasks: ['article'], languages: ['zh'] },
+      targetFields: config.targetFields, checkDimensions: config.checkDimensions,
+      outputRequirements: config.outputRequirements, riskReminders: config.riskReminders,
+      styleBaseline: config.styleBaseline, checks: config.checkDimensions.map((statement, index) => ({
+        id: `article-check-${index + 1}`, statement, sourceIds: [sourceId], verificationStatus: 'unverified'
+      })), style: config.styleBaseline.map((statement, index) => ({
+        id: `article-style-${index + 1}`, statement, sourceIds: [sourceId], verificationStatus: 'unverified'
+      })), repairs: config.riskReminders.map((action, index) => ({
+        id: `article-risk-${index + 1}`, issue: '约束或事实风险', action, sourceIds: [sourceId], verificationStatus: 'unverified'
+      })), prompts: Object.entries(config.outputRequirements).map(([taskType, content], index) => ({
+        id: `article-prompt-${index + 1}`, taskType, content, sourceIds: [sourceId], verificationStatus: 'unverified'
+      })), sources: [source]
+    };
+  }
+
+  function builtinPacks() {
+    if (packCatalog && typeof packCatalog.getBuiltinWritingPacks === 'function') {
+      return packCatalog.getBuiltinWritingPacks().map(clone);
+    }
+    const fallback = fallbackBuiltinPack();
+    return fallback ? [fallback] : [];
+  }
+
+  function normalizePack(value) {
+    if (!packSchema || typeof packSchema.normalizeWritingPack !== 'function') {
+      return value && value.id === 'builtin-article' ? clone(value) : null;
+    }
+    try {
+      const pack = packSchema.normalizeWritingPack(value);
+      return pack.id ? pack : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function packApplies(pack, genre, taskType) {
+    if (pack.genre && pack.genre !== genre) return 'genre-mismatch';
+    if (pack.taskType && pack.taskType !== taskType && pack.taskType !== 'article') return 'task-mismatch';
+    const tasks = pack.applicability?.tasks || [];
+    if (tasks.length && !tasks.includes(taskType) && !tasks.includes('article')) return 'task-mismatch';
+    return '';
+  }
+
+  function pushPackEntries(target, pack, taskType, skipped) {
+    const packEntries = [];
+    const add = (kind, item, text, itemTaskType = '') => {
+      if (!item || !item.id || !text) return;
+      if (itemTaskType && itemTaskType !== taskType && itemTaskType !== 'article') {
+        skipped.push({ id: item.id, packId: pack.id, reason: 'task-mismatch' });
+        return;
+      }
+      packEntries.push({
+        id: item.id, packId: pack.id, packVersion: pack.version, kind,
+        ...(itemTaskType ? { taskType: itemTaskType } : {}), text,
+        sourceIds: Array.isArray(item.sourceIds) ? item.sourceIds : [],
+        verificationStatus: item.verificationStatus || 'unverified'
+      });
+    };
+    for (const item of pack.checks || []) add('check', item, item.statement);
+    for (const item of pack.requirements || []) add('requirement', item, item.statement);
+    for (const item of pack.methods || []) add('method', item, [item.title, item.guidance].filter(Boolean).join('：'));
+    for (const item of pack.prompts || []) add('prompt', item, item.content, item.taskType);
+    for (const item of pack.style || []) add('style', item, item.statement);
+    for (const item of pack.evidenceRules || []) add('evidence-rule', item, item.statement);
+    for (const item of pack.repairs || []) add('repair', item, [item.issue, item.action].filter(Boolean).join('：'));
+    for (const item of pack.nextSteps || []) add('next-step', item, [item.when, item.action].filter(Boolean).join('：'));
+    for (const item of pack.structures || []) add('structure', item, [item.taskType, ...(item.sections || [])].filter(Boolean).join('：'), item.taskType);
+    for (const item of pack.terminology || []) add('terminology', item, [item.term, item.definition].filter(Boolean).join('：'));
+    target.push(...packEntries);
+  }
+
+  function normalizeSelectionSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    return schema.normalizeWritingPackSnapshot(snapshot);
+  }
+
+  function selectWritingPacks({ workspace, packs = [], packSettings = [], selectedIds = [], taskType = 'article', snapshot } = {}) {
+    const normalizedWorkspace = schema.normalizeWritingWorkspace(workspace);
+    const genre = normalizedWorkspace.article.genre || normalizedWorkspace.genre;
+    const requested = [...new Set((Array.isArray(selectedIds) ? selectedIds : []).filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))];
+    if (snapshot) {
+      const safeSnapshot = normalizeSelectionSnapshot(snapshot);
+      if (safeSnapshot) {
+        const packsForTask = safeSnapshot.packs.filter(pack => (!pack.genre || pack.genre === genre)
+          && (!pack.taskType || pack.taskType === 'article' || pack.taskType === taskType));
+        const packIds = new Set(packsForTask.map(pack => pack.id));
+        const entries = safeSnapshot.entries.filter(entry => packIds.has(entry.packId)
+          && (!entry.taskType || entry.taskType === 'article' || entry.taskType === taskType));
+        const sourceIds = new Set(entries.flatMap(entry => entry.sourceIds));
+        const sources = safeSnapshot.sources.filter(source => sourceIds.has(source.id)
+          && (!source.packId || entries.some(entry => entry.packId === source.packId && entry.sourceIds.includes(source.id))));
+        const filtered = schema.normalizeWritingPackSnapshot({ packs: packsForTask, entries, sources, skipped: safeSnapshot.skipped });
+        return { ...filtered, snapshot: filtered, selectedIds: packsForTask.map(pack => pack.id) };
+      }
+    }
+    const available = new Map();
+    for (const pack of [...builtinPacks(), ...packs]) {
+      const normalized = normalizePack(pack);
+      if (normalized && !available.has(normalized.id)) available.set(normalized.id, normalized);
+    }
+    for (const setting of Array.isArray(packSettings) ? packSettings : []) {
+      const pack = available.get(setting?.id);
+      if (pack && setting.enabled === false) pack.enabled = false;
+    }
+    const selected = [];
+    const skipped = [];
+    const builtin = available.get('builtin-article');
+    if (genre === 'article' && builtin && builtin.enabled !== false) selected.push(builtin);
+    else if (genre === 'article' && builtin?.enabled === false) skipped.push({ id: builtin.id, reason: 'disabled' });
+    for (const id of requested) {
+      const pack = available.get(id);
+      if (!pack) { skipped.push({ id, reason: 'unknown' }); continue; }
+      if (selected.some(item => item.id === pack.id)) continue;
+      if (pack.enabled === false) { skipped.push({ id, reason: 'disabled' }); continue; }
+      const reason = packApplies(pack, genre, taskType);
+      if (reason) { skipped.push({ id, reason }); continue; }
+      selected.push(pack);
+    }
+    const entries = [];
+    selected.forEach(pack => pushPackEntries(entries, pack, taskType, skipped));
+    const usedPackIds = new Set(entries.map(entry => entry.packId));
+    selected.filter(pack => !usedPackIds.has(pack.id)).forEach(pack => skipped.push({ id: pack.id, reason: 'no-applicable-entries' }));
+    const usedSourceIds = new Set(entries.flatMap(entry => entry.sourceIds));
+    const usedPacks = selected.filter(pack => usedPackIds.has(pack.id));
+    const sources = usedPacks.flatMap(pack => (pack.sources || []).filter(source => usedSourceIds.has(source.id)
+      && entries.some(entry => entry.packId === pack.id && entry.sourceIds.includes(source.id)))
+      .map(source => ({ ...clone(source), packId: pack.id })));
+    const safe = schema.normalizeWritingPackSnapshot({
+      packs: usedPacks.map(pack => ({ id: pack.id, version: pack.version, name: pack.name, layer: pack.layer,
+        genre: pack.genre, taskType: pack.taskType })), entries, sources, skipped
+    });
+    return { ...safe, snapshot: safe, selectedIds: requested };
+  }
 
   function features(excerpt) {
     const sentences = excerpt.split(/[。！？!?\n]+/u).map(s => s.trim()).filter(Boolean);
@@ -41,14 +188,24 @@
     });
   }
 
-  function normalize(input) {
+  function normalize(input, taskType = 'revision') {
     const source = object(input);
     const workspace = schema.normalizeWritingWorkspace(source);
     const config = schema.getWritingGenreConfig(workspace.article.genre);
-    const dimensions = config?.checkDimensions || [];
     const hasRound = source.round !== undefined && source.round !== null;
     const round = hasRound ? schema.normalizeWritingRound(source.round)
       : workspace.rounds.at(-1) || schema.normalizeWritingRound({});
+    const selectionIds = hasRound && Object.prototype.hasOwnProperty.call(source.round, 'packSelections')
+      ? round.packSelections
+      : Object.prototype.hasOwnProperty.call(workspace.article, 'packSelections')
+        ? workspace.article.packSelections : source.packSelections;
+    const packSelection = selectWritingPacks({
+      workspace, packs: list(source.writingPacks), packSettings: list(source.writingPackSettings),
+      selectedIds: selectionIds, taskType,
+      snapshot: hasRound ? round.packSnapshot : undefined
+    });
+    const builtinSelected = packSelection.packs.some(pack => pack.id === 'builtin-article');
+    const dimensions = config && builtinSelected ? config.checkDimensions : [];
     const sources = schema.normalizeWritingRound({ sources: source.sources }).sources;
     const sourceEntries = [...round.sources.map((s, i) => ({ ...s, id: `round-source-${i + 1}` })),
       ...sources.map((s, i) => ({ ...s, id: `source-${i + 1}` }))];
@@ -74,6 +231,7 @@
     )).sort((a, b) => ({ article: 0, genre: 1, general: 2 }[a.scope] - { article: 0, genre: 1, general: 2 }[b.scope]));
     const selected = workspace.article.dimensions.filter(d => dimensions.includes(d));
     return { ...workspace, config, round, materials, selectedSources, style, memories: memories.slice(0, 3),
+      packSelection,
       dimensions: selected.length ? selected : dimensions,
       counts: {
         sources: list(source.sources).length + list(object(source.round).sources).length + list(object(source.round).materials).length,
@@ -109,18 +267,59 @@
       `来源URL：${url}`,
       `来源状态：${verificationStatus}（${status[verificationStatus]}）`].join('\n');
   }
+
+  function packSourceMetadata(entry) {
+    const summary = (value, limit) => value.length > limit ? value.slice(0, limit) + '〔摘要，余下省略〕' : value;
+    const url = /^https?:\/\/[^\s/?#]+(?:[/?#][^\s]*)?$/iu.test(entry.url || '')
+      ? summary(entry.url, 240) : entry.url ? '非HTTP(S)或无效URL已省略' : '未提供';
+    return [
+      `基础包来源ID：${entry.id}`,
+      `来源标题：${summary(entry.title || '', 100) || '未提供'}`,
+      `来源URL：${url}`,
+      `来源位置：${summary(entry.locator || '', 160) || '未提供'}`,
+      `版本：${summary(entry.version || '', 100) || '未提供'}；许可：${summary(entry.license || '', 120) || '未提供'}`,
+      `适用范围：${summary(entry.applicability || '', 160) || '未提供'}；限制：${summary(entry.limitations || '', 160) || '未提供'}`,
+      `核验状态：${entry.verificationStatus || 'unverified'}（不代表独立验证）`
+    ].join('\n');
+  }
+
+  function packRuleText(selection) {
+    const packNames = new Map(selection.packs.map(pack => [pack.id, pack.name]));
+    const builtinEntries = selection.entries.filter(entry => entry.packId === 'builtin-article' && entry.kind !== 'prompt');
+    const builtinLines = [];
+    for (const [kind, label] of [['check', '检查项'], ['style', '风格基线'], ['repair', '风险提醒']]) {
+      const items = builtinEntries.filter(entry => entry.kind === kind);
+      if (!items.length) continue;
+      if (kind === 'style') builtinLines.push(`普通文章${label}（低于当前要求、样本/用户更正和适用记忆；不推断平台规则）：${items.map(item => item.text).join('；')}`);
+      else if (kind === 'repair') builtinLines.push(`普通文章${label}：${items.map(item => item.text.replace(/^约束或事实风险：/, '')).join('；')}`);
+    }
+    if (builtinEntries.length) builtinLines.unshift('普通文章规则来源ID：writing-workbench-article（未核验）');
+    return [...builtinLines, ...selection.entries.filter(entry => entry.packId !== 'builtin-article' && entry.kind !== 'prompt').map(entry =>
+      `${packNames.get(entry.packId) || entry.packId} / ${entry.kind}[${entry.id}]：${entry.text}`
+        + `（来源ID：${entry.sourceIds.join('、') || '未提供'}；核验：${entry.verificationStatus}）`)];
+  }
+
   function build(input, revision) {
-    const data = normalize(input);
+    const taskType = revision ? 'revision' : 'diagnosis';
+    const data = normalize(input, taskType);
     const a = data.article;
     const r = data.round;
     const config = data.config;
-    const header = config ? config.outputRequirements[revision ? 'revision' : 'diagnosis']
-      : `当前文体暂无专用规则。${revision ? '本工具只生成提示词；外部 AI 按当前用户要求执行修改。' : '仅按当前用户要求诊断，不直接改写文章。'}`;
+    const outputEntry = data.packSelection.entries.find(entry => entry.kind === 'prompt'
+      && (!entry.taskType || entry.taskType === taskType || entry.taskType === 'article'));
+    const header = outputEntry?.text
+      || `当前文体暂无专用规则。${revision ? '本工具只生成提示词；外部 AI 按当前用户要求执行修改。' : '仅按当前用户要求诊断，不直接改写文章。'}`;
     const content = data.selectedSources.filter(m => ['content', 'both'].includes(m.purpose) && m.excerpt);
     const historical = data.rounds.filter(h => h !== r && (!r.id || h.id !== r.id)).slice(-2);
+    const baselineLines = [];
     const fixed = [header, COMMON,
-      ...(config ? [`${config.name}风险提醒：${config.riskReminders.join('；')}`,
-        `${config.name}风格建议（低于当前要求、样本/用户更正和适用记忆；不推断平台规则）：${config.styleBaseline.join('；')}`] : []),
+      ...baselineLines,
+      ...(packRuleText(data.packSelection).length ? ['本轮采用的基础包规则（仅当前任务适用项）：', ...packRuleText(data.packSelection)] : []),
+      ...(data.packSelection.sources.filter(source => data.packSelection.entries.some(entry => entry.packId !== 'builtin-article'
+        && entry.sourceIds.includes(source.id))).length
+        ? ['本轮基础包来源（仅所用条目引用的来源）：', ...data.packSelection.sources
+          .filter(source => data.packSelection.entries.some(entry => entry.packId !== 'builtin-article' && entry.sourceIds.includes(source.id)))
+          .map(source => packSourceMetadata(source))] : []),
       `来源元数据：选取${data.selectedSources.length}/${data.materials.length}条，其余省略；标题≤80字、HTTP(S) URL≤240字，标记摘要时须核对完整地址。`,
       ...data.selectedSources.map(sourceMetadata), `本轮诊断维度：${data.dimensions.join('、')}`,
       `关键约束：${a.constraints || '未提供'}`,
@@ -203,5 +402,6 @@
       })) };
   }
 
-  return { buildWritingDiagnosisPrompt, buildWritingRevisionPrompt, deriveWritingStyleProfile, buildLocalWritingDiagnosis };
+  return { buildWritingDiagnosisPrompt, buildWritingRevisionPrompt, deriveWritingStyleProfile, buildLocalWritingDiagnosis,
+    selectWritingPacks };
 });
