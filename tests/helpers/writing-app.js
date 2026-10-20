@@ -40,7 +40,7 @@ function createWritingApp(options = {}) {
   const exports = [];
   const disk = new Map();
   let state = options.initialState || storage.createEmptyState();
-  let coordinator;
+  let coordinator; let packCoordinator;
   let backupRaw;
   const localStorage = { getItem: key => disk.get(key) || null, setItem(key, value) { if (failSave || writes === failWriteAt) throw new Error('磁盘已满'); disk.set(key, value); } };
   const window = {
@@ -54,19 +54,22 @@ function createWritingApp(options = {}) {
     ForwardStepPromptAgentCoordinator: options.realMaterials ? require('../../prototype/prompt-agent-coordinator.js') : { createPromptAgentCoordinator: () => ({ selectMaterials: async () => [] }) },
     ForwardStepPromptAgentUI: { createPromptAgentUI: () => ({ render() {} }), createPromptAgentScenes: promptUI.createPromptAgentScenes },
     WritingWorkbenchCoordinator: { createWritingWorkbenchCoordinator(deps) { coordinator = coordinatorAPI.createWritingWorkbenchCoordinator(deps); return coordinator; } },
+    WritingPackCatalog: require('../../prototype/writing-pack-catalog.js'),
+    WritingPackCoordinator: { createWritingPackCoordinator(deps) { packCoordinator = require('../../prototype/writing-pack-coordinator.js').createWritingPackCoordinator(deps); return packCoordinator; } },
+    WritingPackUI: require('../../prototype/writing-pack-ui.js'),
     WritingWorkbenchUI: require('../../prototype/writing-workbench-ui.js'),
     desktopApi: { getConfig: async () => ({ model: { configured: true, name: '测试模型' }, search: {} }), requestModel: async () => { requests++; return { text: '真实预览确认后的模型诊断' }; }, importBackup: async () => backupRaw, exportBackup: async content => {
       exports.push(JSON.parse(content));
       return options.exportBackup ? options.exportBackup(content) : { canceled: false, filePath: 'C:/backups/workspace.json' };
     } },
-    confirm: message => options.confirm ? options.confirm(message) : true,
+    prompt: message => options.prompt ? options.prompt(message) : "", confirm: message => options.confirm ? options.confirm(message) : true,
     scrollTo() {}
   };
   const context = { window, document, localStorage, navigator: { clipboard: { writeText: async () => {} } }, crypto: globalThis.crypto,
     fetch: async () => ({ ok: true, json: async () => ({}) }), setTimeout: () => 1, clearTimeout() {}, Date, console, URL, Blob };
   if (options.browser) delete window.desktopApi;
   vm.runInNewContext(fs.readFileSync(require.resolve('../../prototype/app.js'), 'utf8'), context);
-  return { ...dom, window, element, listeners, exports, clicks, pageHTML, knowledgeForms, get coordinator() { return coordinator; }, get state() { return state; }, get diskState() { return JSON.parse(disk.get(storage.STORAGE_KEY) || 'null'); }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, set failWriteAt(value) { failWriteAt = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
+  return { ...dom, window, element, listeners, exports, clicks, pageHTML, knowledgeForms, get coordinator() { return coordinator; }, get packCoordinator() { return packCoordinator; }, get state() { return state; }, get diskState() { return JSON.parse(disk.get(storage.STORAGE_KEY) || 'null'); }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, set failWriteAt(value) { failWriteAt = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
     async import(backup) { backupRaw = JSON.stringify(backup); await listeners.get('knowledge-import-open:click')(); },
     event(id, type = 'click', event = {}) { return listeners.get(`${id}:${type}`)?.({ target: element(id), preventDefault() {}, ...event }); } };
 }
