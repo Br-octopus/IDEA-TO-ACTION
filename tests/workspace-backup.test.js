@@ -1064,3 +1064,36 @@ test('写作备份校验覆盖 id、重复、数量，允许由 article.id 补�
   mismatch.data.writingArticles[0].article.id = 'different';
   assert.throws(() => validateBackup(mismatch), /id/);
 });
+
+test('写作显式恢复经备份替换和保存重载后保留关闭保存的历史，普通保存仍拒绝新 false 记录', () => {
+  const { createEmptyState, STORAGE_KEY, saveState, loadState } = require('../prototype/storage.js');
+  const values = new Map();
+  const store = {
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { values.set(key, value); }
+  };
+  const source = { ...createEmptyState(), writingArticles: [backupWritingSnapshot('history', false)],
+    writingMemories: [{ id: 'm1', preference: '短句' }] };
+  const backup = JSON.parse(JSON.stringify(createBackup(source)));
+  const restored = replaceState({}, backup);
+  assert.deepEqual(saveState(store, restored).writingArticles, []);
+  assert.deepEqual(saveState(store, restored, { restoreWriting: 'true' }).writingArticles, []);
+  const saved = saveState(store, restored, { restoreWriting: true });
+  assert.deepEqual(saved.writingArticles, backup.data.writingArticles);
+  assert.deepEqual(saved.writingMemories, backup.data.writingMemories);
+  assert.deepEqual(loadState(store).state.writingArticles, backup.data.writingArticles);
+  const edited = structuredClone(saved);
+  edited.writingArticles[0].article.draft = '恢复后未开启保存的编辑';
+  assert.deepEqual(saveState(store, edited).writingArticles, backup.data.writingArticles);
+  const replacement = structuredClone(backup);
+  replacement.data.writingArticles[0].article.draft = '显式替换的新历史';
+  const replaced = replaceState(saved, replacement);
+  assert.equal(saveState(store, replaced, { restoreWriting: true }).writingArticles[0].article.draft, '显式替换的新历史');
+  assert.equal(loadState(store).state.writingArticles[0].article.draft, '显式替换的新历史');
+  const previous = store.getItem(STORAGE_KEY);
+  const failure = new Error('quota');
+  store.setItem = () => { throw failure; };
+  assert.throws(() => saveState(store, restored, { restoreWriting: true }), error =>
+    error.name === 'StorageWriteError' && error.cause === failure);
+  assert.equal(store.getItem(STORAGE_KEY), previous);
+});
