@@ -1860,7 +1860,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, backup) } : workspaceBackup.mergeState(state, backup);
     persistWorkbenchState(result.state, { restoreWriting: true });
     if (summary.scope === "workspace") {
-      await writingCoordinator?.refreshFromStorage();
+      await writingCoordinator?.refreshFromStorage({ preserveSessions: mode === "merge" });
       window.WritingWorkbenchUIController?.refreshFromStorage();
     } else window.WritingWorkbenchUIController?.render();
     renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();

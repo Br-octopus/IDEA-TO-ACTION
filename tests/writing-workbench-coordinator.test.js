@@ -461,6 +461,40 @@ test('导入刷新立即失效等待结果和排队保存，不覆盖真实导�
   assert.equal(c.getWorkspace(a.id).article.draft, '导入新稿');
 });
 
+test('合并刷新保留全部会话且立即失效旧模型资料与排队保存', async () => {
+  const entered = deferred(), release = deferred(), selected = deferred(), model = deferred();
+  const env = realStorageSetup({ requestModel: () => model.promise,
+    promptAgentCoordinator: { selectMaterials: () => selected.promise } });
+  const { c } = env;
+  const unsaved = await c.createArticle({ draft: '仅会话原稿' });
+  const a = await c.createArticle({ draft: '已保存原稿', saveEnabled: true });
+  const materialResult = c.selectMaterials(unsaved.id).then(() => null, e => e);
+  const modelResult = c.runModelDiagnosis(unsaved.id).then(() => null, e => e);
+  env.delayReturn(() => { entered.resolve(); return release.promise; });
+  const blocker = c.rememberPreference(a.id, { preference: '保留证据' });
+  await entered.promise;
+  const queued = c.appendRound(a.id, { draft: '尚未写盘新轮' }).then(() => null, e => e);
+  env.importState(structuredClone(env.state()));
+  const refresh = c.refreshFromStorage({ preserveSessions: true });
+  selected.resolve([{ title: '过期资料', excerpt: '不能进入会话' }]);
+  model.resolve('过期模型诊断');
+  release.resolve();
+  await blocker;
+  await refresh;
+  assert.equal((await queued)?.code, 'STALE_RESULT');
+  assert.equal((await materialResult)?.code, 'STALE_RESULT');
+  assert.equal((await modelResult)?.code, 'STALE_RESULT');
+  assert.equal(c.getWorkspace(unsaved.id).rounds[0].draft, '仅会话原稿');
+  assert.equal(c.getWorkspace(unsaved.id).rounds[0].sources.length, 0);
+  assert.doesNotMatch(c.getWorkspace(unsaved.id).rounds[0].diagnosis, /过期模型/);
+  assert.equal(c.getWorkspace(a.id).rounds.at(-1).draft, '尚未写盘新轮');
+  assert.equal(env.disk().writingArticles.length, 1);
+  assert.equal(env.disk().writingArticles[0].rounds.length, 1);
+  env.delayReturn(null);
+  await c.updateArticle(unsaved.id, { goal: '新边界允许继续编辑' });
+  assert.equal(c.getWorkspace(unsaved.id).article.goal, '新边界允许继续编辑');
+});
+
 test('超长约束后模型入口拒绝发送和写入，异步返回也不能保存截断约束', async () => {
   const response = deferred();
   let calls = 0;

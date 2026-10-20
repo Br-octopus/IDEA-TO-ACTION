@@ -527,3 +527,27 @@ test('两种资料打开取消入口共用表单，保存手工资料后写作�
   assert.match(f.node('writing-prompt').value, /三个客户已完成试用/);
   assert.equal(f.requests, 0);
 });
+
+test('完整工作区合并空备份及新增文章保留未保存会话和未提交输入', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const backupAPI = require('../prototype/workspace-backup.js');
+  const f = createWritingApp({ confirm: () => false });
+  const id = await create(f, '只有会话的文章');
+  await f.input('writing-new-draft', '未提交新稿');
+  await f.input('writing-feedback', '未提交反馈');
+  const diagnosis = f.node('writing-diagnosis').value;
+  const source = fixture();
+  const importedId = await create(source, '备份文章');
+  await source.change('writing-save', true);
+  for (const state of [storage.createEmptyState(), source.state]) {
+    await f.import(backupAPI.createBackup(state, { scope: 'workspace' }));
+    assert.match(f.element('toast').textContent, /导入成功/);
+    assert.ok(f.coordinator.listArticles().some(a => a.id === id), '合并不得丢弃仅存在会话的文章');
+    assert.equal(f.node('writing-article-list').value, id);
+    assert.equal(f.node('writing-new-draft').value, '未提交新稿');
+    assert.equal(f.node('writing-feedback').value, '未提交反馈');
+    assert.equal(f.node('writing-diagnosis').value, diagnosis);
+    assert.ok(!f.state.writingArticles.some(w => w.id === id), '保留会话不代表偷偷持久化');
+  }
+  assert.equal(f.coordinator.getWorkspace(importedId).article.title, '备份文章');
+});
