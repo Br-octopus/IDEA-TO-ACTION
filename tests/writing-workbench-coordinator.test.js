@@ -495,6 +495,33 @@ test('合并刷新保留全部会话且立即失效旧模型资料与排队保�
   assert.equal(c.getWorkspace(unsaved.id).article.goal, '新边界允许继续编辑');
 });
 
+test('合并同ID当前数据优先，暂停新轮及失败原文标记保留且可精简恢复', async () => {
+  const backupAPI = require('../prototype/workspace-backup.js');
+  const env = realStorageSetup();
+  const { c } = env;
+  const paused = await c.createArticle({ title: '当前标题', draft: '已保存原稿', saveEnabled: true });
+  await c.setSaveEnabled(paused.id, false);
+  await c.appendRound(paused.id, { draft: '暂停后的会话新稿' });
+  const failing = await c.createArticle({ draft: '另一篇首稿', saveEnabled: true });
+  const longDraft = '失败原文'.repeat(2100);
+  await assert.rejects(c.appendRound(failing.id, { draft: longDraft }), RangeError);
+  const before = c.getWorkspace(failing.id);
+  const incoming = structuredClone(env.state());
+  incoming.writingArticles[0].article.title = '备份中的冲突标题';
+  incoming.writingArticles[0].rounds[0].draft = '备份中的冲突稿';
+  const merged = backupAPI.mergeState(env.state(), backupAPI.createBackup(incoming, { scope: 'workspace' }));
+  assert.ok(merged.conflicts.some(conflict => conflict.id === paused.id));
+  env.importState(merged.state);
+  await c.refreshFromStorage({ preserveSessions: true });
+  assert.equal(env.disk().writingArticles.find(w => w.id === paused.id).article.title, '当前标题');
+  assert.equal(c.getWorkspace(paused.id).rounds.at(-1).draft, '暂停后的会话新稿');
+  assert.deepEqual(c.getWorkspace(failing.id), before, '刷新不得重新规范化并截断失败原文');
+  await c.appendRound(failing.id, { draft: '精简恢复稿' });
+  const saved = env.disk().writingArticles.find(w => w.id === failing.id);
+  assert.deepEqual(saved.rounds.map(r => r.draft), ['另一篇首稿', '精简恢复稿'], '失败轮标记必须保留以防恢复时误写入原文');
+  assert.equal(c.getWorkspace(failing.id).rounds[1].draft, longDraft);
+});
+
 test('超长约束后模型入口拒绝发送和写入，异步返回也不能保存截断约束', async () => {
   const response = deferred();
   let calls = 0;
