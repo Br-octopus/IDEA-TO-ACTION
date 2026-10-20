@@ -74,3 +74,15 @@ test('浏览器 UMD 遇到旧版或残缺普通文章配置时安全使用基线
     assert.equal(pack.targetFields.goal, '目标');
   }
 });
+
+test('没有 globalThis 的 UMD 环境仍能调用内置包 catalog', () => {
+  const schemaSource = readFileSync(require.resolve('../prototype/writing-pack-schema.js'), 'utf8');
+  const catalogSource = readFileSync(require.resolve('../prototype/writing-pack-catalog.js'), 'utf8');
+  const workbenchSource = readFileSync(require.resolve('../prototype/writing-workbench-schema.js'), 'utf8');
+  const context = vm.createContext({});
+  vm.runInContext(workbenchSource, context);
+  vm.runInContext('delete globalThis.globalThis', context);
+  vm.runInContext(schemaSource, context);
+  vm.runInContext(catalogSource, context);
+  assert.equal(context.WritingPackCatalog.getBuiltinWritingPacks()[0].id, 'builtin-article');
+});
