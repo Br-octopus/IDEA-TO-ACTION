@@ -49,9 +49,9 @@
     const round = hasRound ? schema.normalizeWritingRound(source.round)
       : workspace.rounds.at(-1) || schema.normalizeWritingRound({});
     const sources = schema.normalizeWritingRound({ sources: source.sources }).sources;
-    const materials = [...round.materials, ...round.sources.map((s, i) => ({
-      id: `round-source-${i + 1}`, title: s.title, purpose: s.purpose, excerpt: s.excerpt
-    })), ...sources.map((s, i) => ({ id: `source-${i + 1}`, title: s.title, purpose: s.purpose, excerpt: s.excerpt }))];
+    const sourceEntries = [...round.sources.map((s, i) => ({ ...s, id: `round-source-${i + 1}` })),
+      ...sources.map((s, i) => ({ ...s, id: `source-${i + 1}` }))];
+    const materials = [...round.materials, ...sourceEntries];
     const profile = workspace.styleProfile;
     const sampleMaterials = profile.samples.filter(s => s.excerpt).map((s, i) => ({
       id: `profile-${i + 1}`, sourceArticleId: s.sourceArticleId, purpose: 'style', excerpt: s.excerpt
@@ -71,7 +71,7 @@
       || (m.scope === 'genre' && m.genre && m.genre === workspace.article.genre)
     )).sort((a, b) => ({ article: 0, genre: 1, general: 2 }[a.scope] - { article: 0, genre: 1, general: 2 }[b.scope]));
     const selected = workspace.article.dimensions.filter(d => DIMENSIONS.includes(d));
-    return { ...workspace, round, materials, style, memories: memories.slice(0, 3),
+    return { ...workspace, round, materials, sourceEntries, style, memories: memories.slice(0, 3),
       dimensions: selected.length ? selected : DIMENSIONS,
       counts: {
         sources: list(source.sources).length + list(object(source.round).sources).length + list(object(source.round).materials).length,
@@ -90,6 +90,20 @@
     '字段含“〔摘要，原N字〕”表示预算压缩，不是全文；正文输入上限8000字，超限须由界面提示并由用户保留原文；摘要仅用于诊断或改稿指令，不宣称已审阅全文或质量经验证。'
   ].join('\n');
 
+  function sourceMetadata(entry) {
+    const summary = (value, limit) => value.length > limit ? value.slice(0, limit) + '〔摘要，余下省略〕' : value;
+    const status = {
+      'user-confirmed': '用户确认，不代表独立验证',
+      'source-reviewed': '来源已审阅，不代表独立验证',
+      unverified: '未核验，内容待核实'
+    };
+    const url = /^https?:\/\/[^\s/?#]+(?:[/?#][^\s]*)?$/iu.test(entry.url)
+      ? summary(entry.url, 240) : entry.url ? '非HTTP(S)或无效URL已省略' : '未提供';
+    return [`来源ID：${entry.id}；用途：${entry.purpose}`,
+      `来源标题：${summary(entry.title, 80) || '未提供'}`,
+      `来源URL：${url}`,
+      `来源状态：${entry.verificationStatus}（${status[entry.verificationStatus]}）`].join('\n');
+  }
   function build(input, revision) {
     const data = normalize(input);
     const a = data.article;
@@ -99,7 +113,9 @@
       : '你负责诊断当前稿件。不得直接改写文章或产出文章成品。逐项引用具体句段，给出观察、影响、方向、优先级；方向描述修改意图，不提供替换正文。未确定项写待核实。';
     const content = data.materials.filter(m => ['content', 'both'].includes(m.purpose) && m.excerpt);
     const historical = data.rounds.filter(h => h !== r && (!r.id || h.id !== r.id)).slice(-2);
-    const fixed = [header, COMMON, `本轮诊断维度：${data.dimensions.join('、')}`,
+    const fixed = [header, COMMON,
+      `来源元数据：选取${Math.min(data.sourceEntries.length, 3)}/${data.sourceEntries.length}条，其余省略；标题≤80字、HTTP(S) URL≤240字，标记摘要时须核对完整地址。`,
+      ...data.sourceEntries.slice(0, 3).map(sourceMetadata), `本轮诊断维度：${data.dimensions.join('、')}`,
       `关键约束：${a.constraints || '未提供'}`,
       `当前反馈：${r.feedback || '未提供'}`, `当前用户反馈：${r.userFeedback || '未提供'}`,
       `选取摘要：内容来源${Math.min(content.length, 3)}/${content.length}条；记忆${data.memories.length}/${data.counts.memories}条；旧轮次${historical.length}/${data.counts.rounds}条。未纳入的来源、记忆和旧稿不自动加载；不加载完整资料库。输入正文${data.counts.draft}字，规范化最多保留8000字。`,
