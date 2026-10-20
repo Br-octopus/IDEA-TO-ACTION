@@ -1779,13 +1779,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         knowledgeEntries = getKnowledgeIndex();
       }
     });
+    let writingPackController = null;
+    if (window.WritingPackCoordinator && window.WritingPackUI) {
+      const writingPackCoordinator = window.WritingPackCoordinator.createWritingPackCoordinator({ getState: () => state, persistState: persistWorkbenchState, builtinCatalog: window.WritingPackCatalog ? window.WritingPackCatalog.getBuiltinWritingPacks() : [] });
+      writingPackController = window.WritingPackUI.createWritingPackUI({ document, packCoordinator: writingPackCoordinator, getState: () => state, confirm: message => window.confirm(message), notify: toast, copyText });
+      window.WritingPackUIController = writingPackController;
+    }
     if (window.WritingWorkbenchCoordinator && window.WritingWorkbenchUI) {
       writingCoordinator = window.WritingWorkbenchCoordinator.createWritingWorkbenchCoordinator({
         getState: () => state, persistState: persistWorkbenchState,
         requestModel: payload => window.ForwardStepPromptAgentModelRequest(payload), promptAgentCoordinator
       });
       window.WritingWorkbenchUIController = window.WritingWorkbenchUI.createWritingWorkbenchUI({
-        document, coordinator: writingCoordinator, getState: () => state, copyText,
+        document, coordinator: writingCoordinator, packUI: writingPackController, getState: () => state, copyText,
         confirm: message => window.confirm(message), notify: toast
       });
     }
