@@ -35,6 +35,7 @@ test('文章字段保留目标、受众、正文引用和来源文章 ID', () =>
     title: '产品说明',
     genre: 'article',
     goal: '解释产品如何工作',
+    successCriteria: [],
     audience: '第一次接触的用户',
     platform: '',
     preserveItems: [],
@@ -320,6 +321,48 @@ test('未知文体不会在文章或工作区中伪装成普通文章', () => {
   assert.equal(articleWorkspace.article.genre, 'article');
   assert.equal(unknownWorkspace.genre, '');
   assert.equal(unknownWorkspace.article.genre, '');
+});
+
+test('嵌套文章缺省文体继承工作区明确文体，并保留自身显式文体', () => {
+  const input = Object.freeze({
+    genre: 'novel', article: Object.freeze({ id: 'a1', draft: '小说' })
+  });
+  const workspace = schema.normalizeWritingWorkspace(input);
+  assert.equal(workspace.genre, '');
+  assert.equal(workspace.article.genre, '');
+  assert.equal(workspace.article.id, 'a1');
+  assert.equal(workspace.article.draft, '小说');
+  assert.equal('genre' in input.article, false);
+  assert.deepEqual(schema.normalizeWritingWorkspace(JSON.parse(JSON.stringify(workspace))), workspace);
+
+  for (const [genre, article, expected] of [
+    ['novel', { genre: undefined }, ''],
+    ['article', {}, 'article'],
+    [undefined, {}, 'article'],
+    ['novel', { genre: 'article' }, 'article'],
+    ['article', { genre: 'novel' }, ''],
+    ['article', { genre: '' }, ''],
+    ['article', { genre: null }, '']
+  ]) {
+    assert.equal(schema.normalizeWritingWorkspace({ genre, article }).article.genre, expected);
+  }
+});
+
+test('文章成功标准仅保留字符串，最多二十项且每项五百字符', () => {
+  const article = schema.normalizeWritingArticle({
+    successCriteria: ['  读者能复述步骤  ', '', '  ', null, 1, false, ['secret'], { apiKey: 'secret' }, '包含证据']
+  });
+  assert.deepEqual(article.successCriteria, ['读者能复述步骤', '包含证据']);
+  const workspace = schema.normalizeWritingWorkspace({ article });
+  const restored = schema.normalizeWritingWorkspace(JSON.parse(JSON.stringify(workspace)));
+  assert.deepEqual(restored.article.successCriteria, article.successCriteria);
+
+  const limited = schema.normalizeWritingArticle({ successCriteria: Array(25).fill('文'.repeat(600)) });
+  assert.equal(limited.successCriteria.length, 20);
+  assert.ok(limited.successCriteria.every(item => item.length === 500));
+  for (const value of [undefined, null, '标准', {}, 1, false]) {
+    assert.deepEqual(schema.normalizeWritingArticle({ successCriteria: value }).successCriteria, []);
+  }
 });
 
 test('所有文本字段限长，未知字段和凭证字段不会进入规范化结果', () => {

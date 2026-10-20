@@ -16,7 +16,7 @@
 
   const ARTICLE_FIELDS = new Set([
     "id", "title", "genre", "goal", "audience", "platform", "preserveItems", "dimensions", "constraints",
-    "sourceArticleId", "draft", "saveEnabled", "styleProfileId",
+    "successCriteria", "sourceArticleId", "draft", "saveEnabled", "styleProfileId",
     "createdAt", "updatedAt"
   ]);
   const MATERIAL_FIELDS = new Set(["id", "title", "purpose", "excerpt", "sourceArticleId"]);
@@ -78,6 +78,7 @@
       title: text(source.title),
       genre: WRITING_GENRES.includes(source.genre) ? source.genre : (source.genre === undefined ? "article" : ""),
       goal: text(source.goal),
+      successCriteria: textList(source.successCriteria, 20, 500),
       audience: text(source.audience),
       platform: text(source.platform, 160),
       preserveItems: textList(source.preserveItems, 30),
@@ -193,11 +194,14 @@
   function normalizeWritingWorkspace(input) {
     const source = isObject(input) ? input : {};
     const genre = WRITING_GENRES.includes(source.genre) ? source.genre : (source.genre === undefined ? "article" : "");
-    const articleInput = source.article === undefined ? { genre: source.genre } : source.article;
+    const articleInput = isObject(source.article) ? source.article : {};
     const workspace = {
       id: text(source.id, 100),
       genre,
-      article: normalizeWritingArticle(articleInput),
+      article: normalizeWritingArticle({
+        ...articleInput,
+        genre: articleInput.genre === undefined ? source.genre : articleInput.genre
+      }),
       rounds: Array.isArray(source.rounds)
         ? source.rounds.slice(-ROUND_LIMIT).map(normalizeWritingRound).filter(round => round.id || round.draft
           || round.feedback || round.userFeedback || round.revisionNote || round.diagnosis || round.prompt
