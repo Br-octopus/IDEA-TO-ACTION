@@ -401,3 +401,19 @@ test('凭证和未知字段被白名单剔除，且不误拒绝业务字段', ()
     assert.equal(serialized.includes(field), false);
   }
 });
+
+test('显式轮次偏好候选及记忆例子有限长白名单，缺省不添加字段', () => {
+  assert.equal('preferences' in schema.normalizeWritingRound({}), false);
+  assert.equal('example' in schema.normalizeWritingMemory({}), false);
+  const round = schema.normalizeWritingRound({ preferences: Array.from({ length: 12 }, () => ({
+    preference: ' 偏好 ', example: '例'.repeat(700), counterexample: '反例', secret: '删除'
+  })) });
+  assert.equal(round.preferences.length, 8);
+  assert.equal(round.preferences[0].preference, '偏好');
+  assert.equal(round.preferences[0].example.length, 500);
+  assert.equal(round.preferences[0].counterexample, '反例');
+  assert.equal('secret' in round.preferences[0], false);
+  const memory = schema.normalizeWritingMemory({ example: '正例', counterexample: '反例' });
+  assert.equal(memory.example, '正例');
+  assert.equal(memory.counterexample, '反例');
+});

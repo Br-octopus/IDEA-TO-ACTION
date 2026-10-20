@@ -23,7 +23,7 @@
   const SOURCE_FIELDS = new Set(["title", "url", "excerpt", "purpose", "verificationStatus"]);
   const ROUND_FIELDS = new Set([
     "id", "articleId", "draft", "feedback", "userFeedback", "revisionNote",
-    "parentRoundId", "diagnosis", "prompt", "sources", "materials", "undo", "createdAt", "updatedAt"
+    "parentRoundId", "diagnosis", "prompt", "sources", "materials", "preferences", "undo", "createdAt", "updatedAt"
   ]);
   const UNDO_FIELDS = new Set(["action", "memoryId", "roundId", "undoneAt"]);
   const STYLE_SAMPLE_FIELDS = new Set(["sourceArticleId", "excerpt", "features"]);
@@ -33,7 +33,7 @@
   ]);
   const MEMORY_FIELDS = new Set([
     "id", "scope", "genre", "articleId", "sourceArticleId",
-    "preference", "reason", "evidenceArticleIds", "undo",
+    "preference", "reason", "example", "counterexample", "evidenceArticleIds", "undo",
     "createdAt", "updatedAt"
   ]);
   const WORKSPACE_FIELDS = new Set([
@@ -128,6 +128,14 @@
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
     };
+    if (Object.prototype.hasOwnProperty.call(source, "preferences")) {
+      round.preferences = (Array.isArray(source.preferences) ? source.preferences : []).slice(0, 8)
+        .filter(isObject).map(item => ({
+          preference: text(item.preference),
+          ...(Object.prototype.hasOwnProperty.call(item, "example") ? { example: text(item.example) } : {}),
+          ...(Object.prototype.hasOwnProperty.call(item, "counterexample") ? { counterexample: text(item.counterexample) } : {})
+        })).filter(item => item.preference);
+    }
     return Object.fromEntries(Object.entries(round).filter(([key]) => ROUND_FIELDS.has(key)));
   }
 
@@ -188,6 +196,9 @@
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
     };
+    for (const field of ["example", "counterexample"]) {
+      if (Object.prototype.hasOwnProperty.call(source, field)) memory[field] = text(source[field]);
+    }
     return Object.fromEntries(Object.entries(memory).filter(([key]) => MEMORY_FIELDS.has(key)));
   }
 
@@ -205,7 +216,7 @@
       rounds: Array.isArray(source.rounds)
         ? source.rounds.slice(-ROUND_LIMIT).map(normalizeWritingRound).filter(round => round.id || round.draft
           || round.feedback || round.userFeedback || round.revisionNote || round.diagnosis || round.prompt
-          || round.sources.length || round.materials.length || Object.keys(round.undo).length)
+          || round.sources.length || round.materials.length || round.preferences?.length || Object.keys(round.undo).length)
         : [],
       styleProfile: normalizeWritingStyleProfile(source.styleProfile),
       styleProfiles: Array.isArray(source.styleProfiles)
