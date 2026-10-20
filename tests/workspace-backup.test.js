@@ -982,3 +982,85 @@ test('严格校验和替换拒绝集合内重复 id，合并则报告重复条�
     reason: 'duplicate-id'
   }]);
 });
+
+function backupWritingSnapshot(id = 'article-1', saveEnabled = true) {
+  return {
+    id, genre: 'article', article: { id, draft: '文章正文', saveEnabled },
+    rounds: [{ id: 'r1', draft: '初稿', feedback: '反馈', diagnosis: '诊断', prompt: '提示词' },
+      { id: 'r2', draft: '改稿', userFeedback: '用户意见' }],
+    styleProfile: { id: 'style-1', source: 'user', traits: ['口语'] }
+  };
+}
+
+test('写作完整备份含历史快照和记忆及摘要计数，资料库备份排除写作集合', () => {
+  const schema = require('../prototype/writing-workbench-schema.js');
+  const state = {
+    writingArticles: [backupWritingSnapshot(), backupWritingSnapshot('disabled-history', false)],
+    writingMemories: [{ id: 'm1', preference: '短句' }]
+  };
+  const backup = createBackup(state);
+  assert.deepEqual(backup.data.writingArticles, state.writingArticles.map(schema.normalizeWritingWorkspace));
+  assert.equal(backup.counts.writingArticles, 2);
+  assert.equal(getBackupSummary(backup).counts.writingMemories, 1);
+  assert.deepEqual(replaceState({}, JSON.parse(JSON.stringify(backup))).writingArticles, backup.data.writingArticles);
+  const knowledge = createBackup(state, { scope: 'knowledge-base' });
+  for (const field of ['writingArticles', 'writingMemories']) {
+    assert.equal(Object.hasOwn(knowledge.data, field), false);
+    assert.equal(Object.hasOwn(knowledge.counts, field), false);
+  }
+  assert.equal(replaceState(state, knowledge).writingArticles.length, 2);
+});
+
+test('写作导入替换合并复用白名单，冲突保留当前项，兼容旧备份', () => {
+  const backup = createBackup({});
+  backup.data.writingArticles = [backupWritingSnapshot('incoming', false)];
+  backup.data.writingArticles[0].article.apiKey = 'writing-credential-marker';
+  backup.data.writingArticles[0].rounds[0].rawWorkspace = '未知全文';
+  backup.data.writingMemories = [{ id: 'm1', preference: '短句', authorization: 'writing-credential-marker' }];
+  backup.counts.writingArticles = 1;
+  backup.counts.writingMemories = 1;
+  const current = { writingArticles: [backupWritingSnapshot('current')], writingMemories: [] };
+  const merged = mergeState(current, backup);
+  assert.deepEqual(merged.state.writingArticles.map(item => item.id), ['current', 'incoming']);
+  assert.equal(merged.added.filter(item => item.collection.startsWith('writing')).length, 2);
+  const conflict = mergeState(merged.state, backup);
+  assert.equal(conflict.conflicts.filter(item => item.collection.startsWith('writing')).length, 2);
+  for (const result of [replaceState(current, backup), merged.state]) {
+    assert.equal(JSON.stringify(result).includes('writing-credential-marker'), false);
+    assert.equal(JSON.stringify(result).includes('未知全文'), false);
+  }
+  const legacy = createBackup({});
+  delete legacy.data.writingArticles;
+  delete legacy.data.writingMemories;
+  assert.equal(validateBackup(legacy), true);
+  assert.deepEqual(replaceState(current, legacy).writingArticles, []);
+  assert.equal(mergeState(current, legacy).state.writingArticles[0].id, 'current');
+});
+
+test('写作备份校验覆盖 id、重复、数量，允许由 article.id 补齐外层 id', () => {
+  const valid = createBackup({});
+  valid.data.writingArticles = [backupWritingSnapshot()];
+  valid.data.writingMemories = [{ id: 'm1', preference: '短句' }];
+  valid.counts.writingArticles = 1;
+  valid.counts.writingMemories = 1;
+  assert.equal(validateBackup(valid), true);
+  const fallback = structuredClone(valid);
+  fallback.data.writingArticles[0].id = '';
+  assert.equal(validateBackup(fallback), true);
+  assert.equal(replaceState({}, fallback).writingArticles[0].id, 'article-1');
+  for (const field of ['writingArticles', 'writingMemories']) {
+    const invalid = structuredClone(valid);
+    invalid.data[field][0] = { id: '' };
+    assert.throws(() => validateBackup(invalid), /id/);
+    const duplicate = structuredClone(valid);
+    duplicate.data[field].push(duplicate.data[field][0]);
+    duplicate.counts[field] = 2;
+    assert.throws(() => validateBackup(duplicate), /id/);
+    const wrongCount = structuredClone(valid);
+    wrongCount.counts[field] = 99;
+    assert.throws(() => validateBackup(wrongCount), /统计/);
+  }
+  const mismatch = structuredClone(valid);
+  mismatch.data.writingArticles[0].article.id = 'different';
+  assert.throws(() => validateBackup(mismatch), /id/);
+});
