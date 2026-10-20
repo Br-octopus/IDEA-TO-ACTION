@@ -15,6 +15,17 @@ function createWritingApp(options = {}) {
     addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
     querySelectorAll() { return []; }, querySelector() { return element('send-risk-checkbox'); }, setAttribute() {}, scrollIntoView() {}, focus() {}, click() { clicks.push(id); }, select() {}, remove() {} });
   const element = id => { if (!elements.has(id)) elements.set(id, makeElement(id)); return elements.get(id); };
+  // 从真实页面读取表单默认值，避免替身凭空赋值掩盖空选择器等问题。
+  const pageHTML = fs.readFileSync(require.resolve('../../prototype/index.html'), 'utf8');
+  const knowledgeForms = [...pageHTML.matchAll(/<form\b[^>]*id="knowledge-entry-form"[^>]*>[\s\S]*?<\/form>/g)].map(match => match[0]);
+  const formDOM = createWritingDOM();
+  formDOM.mount.innerHTML = knowledgeForms[0] || '';
+  const formControls = formDOM.mount.querySelectorAll('[id]');
+  for (const control of formControls) Object.assign(element(control.id), { value: control.value });
+  element('knowledge-entry-form').hidden = true;
+  element('knowledge-entry-form').reset = () => {
+    for (const control of formControls) element(control.id).value = control.value;
+  };
   const scenes = ['task', 'writing', 'ppt'].map(scene => Object.assign(element(`scene-${scene}`), { dataset: { agentScene: scene } }));
   const nav = ['article', 'prompt-agent'].map(view => Object.assign(element(`nav-${view}`), { dataset: { view } }));
   const document = {
@@ -38,7 +49,8 @@ function createWritingApp(options = {}) {
     ForwardStepPromptEngine: require('../../prototype/prompt-engine.js'),
     ForwardStepSendSafety: require('../../prototype/send-safety.js'),
     ForwardStepWorkspaceBackup: require('../../prototype/workspace-backup.js'),
-    ForwardStepPromptAgentCoordinator: { createPromptAgentCoordinator: () => ({ selectMaterials: async () => [] }) },
+    ForwardStepKnowledgeSchema: require('../../prototype/knowledge-schema.js'),
+    ForwardStepPromptAgentCoordinator: options.realMaterials ? require('../../prototype/prompt-agent-coordinator.js') : { createPromptAgentCoordinator: () => ({ selectMaterials: async () => [] }) },
     ForwardStepPromptAgentUI: { createPromptAgentUI: () => ({ render() {} }), createPromptAgentScenes: promptUI.createPromptAgentScenes },
     WritingWorkbenchCoordinator: { createWritingWorkbenchCoordinator(deps) { coordinator = coordinatorAPI.createWritingWorkbenchCoordinator(deps); return coordinator; } },
     WritingWorkbenchUI: require('../../prototype/writing-workbench-ui.js'),
@@ -53,7 +65,7 @@ function createWritingApp(options = {}) {
     fetch: async () => ({ ok: true, json: async () => ({}) }), setTimeout: () => 1, clearTimeout() {}, Date, console, URL, Blob };
   if (options.browser) delete window.desktopApi;
   vm.runInNewContext(fs.readFileSync(require.resolve('../../prototype/app.js'), 'utf8'), context);
-  return { ...dom, window, element, listeners, exports, clicks, get coordinator() { return coordinator; }, get state() { return state; }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
+  return { ...dom, window, element, listeners, exports, clicks, pageHTML, knowledgeForms, get coordinator() { return coordinator; }, get state() { return state; }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
     async import(backup) { backupRaw = JSON.stringify(backup); await listeners.get('knowledge-import-open:click')(); },
     event(id, type = 'click', event = {}) { return listeners.get(`${id}:${type}`)?.({ target: element(id), preventDefault() {}, ...event }); } };
 }
