@@ -34,20 +34,23 @@
   const MEMORY_SCOPES = Object.freeze(["general", "genre", "article"]);
   const VERIFICATION_STATES = Object.freeze(["unverified", "source-reviewed", "user-confirmed"]);
   const TEXT_LIMIT = 500;
+  const PACK_ID_LIMIT = 120;
+  const PACK_SELECTION_LIMIT = 20;
   // 沿用正文上限；历史按数组顺序保留最近轮次，避免新改稿被旧记录挤掉。
   const DRAFT_LIMIT = 8000;
   const ROUND_LIMIT = 100;
 
   const ARTICLE_FIELDS = new Set([
     "id", "title", "genre", "goal", "audience", "platform", "preserveItems", "dimensions", "constraints",
-    "successCriteria", "sourceArticleId", "draft", "saveEnabled", "styleProfileId",
+    "successCriteria", "sourceArticleId", "draft", "saveEnabled", "styleProfileId", "packSelections",
     "createdAt", "updatedAt", "research"
   ]);
   const MATERIAL_FIELDS = new Set(["id", "title", "purpose", "excerpt", "sourceArticleId"]);
   const SOURCE_FIELDS = new Set(["title", "url", "excerpt", "purpose", "verificationStatus", "origin"]);
   const ROUND_FIELDS = new Set([
     "id", "articleId", "draft", "feedback", "userFeedback", "revisionNote",
-    "parentRoundId", "diagnosis", "prompt", "sources", "materials", "preferences", "undo", "createdAt", "updatedAt"
+    "parentRoundId", "diagnosis", "prompt", "sources", "materials", "preferences", "undo", "packSelections",
+    "packSnapshot", "createdAt", "updatedAt"
   ]);
   const UNDO_FIELDS = new Set(["action", "memoryId", "roundId", "undoneAt"]);
   const STYLE_SAMPLE_FIELDS = new Set(["sourceArticleId", "excerpt", "features"]);
@@ -66,6 +69,16 @@
     "createdAt", "updatedAt"
   ]);
 
+  const PACK_SNAPSHOT_PACK_FIELDS = new Set(["id", "version", "name", "layer", "genre", "taskType"]);
+  const PACK_SNAPSHOT_ENTRY_FIELDS = new Set([
+    "id", "packId", "packVersion", "kind", "taskType", "text", "sourceIds", "verificationStatus"
+  ]);
+  // packId 让同名来源 ID 可以按包归属去重，跨包同名不再互相覆盖。
+  const PACK_SNAPSHOT_SOURCE_FIELDS = new Set([
+    "id", "packId", "title", "url", "locator", "version", "license", "checkedAt", "applicability", "limitations", "verificationStatus"
+  ]);
+  const PACK_SNAPSHOT_SKIPPED_FIELDS = new Set(["id", "reason"]);
+
   function isObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
@@ -77,6 +90,69 @@
   function textList(value, limit = 30, itemLimit = TEXT_LIMIT) {
     if (!Array.isArray(value)) return [];
     return value.map(item => text(item, itemLimit)).filter(Boolean).slice(0, limit);
+  }
+
+  function uniqueTextList(value, limit = PACK_SELECTION_LIMIT, itemLimit = PACK_ID_LIMIT) {
+    return [...new Set(textList(value, limit, itemLimit))];
+  }
+
+  function snapshotVersion(value) {
+    return Number.isSafeInteger(value) && value > 0 ? value : 1;
+  }
+
+  function normalizeWritingPackSnapshot(input) {
+    const source = isObject(input) ? input : {};
+    const packs = Array.isArray(source.packs) ? source.packs.slice(0, PACK_SELECTION_LIMIT).map(item => {
+      const value = isObject(item) ? item : {};
+      return Object.fromEntries(Object.entries({
+        id: text(value.id, PACK_ID_LIMIT), version: snapshotVersion(value.version), name: text(value.name),
+        layer: text(value.layer, 20), genre: text(value.genre, PACK_ID_LIMIT), taskType: text(value.taskType, PACK_ID_LIMIT)
+      }).filter(([key, itemValue]) => PACK_SNAPSHOT_PACK_FIELDS.has(key) && (key === "version" || itemValue)));
+    }).filter(item => item.id) : [];
+    const skipped = Array.isArray(source.skipped) ? source.skipped.slice(0, PACK_SELECTION_LIMIT).map(item => {
+      const value = isObject(item) ? item : {};
+      return Object.fromEntries(Object.entries({ id: text(value.id, PACK_ID_LIMIT), reason: text(value.reason, 80) })
+        .filter(([key, itemValue]) => PACK_SNAPSHOT_SKIPPED_FIELDS.has(key) && itemValue));
+    }).filter(item => item.id && item.reason) : [];
+    const entries = Array.isArray(source.entries) ? source.entries.slice(0, 100).map(item => {
+      const value = isObject(item) ? item : {};
+      const entry = {
+        id: text(value.id, PACK_ID_LIMIT), packId: text(value.packId, PACK_ID_LIMIT),
+        packVersion: snapshotVersion(value.packVersion), kind: text(value.kind, 40),
+        taskType: text(value.taskType, PACK_ID_LIMIT), text: text(value.text),
+        sourceIds: uniqueTextList(value.sourceIds),
+        verificationStatus: ["unverified", "source-reviewed", "case-validated"].includes(value.verificationStatus)
+          ? value.verificationStatus : "unverified"
+      };
+      return Object.fromEntries(Object.entries(entry).filter(([key, itemValue]) => PACK_SNAPSHOT_ENTRY_FIELDS.has(key)
+        && (key === "packVersion" || key === "sourceIds" || itemValue)));
+    }).filter(item => item.id && item.packId && item.text) : [];
+    // 上限 100 条会静默截断；这里按包去重记录被截掉的规则，保证降级可观察。
+    if (Array.isArray(source.entries) && source.entries.length > 100) {
+      const truncatedPackIds = new Set(skipped.filter(item => item.reason === 'entries-truncated').map(item => item.id));
+      source.entries.slice(100).forEach(item => {
+        const value = isObject(item) ? item : {};
+        const packId = text(value.packId, PACK_ID_LIMIT);
+        if (packId && !truncatedPackIds.has(packId)) {
+          truncatedPackIds.add(packId);
+          skipped.push({ id: packId, reason: 'entries-truncated' });
+        }
+      });
+      skipped.splice(PACK_SELECTION_LIMIT);
+    }
+    const sources = Array.isArray(source.sources) ? source.sources.slice(0, 100).map(item => {
+      const value = isObject(item) ? item : {};
+      const entry = {
+        id: text(value.id, PACK_ID_LIMIT), packId: text(value.packId, PACK_ID_LIMIT), title: text(value.title), url: text(value.url, 2000),
+        locator: text(value.locator), version: text(value.version, 160), license: text(value.license, 500),
+        checkedAt: text(value.checkedAt, 80), applicability: text(value.applicability), limitations: text(value.limitations),
+        verificationStatus: ["unverified", "source-reviewed", "case-validated"].includes(value.verificationStatus)
+          ? value.verificationStatus : "unverified"
+      };
+      return Object.fromEntries(Object.entries(entry).filter(([key, itemValue]) => PACK_SNAPSHOT_SOURCE_FIELDS.has(key)
+        && (key === "verificationStatus" || itemValue)));
+    }).filter(item => item.id) : [];
+    return { packs, entries, sources, skipped };
   }
 
   function count(value, maximum, fallback = 0) {
@@ -117,6 +193,9 @@
     };
     // 研究计划只在会话中，持久化仅记录本篇拒绝，导入不能自动授权搜索。
     if (isObject(source.research) && source.research.status === 'rejected') article.research = { status: 'rejected' };
+    if (Object.prototype.hasOwnProperty.call(source, "packSelections")) {
+      article.packSelections = uniqueTextList(source.packSelections);
+    }
     return Object.fromEntries(Object.entries(article).filter(([key]) => ARTICLE_FIELDS.has(key)));
   }
 
@@ -161,6 +240,12 @@
           ...(Object.prototype.hasOwnProperty.call(item, "example") ? { example: text(item.example) } : {}),
           ...(Object.prototype.hasOwnProperty.call(item, "counterexample") ? { counterexample: text(item.counterexample) } : {})
         })).filter(item => item.preference);
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "packSelections")) {
+      round.packSelections = uniqueTextList(source.packSelections);
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "packSnapshot")) {
+      round.packSnapshot = normalizeWritingPackSnapshot(source.packSnapshot);
     }
     return Object.fromEntries(Object.entries(round).filter(([key]) => ROUND_FIELDS.has(key)));
   }
@@ -272,6 +357,7 @@
     normalizeWritingRound,
     normalizeWritingStyleProfile,
     normalizeWritingMemory,
+    normalizeWritingPackSnapshot,
     normalizeWritingWorkspace
   };
 });

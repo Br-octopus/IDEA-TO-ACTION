@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 const api = require('../prototype/writing-workbench-prompts.js');
+const schema = require('../prototype/writing-workbench-schema.js');
 const { buildWritingDiagnosisPrompt: diagnose, buildWritingRevisionPrompt: revise,
-  deriveWritingStyleProfile: derive, buildLocalWritingDiagnosis: local } = api;
+  deriveWritingStyleProfile: derive, buildLocalWritingDiagnosis: local,
+  selectWritingPacks } = api;
 const material = (purpose, excerpt, id = purpose) => ({ id, sourceArticleId: `source-${id}`, purpose, excerpt });
 
 test('提示词和本地初检实际消费文体配置，保留用户要求与风格优先级', () => {
@@ -308,4 +310,62 @@ test('近似UUID材料使用S序号并在元数据中保留原ID，内容和元�
     assert.doesNotMatch(excluded, /第四条标题|第四条脱离元数据的内容|隔离的样本观点/);
     assert.match(excluded, /选取3\/4/);
   }
+});
+
+test('只选择启用且适用的基础包条目，并把来源和跳过原因做成稳定快照', () => {
+  const packs = [
+    {
+      id: 'pack-revision', name: '改稿专业包', layer: 'task', genre: 'article', taskType: 'revision', version: 2,
+      enabled: true, applicability: { tasks: ['revision'], languages: ['zh'] },
+      checks: [{ id: 'rule-revision', statement: '改稿规则哨兵', sourceIds: ['source-revision'] }],
+      sources: [{ id: 'source-revision', title: '专业来源哨兵', url: 'https://example.test/revision', version: 'v2', license: 'MIT' }]
+    },
+    { id: 'pack-disabled', name: '停用包', layer: 'task', genre: 'article', version: 1, enabled: false,
+      checks: [{ id: 'rule-disabled', statement: '停用规则哨兵' }] },
+    { id: 'pack-diagnosis', name: '诊断包', layer: 'task', genre: 'article', taskType: 'diagnosis', version: 1, enabled: true,
+      checks: [{ id: 'rule-diagnosis', statement: '诊断规则哨兵' }] },
+    { id: 'pack-other-genre', name: '其他文体包', layer: 'genre', genre: 'novel', version: 1, enabled: true,
+      checks: [{ id: 'rule-other', statement: '其他文体规则哨兵' }] }
+  ];
+  const selection = selectWritingPacks({
+    workspace: schema.normalizeWritingWorkspace({ article: { id: 'article-1', genre: 'article' } }),
+    packs, selectedIds: ['pack-revision', 'pack-disabled', 'pack-diagnosis', 'pack-other-genre', 'missing-pack'],
+    taskType: 'revision'
+  });
+  assert.ok(selection.entries.some(entry => entry.id === 'rule-revision'));
+  assert.ok(selection.sources.some(source => source.id === 'source-revision'));
+  assert.ok(selection.skipped.some(item => item.id === 'pack-disabled' && item.reason === 'disabled'));
+  assert.ok(selection.skipped.some(item => item.id === 'pack-diagnosis' && item.reason === 'task-mismatch'));
+  assert.ok(selection.skipped.some(item => item.id === 'pack-other-genre' && item.reason === 'genre-mismatch'));
+  assert.ok(selection.skipped.some(item => item.id === 'missing-pack' && item.reason === 'unknown'));
+  assert.equal(selection.snapshot.packs[0].id, 'builtin-article');
+  assert.equal(selection.snapshot.entries.some(entry => entry.id === 'rule-revision'), true);
+});
+
+test('提示词只消费选中包和历史快照，保留普通文章基线与用户临时修正', () => {
+  const customPack = {
+    id: 'pack-current', name: '当前专业包', layer: 'task', genre: 'article', taskType: 'revision', version: 1,
+    enabled: true, checks: [{ id: 'current-rule', statement: '当前包新规则哨兵', sourceIds: ['current-source'] }],
+    sources: [{ id: 'current-source', title: '当前来源哨兵', url: 'https://example.test/current' }]
+  };
+  const oldPack = {
+    id: 'pack-history', name: '历史专业包', layer: 'task', genre: 'article', taskType: 'revision', version: 1,
+    enabled: true, checks: [{ id: 'old-rule', statement: '历史包旧规则哨兵', sourceIds: ['old-source'] }],
+    sources: [{ id: 'old-source', title: '历史来源哨兵', url: 'https://example.test/old' }]
+  };
+  const selected = selectWritingPacks({
+    workspace: schema.normalizeWritingWorkspace({ article: { id: 'article-1', genre: 'article' } }),
+    packs: [oldPack], selectedIds: ['pack-history'], taskType: 'revision'
+  });
+  const prompt = revise({
+    article: { id: 'article-1', genre: 'article', constraints: '用户当前约束哨兵' },
+    round: { packSelections: ['pack-current'], packSnapshot: selected.snapshot, userFeedback: '临时修正哨兵' },
+    writingPacks: [customPack], packSelections: ['pack-current'], packCorrections: '临时修正哨兵'
+  });
+  assert.match(prompt, /历史包旧规则哨兵/);
+  assert.match(prompt, /历史来源哨兵/);
+  assert.doesNotMatch(prompt, /当前包新规则哨兵|当前来源哨兵/);
+  assert.match(prompt, /事实、数据和引用需核对来源/);
+  assert.match(prompt, /用户当前约束哨兵/);
+  assert.match(prompt, /临时修正哨兵/);
 });
