@@ -397,7 +397,7 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'start-bundled-service:127.0.0.1:0',
     'load-url:http://127.0.0.1:50987'
   ]);
-  assert.equal(registeredHandlers.size, 20);
+  assert.equal(registeredHandlers.size, 37);
   for (const channel of ['backup:export', 'backup:import', 'backup:list', 'backup:read']) {
     assert.equal(registeredHandlers.has(channel), true);
   }
@@ -405,6 +405,12 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'social:list-platforms', 'social:get-status', 'social:open-login', 'social:check', 'social:search',
     'social:fetch-detail', 'social:capture-evidence', 'social:close', 'social:clear-profile',
     'research:save-attachment', 'research:read-attachment', 'research:delete-attachment'
+  ]) assert.equal(registeredHandlers.has(channel), true, channel);
+  for (const channel of [
+    'ppt-feedback:choose-file', 'ppt-feedback:list-attachments', 'ppt-feedback:open-preview',
+    'ppt-feedback:close-preview', 'ppt-feedback:delete-attachment', 'ppt-feedback:save-annotation',
+    'ppt-source:select-file', 'ppt-source:select-directory', 'ppt-source:list-directory',
+    'ppt-source:read', 'ppt-source:cancel'
   ]) assert.equal(registeredHandlers.has(channel), true, channel);
   assert.doesNotMatch(mainSource, /loadFile\(/);
 

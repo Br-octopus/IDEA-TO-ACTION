@@ -14,6 +14,7 @@ const {
   confirmCase
 } = require('../prototype/storage.js');
 const { catalog } = require('../prototype/research-catalog.js');
+const { createBackup } = require('../prototype/workspace-backup.js');
 
 function memoryStorage(entries = {}) {
   const values = new Map(Object.entries(entries));
@@ -202,7 +203,6 @@ test('旧状态迁移新增 Agent 集合默认为空，保存时只持久化规�
     promptAgentIndex: [{ content: 'derived index' }]
   });
   const serialized = storage.getItem(STORAGE_KEY);
-
   assert.equal(saved.promptAgentTasks[0].goal, '拆解产品想法');
   assert.equal(JSON.parse(serialized).promptAgentSources[0].absolutePath, undefined);
   assert.equal(serialized.includes('secret'), false);
@@ -273,6 +273,35 @@ test('PPT 场景持久化扩展白名单并丢弃附件原文与凭证', () => {
   assert.equal(serialized.includes('私有附件原文'), false);
   assert.equal(serialized.includes('原文件正文不应保存'), false);
   assert.equal(serialized.includes('drop-me'), false);
+});
+
+test('PPT 反馈附件与标注只持久化安全元数据，丢弃 URI、绝对路径、二进制和未知字段', () => {
+  const storage = memoryStorage();
+  const saved = saveState(storage, {
+    promptAgentTasks: [{
+      id: 'feedback-task', type: 'advance-idea', goal: '验收页面',
+      pptFeedback: {
+        attachments: [{
+          id: 'a1', taskId: 'feedback-task', sourceType: 'folder', mimeType: 'image/png', extension: '.png', contentHash: 'sha256:abc',
+          dataUrl: 'data:image/png;base64,secret-binary', absolutePath: 'C:/private/page.png', binary: [1, 2], apiKey: 'secret'
+        }],
+        annotations: [{
+          id: 'n1', taskId: 'feedback-task', attachmentId: 'a1', contentHash: 'sha256:abc', pageIndex: 0,
+          target: { kind: 'point', x: 0.2, y: 0.3 }, comment: '标题太小', category: 'readability',
+          dataUrl: 'data:image/png;base64,secret-annotation', absolutePath: 'C:/private', unknownSecret: 'do-not-save'
+        }],
+        unknownSensitiveField: 'drop'
+      }
+    }]
+  });
+  const serialized = storage.getItem(STORAGE_KEY);
+  assert.equal(saved.promptAgentTasks[0].pptFeedback.attachments[0].contentHash, 'sha256:abc');
+  const backupSerialized = JSON.stringify(createBackup(saved, { scope: 'workspace' }));
+  assert.equal(saved.promptAgentTasks[0].pptFeedback.annotations[0].comment, '标题太小');
+  for (const sentinel of ['data:image/png', 'secret-binary', 'C:/private', 'unknownSecret', 'do-not-save', 'unknownSensitiveField']) {
+    assert.equal(serialized.includes(sentinel), false, `localStorage 不应包含 ${sentinel}`);
+    assert.equal(backupSerialized.includes(sentinel), false, `备份不应包含 ${sentinel}`);
+  }
 });
 
 test('已保存的知识选择允许在保留公开资料选择时清空', () => {
