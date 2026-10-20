@@ -1,6 +1,6 @@
 # 通用写作工作台实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [x]) syntax for tracking.
 
 **Goal:** 在现有提示词 Agent 中交付普通文章的统一新建与多轮改稿工作台，支持按篇本地保存、风格档案、分层个人记忆及用户确认后联网研究。
 
@@ -274,15 +274,15 @@ git commit -m "feat: 增加可确认的写作资料搜索"
 - Modify: package.json
 - Modify: tests/e2e-smoke.test.js（若入口/备份验收还未覆盖）
 
-- [ ] **Step 1: 更新功能和边界文档**
+- [x] **Step 1: 更新功能和边界文档**
 
 只写已实现能力：普通文章首版、未来文体配置边界、风格样本与临时判断、按篇保存、记忆晋升门槛、搜索确认门禁和现有产品不直接代写的定位。
 
-- [ ] **Step 2: 注册新增运行时脚本检查**
+- [x] **Step 2: 注册新增运行时脚本检查**
 
 把 writing-workbench-schema.js、writing-workbench-prompts.js、writing-workbench-coordinator.js、writing-workbench-ui.js 添加到 npm run check。
 
-- [ ] **Step 3: 运行全量验证**
+- [x] **Step 3: 运行全量验证**
 
 Run: npm run check  
 Expected: 退出码 0，所有运行时脚本语法检查通过。
@@ -290,12 +290,12 @@ Expected: 退出码 0，所有运行时脚本语法检查通过。
 Run: npm test  
 Expected: 所有 Node 测试通过，无旧工作区迁移、备份、发送预览、研究确认或 PPT 功能回归。
 
-- [ ] **Step 4: 检查差异与工作区状态**
+- [x] **Step 4: 检查差异与工作区状态**
 
 Run: git diff --check  
 Expected: 无空白错误。检查 git status --short，只将本计划所列相关文件放入功能提交，不纳入现有无关用户改动。
 
-- [ ] **Step 5: 提交文档和脚本清单**
+- [x] **Step 5: 提交文档和脚本清单**
 
 ~~~bash
 git add docs/PRODUCT_DESIGN.md docs/MVP_SCOPE.md README.md package.json tests/e2e-smoke.test.js
@@ -308,31 +308,31 @@ git commit -m "docs: 更新写作工作台交付说明"
 - Modify: tests/writing-workbench-ui.test.js（仅在界面验收发现可复现缺口时补回归）
 - Modify: tests/e2e-smoke.test.js（仅在关键工作流缺少自动化边界时补充）
 
-- [ ] **Step 1: 启动并确认本地应用服务**
+- [x] **Step 1: 启动并确认本地应用服务**
 
 在端口 4173 空闲时运行 npm start；若被占用，使用相邻空闲端口并按 server.js 的端口配置访问。等待服务可访问后再开浏览器，不把进程启动当作页面验收。
 
-- [ ] **Step 2: 打开真实工作台并记录首屏证据**
+- [x] **Step 2: 打开真实工作台并记录首屏证据**
 
 使用 Playwright 打开实际服务 URL，确认页面非空、写作入口可见、无页面错误/控制台异常；保存应用界面截图作为当前验收记录。
 
-- [ ] **Step 3: 走通离线连续改稿主流程**
+- [x] **Step 3: 走通离线连续改稿主流程**
 
 在界面创建普通文章，填写目标、读者、草稿和一段标记为风格参考的样本；查看 Agent 提炼的风格档案并纠正一个特征；生成诊断/提示词；模拟粘贴外部 AI 新稿和反馈，确认仍关联同一文章并生成下一轮提示词。检查工具没有直接替用户改写稿件。
 
-- [ ] **Step 4: 验收逐篇保存与记忆操作**
+- [x] **Step 4: 验收逐篇保存与记忆操作**
 
 开启当前文章保存，写入至少两轮并加入一条反馈；刷新页面后确认文章和轮次恢复；关闭保存后增加一轮并刷新，确认新轮次不再持久化且旧历史保留；检查逐篇删除能清除该文章所有版本。通过界面显式记忆按钮保存一条偏好，验证相关记忆展示和删除/撤销操作。
 
-- [ ] **Step 5: 验收搜索确认门禁与降级**
+- [x] **Step 5: 验收搜索确认门禁与降级**
 
 点击查找写作案例/Skill，确认先显示范围和预算；拒绝时验证没有触发网络请求且仍能继续本地诊断。若搜索服务已配置，再确认批准后请求仅带查询词而非整篇正文，并展示来源和验证状态；未配置时核对明确错误提示及复制提示词仍可用。
 
-- [ ] **Step 6: 验收界面布局与可操作性**
+- [x] **Step 6: 验收界面布局与可操作性**
 
 在桌面宽度和窄屏宽度检查输入、轮次、记忆和保存/删除控件不重叠、不被截断；所有关键按钮可见、可聚焦、可点击，状态和错误提示可读。出现问题先修复并重跑相关 UI 用例及此验收流程。
 
-- [ ] **Step 7: 收束运行进程并记录结果**
+- [x] **Step 7: 收束运行进程并记录结果**
 
 关闭本轮启动的浏览器页和服务进程；保留已有服务进程不动。最终报告写明访问 URL、实际走过的流程、截图/控制台结果、搜索服务是否配置以及任何未完成的验收项。
 
@@ -364,3 +364,7 @@ git commit -m "docs: 更新写作工作台交付说明"
 - Task 4 已完成独立规格与代码质量复审，提交 1b43efc；真实存储及异步失败边界相关测试 107 项通过，进入 Task 5 统一界面接入。
 
 - Task 5 已通过独立规格及质量复审，最终提交17200cf，相关219项测试通过；真实界面发现的备份、资料入口、导入会话和追加保存失败问题已补回归修复，开始Task 6搜索。
+
+- Task 6 最终提交529b655已通过独立规格和代码质量审查；真实Electron/Chrome搜索确认、拒绝、取消、失败降级与模拟成功来源展示通过。
+- Task 7 提交8aca9c6已通过独立规格和质量审查；pnpm check通过，全量550项549通过0失败1项Windows权限跳过；最终整体审查独立171项通过，无P1/P2。
+- Task 8 已完成真实Electron/Chrome主验收、独立新页核心复验和390px关键控件焦点补证；本轮进程已关闭。结果、模拟成功边界及剪贴板限制见同目录验收记录。
