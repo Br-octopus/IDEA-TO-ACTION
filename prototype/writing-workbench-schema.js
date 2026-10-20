@@ -8,7 +8,6 @@
   const STYLE_PROFILE_SOURCES = Object.freeze(["sample", "user", "user-corrected", "mixed", "temporary"]);
   const STYLE_CONFIDENCE = Object.freeze(["low", "medium", "high"]);
   const MEMORY_SCOPES = Object.freeze(["general", "genre", "article"]);
-  const SENSITIVE_KEY = /(?:password|credential|authorization|cookie|session|(?:api|access|refresh|client|bearer|private|model|search)?(?:key|token|secret)|profilepath|absolute.?path)/i;
   const TEXT_LIMIT = 500;
 
   const ARTICLE_FIELDS = new Set([
@@ -42,20 +41,6 @@
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 
-  function rejectSensitiveFields(value, path = "") {
-    if (Array.isArray(value)) {
-      value.forEach((item, index) => rejectSensitiveFields(item, `${path}[${index}]`));
-      return;
-    }
-    if (!isObject(value)) return;
-    for (const [key, item] of Object.entries(value)) {
-      if (SENSITIVE_KEY.test(key.replace(/[^a-z0-9]/gi, ""))) {
-        throw new TypeError(`包含敏感字段：${path ? `${path}.` : ""}${key}`);
-      }
-      rejectSensitiveFields(item, path ? `${path}.${key}` : key);
-    }
-  }
-
   function text(value, limit = TEXT_LIMIT) {
     return typeof value === "string" ? value.trim().slice(0, limit) : "";
   }
@@ -83,7 +68,6 @@
 
   function normalizeWritingArticle(input) {
     const source = isObject(input) ? input : {};
-    rejectSensitiveFields(source);
     const article = {
       id: text(source.id, 100),
       title: text(source.title),
@@ -93,7 +77,7 @@
       constraints: text(source.constraints),
       sourceArticleId: text(source.sourceArticleId, 100),
       draft: text(source.draft, 8000),
-      saveEnabled: source.saveEnabled !== false,
+      saveEnabled: typeof source.saveEnabled === "boolean" ? source.saveEnabled : true,
       styleProfileId: text(source.styleProfileId, 100),
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
@@ -115,7 +99,6 @@
 
   function normalizeWritingRound(input) {
     const source = isObject(input) ? input : {};
-    rejectSensitiveFields(source);
     const round = {
       id: text(source.id, 100),
       articleId: text(source.articleId, 100),
@@ -145,7 +128,6 @@
 
   function normalizeWritingStyleProfile(input) {
     const source = isObject(input) ? input : {};
-    rejectSensitiveFields(source);
     const profile = {
       id: text(source.id, 100),
       source: STYLE_PROFILE_SOURCES.includes(source.source) ? source.source : "",
@@ -163,7 +145,6 @@
 
   function normalizeWritingMemory(input) {
     const source = isObject(input) ? input : {};
-    rejectSensitiveFields(source);
     const memory = {
       id: text(source.id, 100),
       scope: MEMORY_SCOPES.includes(source.scope) ? source.scope : "general",
@@ -182,11 +163,12 @@
 
   function normalizeWritingWorkspace(input) {
     const source = isObject(input) ? input : {};
-    rejectSensitiveFields(source);
+    const genre = WRITING_GENRES.includes(source.genre) ? source.genre : (source.genre === undefined ? "article" : "");
+    const articleInput = source.article === undefined ? { genre: source.genre } : source.article;
     const workspace = {
       id: text(source.id, 100),
-      genre: WRITING_GENRES.includes(source.genre) ? source.genre : (source.genre === undefined ? "article" : ""),
-      article: normalizeWritingArticle(source.article),
+      genre,
+      article: normalizeWritingArticle(articleInput),
       rounds: Array.isArray(source.rounds)
         ? source.rounds.slice(0, 10).map(normalizeWritingRound).filter(round => round.id || round.draft || round.feedback)
         : [],
