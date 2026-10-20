@@ -1,18 +1,20 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const schema = require('../prototype/writing-workbench-schema.js');
+const { readFileSync } = require('node:fs');
+const vm = require('node:vm');
 
 test('普通文章类型默认值和文章保存开关', () => {
   const article = schema.normalizeWritingArticle({ title: '  我的文章  ' });
 
   assert.equal(article.genre, 'article');
-  assert.equal(article.saveEnabled, true);
+  assert.equal(article.saveEnabled, false);
   assert.equal(article.title, '我的文章');
   assert.equal(schema.normalizeWritingArticle({ genre: 'novel' }).genre, '');
   assert.equal(schema.normalizeWritingArticle({ saveEnabled: false }).saveEnabled, false);
   assert.equal(schema.normalizeWritingArticle({ saveEnabled: true }).saveEnabled, true);
-  for (const value of [null, 0, 1, 'false', {}, []]) {
-    assert.equal(schema.normalizeWritingArticle({ saveEnabled: value }).saveEnabled, true);
+  for (const value of [undefined, null, 0, 1, 'true', 'false', {}, []]) {
+    assert.equal(schema.normalizeWritingArticle({ saveEnabled: value }).saveEnabled, false);
   }
 });
 
@@ -34,10 +36,13 @@ test('文章字段保留目标、受众、正文引用和来源文章 ID', () =>
     genre: 'article',
     goal: '解释产品如何工作',
     audience: '第一次接触的用户',
+    platform: '',
+    preserveItems: [],
+    dimensions: [],
     constraints: '',
     sourceArticleId: 'source-article-9',
     draft: '当前稿件',
-    saveEnabled: true,
+    saveEnabled: false,
     styleProfileId: '',
     createdAt: '',
     updatedAt: ''
@@ -45,7 +50,36 @@ test('文章字段保留目标、受众、正文引用和来源文章 ID', () =>
   assert.equal('unknownField' in article, false);
 });
 
-test('轮次保存稿件、反馈和撤销信息，并限制轮次数量字段', () => {
+test('工作区经 JSON 往返后保留轮次诊断、提示词和父轮次', () => {
+  const workspace = schema.normalizeWritingWorkspace({
+    article: { id: 'article-1', platform: '公众号', preserveItems: ['观点'], dimensions: ['依据'] },
+    rounds: [{
+      parentRoundId: 'round-0',
+      diagnosis: '  依据不足，需要补充来源  ',
+      prompt: '  请保留观点并补充证据  ',
+      sources: [{ title: '指南', url: 'https://example.com', excerpt: '证据', purpose: 'content', verificationStatus: 'source-reviewed' }]
+    }],
+    styleProfile: { traits: ['具体'], userCorrections: '保留必要长句', scope: 'genre', genre: 'article' }
+  });
+  const restored = schema.normalizeWritingWorkspace(JSON.parse(JSON.stringify(workspace)));
+
+  assert.equal(restored.rounds.length, 1);
+  assert.equal(restored.rounds[0].parentRoundId, 'round-0');
+  assert.equal(restored.rounds[0].diagnosis, '依据不足，需要补充来源');
+  assert.equal(restored.rounds[0].prompt, '请保留观点并补充证据');
+  assert.equal(restored.article.saveEnabled, false);
+  assert.equal(restored.article.platform, '公众号');
+  assert.deepEqual(restored.article.preserveItems, ['观点']);
+  assert.deepEqual(restored.article.dimensions, ['依据']);
+  assert.equal(restored.rounds[0].sources[0].verificationStatus, 'source-reviewed');
+  assert.deepEqual(restored.styleProfile.traits, ['具体']);
+  assert.equal(restored.styleProfile.userCorrections, '保留必要长句');
+  assert.equal(restored.styleProfile.scope, 'genre');
+  assert.equal(restored.styleProfile.genre, 'article');
+  assert.deepEqual(restored, workspace);
+});
+
+test('轮次保存稿件、反馈和撤销信息', () => {
   const round = schema.normalizeWritingRound({
     id: 'round-1',
     articleId: 'article-1',
@@ -146,11 +180,135 @@ test('工作区整体验证文章、轮次、风格档案和记忆的数量上�
     unknown: true
   });
 
-  assert.equal(workspace.rounds.length, 10);
+  assert.equal(workspace.rounds.length, 12);
   assert.equal(workspace.styleProfiles.length, 3);
   assert.equal(workspace.memories.length, 30);
   assert.equal(workspace.sourceArticleIds.length, 20);
   assert.equal('unknown' in workspace, false);
+});
+
+test('文章保留平台、保留项和八维选择，并限制条数与长度', () => {
+  const article = schema.normalizeWritingArticle({
+    platform: '  公众号  ',
+    preserveItems: ['  事实  ', '', null, { apiKey: 'secret' }, '观点'],
+    dimensions: ['目标/读者', '依据', '逻辑结构', '语言', '风格修辞', '术语一致', '格式排版', '约束风险']
+  });
+  assert.equal(article.platform, '公众号');
+  assert.deepEqual(article.preserveItems, ['事实', '观点']);
+  assert.equal(article.dimensions.length, 8);
+
+  const limited = schema.normalizeWritingArticle({
+    platform: '文'.repeat(20000),
+    preserveItems: Array(40).fill('文'.repeat(20000)),
+    dimensions: Array(20).fill('文'.repeat(20000))
+  });
+  assert.equal(limited.platform.length, 160);
+  assert.equal(limited.preserveItems.length, 30);
+  assert.ok(limited.preserveItems.every(item => item.length === 500));
+  assert.equal(limited.dimensions.length, 8);
+  assert.ok(limited.dimensions.every(item => item.length === 160));
+});
+
+test('轮次来源保留用途和验证状态，并剔除嵌套未知及凭证字段', () => {
+  for (const purpose of schema.MATERIAL_PURPOSES) {
+    for (const verificationStatus of ['unverified', 'source-reviewed', 'user-confirmed']) {
+      const source = schema.normalizeWritingRound({ sources: [{
+        title: '  指南  ', url: '  https://example.com/guide  ', excerpt: '  证据摘要  ',
+        purpose, verificationStatus, apiKey: 'secret', unknown: { password: 'secret' }
+      }] }).sources[0];
+      assert.deepEqual(source, {
+        title: '指南', url: 'https://example.com/guide', excerpt: '证据摘要', purpose, verificationStatus
+      });
+    }
+  }
+  const sources = schema.normalizeWritingRound({ sources: [
+    null, [], { apiKey: 'secret' },
+    { url: 'https://example.com', purpose: 'research', verificationStatus: 'verified' }
+  ] }).sources;
+  assert.deepEqual(sources, [{
+    title: '', url: 'https://example.com', excerpt: '', purpose: 'content', verificationStatus: 'unverified'
+  }]);
+});
+
+test('轮次新增文本和来源元数据均有限长、有限条数', () => {
+  const longText = '文'.repeat(20000);
+  const round = schema.normalizeWritingRound({
+    parentRoundId: longText, diagnosis: longText, prompt: longText, draft: longText,
+    sources: Array(25).fill({ title: longText, url: longText, excerpt: longText })
+  });
+  assert.equal(round.parentRoundId.length, 100);
+  assert.equal(round.diagnosis.length, 4000);
+  assert.equal(round.prompt.length, 8000);
+  assert.equal(round.draft.length, 8000);
+  assert.equal(round.sources.length, 20);
+  assert.ok(round.sources.every(source => source.title.length === 160
+    && source.url.length === 2000 && source.excerpt.length === 1200));
+});
+
+test('风格档案保留用户修正和适用范围，未知文体不伪装', () => {
+  for (const scope of ['general', 'genre', 'article']) {
+    const profile = schema.normalizeWritingStyleProfile({
+      scope, genre: 'article', userCorrections: '  保留必要长句  '
+    });
+    assert.equal(profile.scope, scope);
+    assert.equal(profile.genre, 'article');
+    assert.equal(profile.userCorrections, '保留必要长句');
+  }
+  const profile = schema.normalizeWritingStyleProfile({
+    scope: 'unknown', genre: 'novel', userCorrections: '文'.repeat(20000), credentials: { password: 'secret' }
+  });
+  assert.equal(profile.scope, 'article');
+  assert.equal(profile.genre, '');
+  assert.equal(profile.userCorrections.length, 2000);
+  assert.equal('credentials' in profile, false);
+});
+
+test('工作区超过轮次上限时保留最新一百轮，诊断或提示词单独存在也不丢失', () => {
+  const rounds = Array.from({ length: 105 }, (_, index) => ({ id: `round-${index}` }));
+  const workspace = schema.normalizeWritingWorkspace({ rounds });
+  assert.equal(workspace.rounds.length, 100);
+  assert.equal(workspace.rounds[0].id, 'round-5');
+  assert.equal(workspace.rounds.at(-1).id, 'round-104');
+  assert.deepEqual(schema.normalizeWritingWorkspace({ rounds: [
+    { diagnosis: '诊断' }, { prompt: '提示词' }, { userFeedback: '反馈' },
+    { sources: [{ title: '来源' }] }
+  ] }).rounds.map(round => round.diagnosis || round.prompt || round.userFeedback || round.sources[0].title),
+  ['诊断', '提示词', '反馈', '来源']);
+});
+
+test('非法输入和嵌套字段安全降级，原输入不变且规范化结果可重复处理', () => {
+  const normalizers = [schema.normalizeWritingArticle, schema.normalizeWritingRound,
+    schema.normalizeWritingStyleProfile, schema.normalizeWritingMemory, schema.normalizeWritingWorkspace];
+  for (const normalize of normalizers) {
+    for (const input of [undefined, null, [], 'text', 1, false, Symbol('非法值')]) {
+      assert.doesNotThrow(() => normalize(input));
+    }
+  }
+  const input = {
+    article: { saveEnabled: 'true', platform: { password: 'secret' }, preserveItems: [{}], dimensions: null },
+    rounds: [{ diagnosis: { apiKey: 'secret' }, prompt: ['secret'], sources: [{
+      title: '来源', url: { accessToken: 'secret' }, excerpt: ['secret'], credentials: { password: 'secret' }
+    }], materials: [null, {}], undo: { action: '撤销', credentials: 'secret' } }],
+    styleProfile: { userCorrections: {}, samples: [null, { features: [{}] }] },
+    memories: [{ preference: '偏好', evidenceArticleIds: ['article-1', { apiKey: 'secret' }] }]
+  };
+  const original = JSON.stringify(input);
+  const workspace = schema.normalizeWritingWorkspace(input);
+  assert.equal(JSON.stringify(input), original);
+  assert.equal(JSON.stringify(workspace).includes('secret'), false);
+  assert.deepEqual(workspace.memories[0].evidenceArticleIds, ['article-1']);
+  assert.deepEqual(schema.normalizeWritingWorkspace(workspace), workspace);
+});
+
+test('浏览器 UMD 导出与 CommonJS 的五个纯函数行为一致', () => {
+  const context = vm.createContext({});
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-workbench-schema.js'), 'utf8'), context);
+  const browser = context.WritingWorkbenchSchema;
+  for (const name of ['normalizeWritingArticle', 'normalizeWritingRound', 'normalizeWritingStyleProfile',
+    'normalizeWritingMemory', 'normalizeWritingWorkspace']) {
+    assert.equal(typeof browser[name], 'function');
+    assert.equal(JSON.stringify(browser[name]({})), JSON.stringify(schema[name]({})));
+  }
 });
 
 test('未知文体不会在文章或工作区中伪装成普通文章', () => {
