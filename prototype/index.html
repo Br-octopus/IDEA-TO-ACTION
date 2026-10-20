@@ -113,6 +113,16 @@
     .notice { border: 1px solid #e4ebe3; border-radius: 10px; background: #f2f6f1; padding: 12px 14px; color: #53645d; display: flex; gap: 10px; align-items: flex-start; font-size: 11px; margin: 18px 0 25px; }
     .notice svg { width: 16px; height: 16px; flex: none; stroke: #67856e; fill: none; stroke-width: 1.8; }
     .social-layout { display: grid; gap: 18px; }
+    #view-prompt-agent [hidden] { display: none !important; }
+    #writing-workbench-root, #writing-workbench-root .field { min-width: 0; }
+    #writing-workbench-root { overflow-wrap: anywhere; }
+    #writing-workbench-root input, #writing-workbench-root select, #writing-workbench-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+    #writing-workbench-root textarea { width: 100%; min-height: 100px; }
+    #writing-workbench-root .social-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .writing-dimensions { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); margin: 14px 0; padding: 12px; }
+    .writing-material, .writing-memory { border-top: 1px solid var(--line); padding: 14px 0; }
+    #writing-error { color: #a32929; white-space: pre-wrap; }
+    @media (max-width: 760px) { #writing-workbench-root .social-form-grid { grid-template-columns: 1fr; } #writing-workbench-root .social-panel { padding: 14px; } #writing-workbench-root button { max-width: 100%; white-space: normal; } }
     .social-panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
     .social-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
     .social-platform { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
@@ -430,79 +440,6 @@
           <div class="recent-list" id="all-plans"></div>
         </section>
 
-        <section class="view" id="view-article">
-          <div class="eyebrow">文章诊断</div><h1>觉得文章有 AI 味，但不知道怎么说？</h1>
-          <p class="lede">贴上文章或片段，工具会帮你找出具体问题、提取参考文章中值得借鉴的写法，并生成一条可交给其他 AI 的修改指令。本工具不直接改文章。</p>
-          <div class="notice" style="max-width:880px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span><strong>这不是“AI 文本检测器”。</strong>它把常见写作问题当作待核对的编辑线索，不判定文章是不是 AI 写的；是否采用外部 AI 的修改由你决定。本工具只生成诊断和提示词，不代写或改稿。</span></div>
-          <form class="form-panel prompt-form" id="article-form">
-            <div class="field"><label class="field-label" for="article-original">把 AI 生成的文章贴在这里</label><textarea id="article-original" required placeholder="粘贴文章或其中一段。可以只写“读起来有点假”，不必先解释清楚问题。"></textarea></div>
-            <div class="extra-grid">
-              <div><label class="field-label" for="article-goal">读者看完后，你希望他们知道或做什么？<span class="optional">可选</span></label><input id="article-goal" type="text" placeholder="例如：理解这个做法的利弊，或尝试一个具体步骤"></div>
-              <div><label class="field-label" for="article-platform">准备发到哪里？<span class="optional">可选</span></label><select id="article-platform"><option value="">还没确定</option><option>小红书</option><option>公众号</option><option>博客 / 网站</option><option>工作汇报</option><option>学术 / 专业文章</option><option>其他</option></select></div>
-              <div><label class="field-label" for="article-audience">写给谁看？<span class="optional">可选</span></label><input id="article-audience" type="text" placeholder="例如：第一次接触这个主题的普通读者"></div>
-              <div><label class="field-label" for="article-tone">你希望读起来是什么感觉？<span class="optional">可选</span></label><input id="article-tone" type="text" placeholder="例如：像我平时说话，直接、真诚，不要过分活泼"></div>
-            </div>
-            <details class="details">
-              <summary><span>参考文章和需要保留的内容</span><span class="summary-right">可选，但能更贴近你的意图<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span></summary>
-              <div class="field"><label class="field-label" for="article-references">有想参考的文章吗？贴链接或一小段正文<span class="optional">没有也可以</span></label><textarea id="article-references" class="reply-area" placeholder="可以贴你喜欢的文章链接，或 1–3 段代表性摘录。AI 会提取用词、句式、节奏、逻辑、上下文和修辞，不复制原句、观点或事实。"></textarea></div>
-              <label class="search-toggle"><input id="article-find-examples" type="checkbox"><span class="toggle-copy">我没有参考文章，请 AI 搜索相似且适合的公开案例<small>建议只找 2–3 篇来源清楚、内容可访问的样例；不把高热度直接当成高质量。</small></span></label>
-              <div class="field-label" style="margin-top:17px">从参考中提取哪些写法？</div>
-              <div class="check-grid">
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="用词选择和语气" checked><span>用词选择和语气</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="句式变化、长短节奏和段落衔接" checked><span>句式变化、长短节奏和段落衔接</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="逻辑结构和论证推进" checked><span>逻辑结构和论证推进</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="上下文铺垫和信息密度" checked><span>上下文铺垫和信息密度</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="修辞、例子和表达手法" checked><span>修辞、例子和表达手法</span></label>
-              </div>
-              <div class="field-label">优先保留原文中哪些有用内容？</div>
-              <div class="check-grid">
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="观点、立场和结论" checked><span>观点、立场和结论</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="论证逻辑和因果关系" checked><span>论证逻辑和因果关系</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="任务、步骤和行动要求" checked><span>任务、步骤和行动要求</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="做事方法、经验和技巧" checked><span>做事方法、经验和技巧</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="事实、数据、专名和引用来源" checked><span>事实、数据、专名和引用来源</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="作者已有的个人经历和判断" checked><span>作者已有的个人经历和判断</span></label>
-              </div>
-              <p class="library-meta">不确定怎么描述个人声音时可以留空：AI 会先给出适合的方向和推荐；以上选项是保留重点，不代表可以补造原文没有的内容。</p>
-            </details>
-            <label class="search-toggle"><input id="article-web-search" type="checkbox"><span class="toggle-copy">需要时联网核实事实<small>只核对文章中可查证、可能过时的事实；要求列来源和日期，不允许悄悄改掉原意。</small></span></label>
-            <div class="form-footer"><span class="privacy-note">草稿只进入你复制给 AI 的指令；本页不会上传</span><button class="button-primary" type="submit">生成诊断与修改指令<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
-          </form>
-          <article class="content-block result-box" id="article-result" style="max-width:880px">
-            <div class="step-tag"><span class="step-number">1</span>把诊断与修改指令交给外部 AI</div>
-            <h2>可直接复制给 AI 的指令</h2><p class="block-desc">让外部 AI 先说明诊断依据，再按指令尝试修改。之后把原稿和外部结果带回来，对照目标与保留项复盘。</p>
-            <div class="prompt-box" id="article-instruction"></div>
-            <div class="prompt-bottom"><small>只发送这篇文章和少量相关规则，不加载整个提示词仓库</small><button class="button-primary" id="copy-article-instruction">复制指令</button></div>
-            <div class="prompt-bottom"><small>保存会把包含文章正文的整条提示词存入本机提示词库；不会上传</small><button class="button-secondary" id="save-article-instruction">保存这条指令</button></div>
-            <div class="step-tag" style="margin-top:25px"><span class="step-number">2</span>把外部 AI 的结果带回来</div>
-            <div class="field"><label class="field-label" for="article-revised">粘贴外部 AI 修改后的结果</label><textarea id="article-revised" class="reply-area" placeholder="粘贴外部 AI 返回的文章或片段。两栏对照只留在本机，方便检查事实、逻辑和保留项有没有被改偏。"></textarea></div>
-            <div class="compare-grid" id="article-comparison" hidden><div class="compare-card"><h3>原稿</h3><pre id="article-original-preview"></pre></div><div class="compare-card"><h3>外部 AI 结果</h3><pre id="article-revised-preview"></pre></div></div>
-            <div class="field" style="margin-top:14px"><label class="field-label" for="article-review-feedback">你觉得改得怎么样？哪里成功或偏了？<span class="optional">选填</span></label><textarea id="article-review-feedback" class="reply-area" placeholder="例如：读起来更自然，但原文中的第二个步骤被删掉了"></textarea></div>
-             <div class="prompt-bottom"><small>复盘指令包含原稿、外部结果和你的评价；复制并发送给外部 AI 后，这些内容会离开本机</small><button class="button-secondary" id="build-article-review" type="button">生成复盘指令</button></div>
-             <div class="result-box" id="article-review-result">
-               <div class="field-label">交给 AI 的复盘指令</div>
-               <div class="prompt-box" id="article-review-prompt"></div>
-               <div class="notice" style="margin-top:14px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>复制前请确认：原稿和外部结果可能会离开本机发送给外部 AI；不要发送凭证、隐私或未公开资料。</span></div>
-               <div class="prompt-bottom"><small>复盘结论仍需你确认，不自动计入已验证案例</small><button class="button-secondary" id="copy-article-review" type="button">复制复盘指令</button></div>
-               <div class="extra-grid" style="margin-top:16px">
-                 <div class="wide"><div class="field-label">目标</div><div class="prompt-box" id="article-review-goal"></div></div>
-                 <div><div class="field-label">保留项</div><div class="prompt-box" id="article-review-preserve"></div></div>
-                 <div class="wide"><label class="field-label" for="article-review-evidence">证据（一行一项）</label><textarea id="article-review-evidence" class="reply-area" placeholder="逐项写出前后变化、具体句子、事实或行为证据"></textarea></div>
-                 <div><label class="field-label" for="article-review-label">建议标签</label><input id="article-review-label" type="text" placeholder="例如：待验证：缺少事实核对"></div>
-                 <div><label class="field-label" for="article-review-status">判断</label><select id="article-review-status"><option>待验证</option><option>成功</option><option>失败</option></select></div>
-                 <div class="wide"><label class="field-label" for="article-review-lessons">经验教训</label><textarea id="article-review-lessons" class="reply-area" placeholder="保留这次具体经验，不要泛化"></textarea></div>
-                 <div class="wide"><label class="field-label" for="article-review-next-prompt">下一条指令</label><textarea id="article-review-next-prompt" class="reply-area" placeholder="针对证据生成的下一条修正提示词"></textarea></div>
-               </div>
-               <div class="prompt-bottom"><small>只有点击“确认记录”才会写入本地 cases；“修改判断”不会自动确认</small><div class="button-row"><button class="button-secondary" id="edit-article-review" type="button">修改判断</button><button class="button-secondary" id="skip-article-review" type="button">暂不记录</button><button class="button-primary" id="confirm-article-review" type="button">确认记录</button></div></div>
-             </div>
-            <div class="prompt-bottom"><small>对照时重点核实：事实和数字是否保留、是否擅自补了经历、观点是否变了、是否改得太多。</small><button class="button-secondary" id="copy-article-revision">复制外部结果</button></div>
-          </article>
-          <details class="details" style="max-width:880px;margin-top:19px">
-            <summary><span>看看它会参考哪些写作规则</span><span class="summary-right">本地精简版<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span></summary>
-            <div class="notice" style="margin-top:0"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>先找“这句话具体哪里影响读者”，而不是机械删词。例如，“在快速发展的时代，AI 正发挥越来越重要的作用”可能缺少具体对象和信息；只有拿到文章主题、证据或作者经历后，才能补具体内容。保留原文的事实、数字、否定、条件和不确定性；清楚的句子不为追求“像人”而硬改。</span></div>
-          </details>
-        </section>
-
         <section class="view" id="view-social-research">
           <div class="eyebrow">只读研究工作台</div><h1>社媒研究</h1>
           <p class="lede">连接平台、确认研究计划，再查看可追溯结果。研究只读，不会自动发布内容。</p>
@@ -526,8 +463,10 @@
         <section class="view" id="view-prompt-agent">
           <div class="eyebrow">提示词 Agent</div><h1>把想法变成下一步</h1>
           <p class="lede">梳理目标、检查遗漏、规划步骤，并生成可交给其他 AI 的提示词。</p>
+          <div class="social-tools" role="group" aria-label="Agent 场景"><button type="button" class="button-secondary" data-agent-scene="task">任务梳理</button><button type="button" class="button-secondary" data-agent-scene="writing">写作工作台</button><button type="button" class="button-secondary" data-agent-scene="ppt">PPT 规划</button></div>
           <div id="prompt-agent-root" class="social-layout"></div>
-          <section class="social-layout" id="ppt-scene-root" aria-label="PPT 规划工作台"></section>
+          <section id="writing-workbench-root" class="social-layout" aria-label="统一写作工作台" hidden></section>
+          <section class="social-layout" id="ppt-scene-root" aria-label="PPT 规划工作台" hidden></section>
         </section>
 
         <section class="view" id="view-prompt-optimize">
@@ -752,6 +691,8 @@
   <script src="/prototype/ppt-scene-prompts.js"></script>
   <script src="/prototype/ppt-scene-coordinator.js"></script>
   <script src="/prototype/ppt-scene-ui.js"></script>
+  <script src="/prototype/writing-workbench-coordinator.js"></script>
+  <script src="/prototype/writing-workbench-ui.js"></script>
   <script src="/prototype/app.js"></script>
 </body>
 </html>
