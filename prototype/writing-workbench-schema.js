@@ -8,22 +8,27 @@
   const STYLE_PROFILE_SOURCES = Object.freeze(["sample", "user", "user-corrected", "mixed", "temporary"]);
   const STYLE_CONFIDENCE = Object.freeze(["low", "medium", "high"]);
   const MEMORY_SCOPES = Object.freeze(["general", "genre", "article"]);
+  const VERIFICATION_STATES = Object.freeze(["unverified", "source-reviewed", "user-confirmed"]);
   const TEXT_LIMIT = 500;
+  // 沿用正文上限；历史按数组顺序保留最近轮次，避免新改稿被旧记录挤掉。
+  const DRAFT_LIMIT = 8000;
+  const ROUND_LIMIT = 100;
 
   const ARTICLE_FIELDS = new Set([
-    "id", "title", "genre", "goal", "audience", "constraints",
+    "id", "title", "genre", "goal", "audience", "platform", "preserveItems", "dimensions", "constraints",
     "sourceArticleId", "draft", "saveEnabled", "styleProfileId",
     "createdAt", "updatedAt"
   ]);
   const MATERIAL_FIELDS = new Set(["id", "title", "purpose", "excerpt", "sourceArticleId"]);
+  const SOURCE_FIELDS = new Set(["title", "url", "excerpt", "purpose", "verificationStatus"]);
   const ROUND_FIELDS = new Set([
     "id", "articleId", "draft", "feedback", "userFeedback", "revisionNote",
-    "materials", "undo", "createdAt", "updatedAt"
+    "parentRoundId", "diagnosis", "prompt", "sources", "materials", "undo", "createdAt", "updatedAt"
   ]);
   const UNDO_FIELDS = new Set(["action", "memoryId", "roundId", "undoneAt"]);
   const STYLE_SAMPLE_FIELDS = new Set(["sourceArticleId", "excerpt", "features"]);
   const STYLE_PROFILE_FIELDS = new Set([
-    "id", "source", "confidence", "traits", "samples",
+    "id", "source", "confidence", "traits", "samples", "userCorrections", "scope", "genre",
     "sourceArticleIds", "createdAt", "updatedAt"
   ]);
   const MEMORY_FIELDS = new Set([
@@ -74,10 +79,13 @@
       genre: WRITING_GENRES.includes(source.genre) ? source.genre : (source.genre === undefined ? "article" : ""),
       goal: text(source.goal),
       audience: text(source.audience),
+      platform: text(source.platform, 160),
+      preserveItems: textList(source.preserveItems, 30),
+      dimensions: textList(source.dimensions, 8, 160),
       constraints: text(source.constraints),
       sourceArticleId: text(source.sourceArticleId, 100),
-      draft: text(source.draft, 8000),
-      saveEnabled: typeof source.saveEnabled === "boolean" ? source.saveEnabled : true,
+      draft: text(source.draft, DRAFT_LIMIT),
+      saveEnabled: source.saveEnabled === true,
       styleProfileId: text(source.styleProfileId, 100),
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
@@ -102,10 +110,16 @@
     const round = {
       id: text(source.id, 100),
       articleId: text(source.articleId, 100),
-      draft: text(source.draft, 8000),
+      parentRoundId: text(source.parentRoundId, 100),
+      draft: text(source.draft, DRAFT_LIMIT),
+      diagnosis: text(source.diagnosis, 4000),
+      prompt: text(source.prompt, 8000),
       feedback: text(source.feedback, 2000),
       userFeedback: text(source.userFeedback, 2000),
       revisionNote: text(source.revisionNote, 1000),
+      sources: Array.isArray(source.sources)
+        ? source.sources.slice(0, 20).map(normalizeWritingSource).filter(item => item.title || item.url || item.excerpt)
+        : [],
       materials: Array.isArray(source.materials)
         ? source.materials.slice(0, 20).map(normalizeWritingMaterial).filter(item => item.id || item.title || item.excerpt)
         : [],
@@ -114,6 +128,18 @@
       updatedAt: text(source.updatedAt, 80)
     };
     return Object.fromEntries(Object.entries(round).filter(([key]) => ROUND_FIELDS.has(key)));
+  }
+
+  function normalizeWritingSource(input) {
+    const source = isObject(input) ? input : {};
+    const entry = {
+      title: text(source.title, 160),
+      url: text(source.url, 2000),
+      excerpt: text(source.excerpt, 1200),
+      purpose: MATERIAL_PURPOSES.includes(source.purpose) ? source.purpose : "content",
+      verificationStatus: VERIFICATION_STATES.includes(source.verificationStatus) ? source.verificationStatus : "unverified"
+    };
+    return Object.fromEntries(Object.entries(entry).filter(([key]) => SOURCE_FIELDS.has(key)));
   }
 
   function normalizeWritingStyleSample(input) {
@@ -132,6 +158,9 @@
       id: text(source.id, 100),
       source: STYLE_PROFILE_SOURCES.includes(source.source) ? source.source : "",
       confidence: STYLE_CONFIDENCE.includes(source.confidence) ? source.confidence : "low",
+      userCorrections: text(source.userCorrections, 2000),
+      scope: MEMORY_SCOPES.includes(source.scope) ? source.scope : "article",
+      genre: WRITING_GENRES.includes(source.genre) ? source.genre : "",
       traits: textList(source.traits, 20, 160),
       samples: Array.isArray(source.samples)
         ? source.samples.slice(0, 5).map(normalizeWritingStyleSample).filter(item => item.sourceArticleId || item.excerpt || item.features.length)
@@ -170,7 +199,9 @@
       genre,
       article: normalizeWritingArticle(articleInput),
       rounds: Array.isArray(source.rounds)
-        ? source.rounds.slice(0, 10).map(normalizeWritingRound).filter(round => round.id || round.draft || round.feedback)
+        ? source.rounds.slice(-ROUND_LIMIT).map(normalizeWritingRound).filter(round => round.id || round.draft
+          || round.feedback || round.userFeedback || round.revisionNote || round.diagnosis || round.prompt
+          || round.sources.length || round.materials.length || Object.keys(round.undo).length)
         : [],
       styleProfile: normalizeWritingStyleProfile(source.styleProfile),
       styleProfiles: Array.isArray(source.styleProfiles)
