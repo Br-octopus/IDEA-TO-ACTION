@@ -3,6 +3,32 @@ const assert = require('node:assert/strict');
 const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
 const schema = require('../prototype/writing-workbench-schema.js');
 
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function realStorageSetup(extra = {}) {
+  const storage = require('../prototype/storage.js');
+  const data = new Map();
+  const memoryStorage = { getItem: name => data.get(name) ?? null, setItem: (name, value) => data.set(name, value) };
+  let state = storage.createEmptyState();
+  let beforeWrite;
+  let afterWrite;
+  let writes = 0;
+  const save = next => { writes++; state = storage.saveState(memoryStorage, next); return state; };
+  const dependencies = { getState: () => state, persistState(next) {
+    const wait = beforeWrite?.();
+    const write = () => { const result = save(next); const returned = afterWrite?.(); return returned ? returned.then(() => result) : result; };
+    return wait ? wait.then(write) : write();
+  }, ...extra };
+  return { c: createWritingWorkbenchCoordinator(dependencies), dependencies, state: () => state,
+    disk: () => JSON.parse(data.get(storage.STORAGE_KEY)), writes: () => writes,
+    delay: hook => { beforeWrite = hook; }, delayReturn: hook => { afterWrite = hook; },
+    importState: next => { state = storage.saveState(memoryStorage, next, { restoreWriting: true }); } };
+}
+
 function setup(extra = {}) {
   let state = { writingArticles: [], writingMemories: [], promptAgentTasks: [] };
   let fail = false;
@@ -351,4 +377,206 @@ test('updateArticle 风格更正超长抛错并保留会话原文，不写截断
   assert.deepEqual(state().writingArticles[0], before);
   await c.correctStyleProfile(a.id, '保留长句');
   assert.match(c.getRounds(a.id)[0].prompt, /保留长句/);
+});
+
+test('删除开始即失效资料和模型结果，延迟真实保存完成后不会复活文章', async () => {
+  const materials = deferred(), model = deferred(), entered = deferred(), release = deferred();
+  const env = realStorageSetup({ requestModel: () => model.promise,
+    promptAgentCoordinator: { selectMaterials: () => materials.promise } });
+  const { c } = env;
+  const a = await c.createArticle({ draft: '删除的正文', saveEnabled: true });
+  const selection = c.selectMaterials(a.id).then(() => null, e => e);
+  const diagnosis = c.runModelDiagnosis(a.id).then(() => null, e => e);
+  env.delay(() => { entered.resolve(); return release.promise; });
+  const deletion = c.deleteArticle(a.id, { confirmed: true });
+  await entered.promise;
+  materials.resolve([{ title: '迟到来源', excerpt: '迟到材料' }]);
+  model.resolve('迟到诊断');
+  await new Promise(resolve => setImmediate(resolve));
+  release.resolve();
+  await deletion;
+  const errors = await Promise.all([selection, diagnosis]);
+  await c.refreshFromStorage();
+  assert.deepEqual(errors.map(e => e?.code), ['STALE_RESULT', 'STALE_RESULT']);
+  assert.equal(env.disk().writingArticles.length, 0);
+  assert.throws(() => c.openArticle(a.id), { code: 'ARTICLE_NOT_FOUND' });
+});
+
+test('删除失败恢复会话可重试，已排队旧保存失效且不重写真实磁盘', async () => {
+  const entered = deferred(), release = deferred();
+  const env = realStorageSetup();
+  const { c } = env;
+  const a = await c.createArticle({ draft: '原稿', saveEnabled: true });
+  const before = env.writes();
+  let first = true;
+  env.delay(() => {
+    if (!first) return;
+    first = false; entered.resolve(); return release.promise;
+  });
+  const blocker = c.rememberPreference(a.id, { scope: 'general', preference: '保留事实' });
+  await entered.promise;
+  const queued = c.appendRound(a.id, { draft: '只保留会话的新稿' }).then(() => null, e => e);
+  const deletion = c.deleteArticle(a.id, { confirmed: true }).then(() => null, e => e);
+  env.delay(() => { throw new Error('删除失败'); });
+  release.resolve();
+  await blocker;
+  assert.equal((await deletion)?.code, 'PERSIST_FAILED');
+  assert.equal((await queued)?.code, 'STALE_RESULT');
+  assert.equal(env.writes(), before + 1);
+  assert.equal(env.disk().writingArticles[0].article.draft, '原稿');
+  assert.equal(c.getWorkspace(a.id).article.draft, '只保留会话的新稿');
+  env.delay(undefined);
+  await c.build(a.id);
+  assert.equal(env.disk().writingArticles[0].article.draft, '只保留会话的新稿');
+  await c.deleteArticle(a.id, { confirmed: true });
+  assert.equal(env.disk().writingArticles.length, 0);
+});
+
+test('导入刷新立即失效等待结果和排队保存，不覆盖真实导入稿', async () => {
+  const entered = deferred(), release = deferred(), selected = deferred(), model = deferred();
+  const env = realStorageSetup({ requestModel: () => model.promise,
+    promptAgentCoordinator: { selectMaterials: () => selected.promise } });
+  const { c } = env;
+  const a = await c.createArticle({ draft: '旧稿', saveEnabled: true });
+  const materialResult = c.selectMaterials(a.id).then(() => null, e => e);
+  const modelResult = c.runModelDiagnosis(a.id).then(() => null, e => e);
+  env.delayReturn(() => { entered.resolve(); return release.promise; });
+  const blocker = c.rememberPreference(a.id, { preference: '保留证据' });
+  await entered.promise;
+  const queued = c.appendRound(a.id, { draft: '排队旧稿' }).then(() => null, e => e);
+  const imported = structuredClone(env.state());
+  imported.writingArticles[0].article.draft = '导入新稿';
+  // 当前同步写入已发生，仅让回调延后返回；导入不能被队列里的旧快照覆盖。
+  env.importState(imported);
+  const refresh = c.refreshFromStorage();
+  selected.resolve([{ title: '旧资料', excerpt: '失效内容' }]);
+  model.resolve('失效模型结果');
+  release.resolve();
+  await blocker;
+  await refresh;
+  assert.equal((await queued)?.code, 'STALE_RESULT');
+  assert.equal((await materialResult)?.code, 'STALE_RESULT');
+  assert.equal((await modelResult)?.code, 'STALE_RESULT');
+  assert.equal(env.disk().writingArticles[0].article.draft, '导入新稿');
+  assert.equal(c.getWorkspace(a.id).article.draft, '导入新稿');
+});
+
+test('超长约束后模型入口拒绝发送和写入，异步返回也不能保存截断约束', async () => {
+  const response = deferred();
+  let calls = 0;
+  const env = realStorageSetup({ requestModel: () => { calls++; return response.promise; } });
+  const { c } = env;
+  const a = await c.createArticle({ draft: '正文', saveEnabled: true });
+  const pending = c.runModelDiagnosis(a.id);
+  const constraints = '甲'.repeat(500) + '绝不披露姓名';
+  const writes = env.writes();
+  await assert.rejects(c.updateArticle(a.id, { constraints }), RangeError);
+  response.resolve('旧输入的诊断');
+  await assert.rejects(pending, error => error instanceof RangeError || error.code === 'STALE_RESULT');
+  await assert.rejects(c.runModelDiagnosis(a.id), RangeError);
+  assert.equal(calls, 1);
+  assert.equal(env.writes(), writes);
+  assert.equal(c.getWorkspace(a.id).article.constraints, constraints);
+  assert.equal(env.disk().writingArticles[0].article.constraints, '');
+});
+
+test('失败原文不能被无关标题或部分风格补丁截断，显式精简后恢复', async () => {
+  const env = realStorageSetup();
+  const { c } = env;
+  const a = await c.createArticle({ draft: '正文', saveEnabled: true });
+  const constraints = '甲'.repeat(500) + '绝不披露姓名';
+  await assert.rejects(c.updateArticle(a.id, { constraints }), RangeError);
+  await assert.rejects(c.updateArticle(a.id, { title: '新标题', unknown: '丢弃' }), RangeError);
+  assert.equal(c.getWorkspace(a.id).article.constraints, constraints);
+  assert.equal(c.getWorkspace(a.id).article.title, '新标题');
+  assert.equal('unknown' in c.getWorkspace(a.id).article, false);
+  await c.updateArticle(a.id, { constraints: '不披露姓名' });
+  const draft = '稿'.repeat(8001), feedback = '反馈'.repeat(1001), corrections = '正'.repeat(2001);
+  await assert.rejects(c.appendRound(a.id, { draft, feedback, userCorrections: corrections }), RangeError);
+  await assert.rejects(c.updateArticle(a.id, { title: '保留原文', styleProfile: { confidence: 'medium' } }), RangeError);
+  let w = c.getWorkspace(a.id);
+  assert.equal(w.article.draft, draft);
+  assert.equal(w.rounds.at(-1).draft, draft);
+  assert.equal(w.rounds.at(-1).feedback, feedback);
+  assert.equal(w.styleProfile.userCorrections, corrections);
+  assert.equal(env.disk().writingArticles[0].rounds.length, 1);
+  await c.updateArticle(a.id, { draft: '精简稿', styleProfile: { userCorrections: '保留术语' } });
+  w = c.getWorkspace(a.id);
+  assert.equal(w.rounds.at(-2).feedback, feedback);
+  assert.equal(w.article.draft, '精简稿');
+  const saved = env.disk().writingArticles[0];
+  assert.equal(saved.rounds.length, 2);
+  assert.equal(saved.rounds.at(-1).parentRoundId, saved.rounds[0].id);
+  assert.equal(saved.rounds.some(r => r.draft.includes('稿'.repeat(8000)) || r.feedback.includes('反馈'.repeat(1000))), false);
+  assert.equal(saved.article.draft, '精简稿');
+});
+
+for (const scope of ['genre', 'general']) for (const action of ['edit', 'delete']) {
+  test(`显式${scope}记忆${action}后旧候选重启不复活且不压制其他偏好`, async () => {
+    const env = realStorageSetup();
+    const { c } = env;
+    const preference = { preference: '减少总结' };
+    const a = await c.createArticle({ preferences: [preference], saveEnabled: true, draft: '保密正文' });
+    const memory = await c.rememberPreference(a.id, { scope, preference: preference.preference });
+    const b = await c.createArticle({ preferences: [preference], saveEnabled: true });
+    if (action === 'edit') await c.editMemory(memory.id, { preference: '保留必要总结' });
+    else assert.equal((await c.deleteMemory(memory.id)).deleted, true);
+    const restarted = createWritingWorkbenchCoordinator(env.dependencies);
+    const round = await restarted.appendRound(b.id, {});
+    assert.equal(round.notifications.length, 0);
+    assert.equal(restarted.getRelevantMemories('article').some(m => m.preference === '减少总结'), false);
+    assert.equal(restarted.getRelevantMemories('novel').some(m => m.preference === '保留必要总结'), scope === 'general' && action === 'edit');
+    assert.equal(JSON.stringify(env.disk().writingMemories).includes('保密正文'), false);
+    await restarted.appendRound(a.id, { preferences: [{ preference: '多给实例' }] });
+    const promoted = await restarted.appendRound(b.id, { preferences: [{ preference: '多给实例' }] });
+    assert.equal(promoted.notifications.length, 1);
+  });
+}
+
+test('单篇记忆的编辑删除不扩大为跨文章候选抑制', async () => {
+  const env = realStorageSetup();
+  const a = await env.c.createArticle({ preferences: [{ preference: '使用短段落' }], saveEnabled: true });
+  const memory = await env.c.rememberPreference(a.id, { scope: 'article', preference: '使用短段落' });
+  await env.c.editMemory(memory.id, { preference: '本篇使用长段落' });
+  await env.c.deleteMemory(memory.id);
+  const restarted = createWritingWorkbenchCoordinator(env.dependencies);
+  const b = await restarted.createArticle({});
+  const result = await restarted.appendRound(b.id, { preferences: [{ preference: '使用短段落' }] });
+  assert.equal(result.notifications.length, 1);
+  assert.equal(restarted.getRelevantMemories('article', b.id)[0].preference, '使用短段落');
+});
+
+for (const change of ['新轮', '更正']) {
+  test(`旧轮资料等待期间${change}后只更新原轮，不覆盖最新风格`, async () => {
+    const selected = deferred();
+    const env = realStorageSetup({ promptAgentCoordinator: { selectMaterials: () => selected.promise } });
+    const { c } = env;
+    const a = await c.createArticle({ saveEnabled: true, materials: [{ id: 'old-style', purpose: 'style', excerpt: '旧。短。' }] });
+    const pending = c.selectMaterials(a.id);
+    if (change === '新轮') await c.appendRound(a.id, { materials: [{ id: 'new-style', purpose: 'style', excerpt: '新的样本使用明显更长的句子，保留完整解释和具体例子。' }] });
+    else await c.correctStyleProfile(a.id, '用户后来的更正优先');
+    const profile = c.getWorkspace(a.id).styleProfile;
+    selected.resolve([{ id: 'late-style', title: '迟到风格', purpose: 'style', excerpt: '迟。到。' }]);
+    const result = await pending;
+    assert.equal(result.roundId, a.rounds[0].id);
+    assert.equal(c.readRound(a.id, a.rounds[0].id).sources.length, 1);
+    assert.deepEqual(c.getWorkspace(a.id).styleProfile, profile);
+    assert.deepEqual(env.disk().writingArticles[0].styleProfile, profile);
+    const next = await c.appendRound(a.id, {});
+    assert.deepEqual(c.getWorkspace(a.id).styleProfile.traits, profile.traits);
+    if (change === '更正') assert.match(next.round.prompt, /用户后来的更正优先/);
+  });
+}
+
+test('旧轮模型等待期间更正风格后旧结果失效且不覆盖提示词', async () => {
+  const model = deferred();
+  const { c } = setup({ requestModel: () => model.promise });
+  const a = await c.createArticle({ draft: '首稿' });
+  const pending = c.runModelDiagnosis(a.id);
+  await c.appendRound(a.id, { draft: '新稿' });
+  await c.correctStyleProfile(a.id, '本次保持长句');
+  const before = c.getWorkspace(a.id);
+  model.resolve('更正前旧模型结果');
+  await assert.rejects(pending, { code: 'STALE_RESULT' });
+  assert.deepEqual(c.getWorkspace(a.id), before);
 });
