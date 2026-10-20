@@ -33,7 +33,7 @@
   ]);
   const MEMORY_FIELDS = new Set([
     "id", "scope", "genre", "articleId", "sourceArticleId",
-    "preference", "reason", "example", "counterexample", "evidenceArticleIds", "undo",
+    "preference", "reason", "example", "counterexample", "sourcePreferenceKey", "evidenceArticleIds", "undo",
     "createdAt", "updatedAt"
   ]);
   const WORKSPACE_FIELDS = new Set([
@@ -196,7 +196,7 @@
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
     };
-    for (const field of ["example", "counterexample"]) {
+    for (const field of ["example", "counterexample", "sourcePreferenceKey"]) {
       if (Object.prototype.hasOwnProperty.call(source, field)) memory[field] = text(source[field]);
     }
     return Object.fromEntries(Object.entries(memory).filter(([key]) => MEMORY_FIELDS.has(key)));

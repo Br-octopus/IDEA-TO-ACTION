@@ -265,3 +265,90 @@ test('UMD 浏览器导出可离线创建文章，读取副本不会污染会话'
   assert.ok((await c.build(a.id)).prompt.length <= 8000);
   await assert.rejects(c.runModelDiagnosis(a.id), { code: 'MODEL_UNAVAILABLE' });
 });
+
+test('选择资料保留手工内容和风格样本，合并来源共三条且重复选择不堆叠', async () => {
+  const { c } = setup({ promptAgentCoordinator: { selectMaterials: async () => [
+    { id: 'auto-1', title: '检索资料一', excerpt: '检索内容一' },
+    { id: 'auto-2', title: '检索资料二', excerpt: '检索内容二' }
+  ] } });
+  const a = await c.createArticle({ materials: [
+    { id: 'manual-content', title: '手工内容', purpose: 'content', excerpt: '保留的手工事实' },
+    { id: 'manual-style', title: '手工样本', purpose: 'style', excerpt: '短句。再一段。' }
+  ] });
+  await c.selectMaterials(a.id);
+  await c.selectMaterials(a.id);
+  const round = c.getRounds(a.id)[0];
+  assert.deepEqual(round.materials, a.rounds[0].materials);
+  assert.equal(round.sources.length, 1);
+  assert.match(round.prompt, /保留的手工事实/);
+  assert.match(round.prompt, /手工样本/);
+  assert.match(round.prompt, /检索资料一/);
+  assert.doesNotMatch(round.prompt, /检索资料二/);
+  assert.equal(c.getWorkspace(a.id).styleProfile.source, 'sample');
+  const b = await c.createArticle({ materials: a.rounds[0].materials,
+    sources: [{ title: '手工来源', excerpt: '用户指定来源', purpose: 'content' }] });
+  await c.selectMaterials(b.id);
+  assert.deepEqual(c.getRounds(b.id)[0].sources, b.rounds[0].sources);
+});
+
+test('改变目标和维度刷新已保存初检，显式初检替换模型结果，失败保留当前初检', async () => {
+  let fail = false;
+  const { c, state } = setup({ requestModel: async () => { if (fail) throw new Error('断网'); return '旧目标下的模型诊断'; } });
+  const a = await c.createArticle({ goal: '旧目标', dimensions: ['语言表达'], draft: '非常重要。', saveEnabled: true });
+  await c.updateArticle(a.id, { goal: '新目标', dimensions: ['事实依据'] });
+  let round = c.getRounds(a.id)[0];
+  assert.match(round.diagnosis, /事实依据/);
+  assert.doesNotMatch(round.diagnosis, /语言表达/);
+  assert.match(round.prompt, /新目标/);
+  assert.deepEqual(state().writingArticles[0].rounds[0], round);
+  await c.runModelDiagnosis(a.id);
+  assert.equal(c.getRounds(a.id)[0].diagnosis, '旧目标下的模型诊断');
+  const built = await c.diagnose(a.id);
+  assert.match(built.diagnosis, /^本地规则初检/);
+  assert.doesNotMatch(built.prompt, /旧目标下的模型诊断/);
+  fail = true;
+  const before = c.getWorkspace(a.id);
+  await assert.rejects(c.runModelDiagnosis(a.id), { code: 'MODEL_FAILED', diagnosisCurrent: false });
+  assert.deepEqual(c.getWorkspace(a.id), before);
+  await c.updateArticle(a.id, { dimensions: ['语言表达'] });
+  round = c.getRounds(a.id)[0];
+  assert.match(round.diagnosis, /语言表达/);
+  fail = false;
+  await c.runModelDiagnosis(a.id);
+  await c.updateArticle(a.id, { goal: '再次改目标', dimensions: ['逻辑结构'] });
+  assert.match(c.getRounds(a.id)[0].diagnosis, /^本地规则初检[\s\S]*逻辑结构/);
+  assert.doesNotMatch(c.getRounds(a.id)[0].prompt, /旧目标下的模型诊断/);
+});
+
+test('编辑自动记忆替代原候选，重启或删除后不从旧候选复活', async () => {
+  const { c, state } = setup();
+  const preference = { preference: '减少总结' };
+  const a = await c.createArticle({ preferences: [preference], saveEnabled: true });
+  const b = await c.createArticle({ preferences: [preference], saveEnabled: true });
+  const original = c.getRelevantMemories('article')[0];
+  await c.editMemory(original.id, { preference: '保留必要总结' });
+  let result = await c.appendRound(a.id, {});
+  assert.equal(result.notifications.length, 0);
+  assert.deepEqual(c.getRelevantMemories('article').map(m => m.preference), ['保留必要总结']);
+  const restarted = createWritingWorkbenchCoordinator({ getState: state, persistState: next => Object.assign(state(), next) });
+  result = await restarted.appendRound(b.id, {});
+  assert.equal(result.notifications.length, 0);
+  assert.equal(state().writingMemories.length, 1);
+  assert.equal(restarted.getRelevantMemories('article')[0].id, original.id);
+  await restarted.deleteMemory(original.id);
+  await restarted.refreshFromStorage();
+  await restarted.appendRound(a.id, {});
+  assert.equal(restarted.getRelevantMemories('article').length, 0);
+});
+
+test('updateArticle 风格更正超长抛错并保留会话原文，不写截断结果', async () => {
+  const { c, state } = setup();
+  const a = await c.createArticle({ draft: '正文', saveEnabled: true });
+  const before = structuredClone(state().writingArticles[0]);
+  const corrections = '更'.repeat(2100);
+  await assert.rejects(c.updateArticle(a.id, { styleProfile: { userCorrections: corrections } }), RangeError);
+  assert.equal(c.getWorkspace(a.id).styleProfile.userCorrections, corrections);
+  assert.deepEqual(state().writingArticles[0], before);
+  await c.correctStyleProfile(a.id, '保留长句');
+  assert.match(c.getRounds(a.id)[0].prompt, /保留长句/);
+});
