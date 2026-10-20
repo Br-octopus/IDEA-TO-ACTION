@@ -52,13 +52,14 @@
     const sourceEntries = [...round.sources.map((s, i) => ({ ...s, id: `round-source-${i + 1}` })),
       ...sources.map((s, i) => ({ ...s, id: `source-${i + 1}` }))];
     const materials = [...round.materials, ...sourceEntries];
+    const selectedSources = materials.slice(0, 3).map((entry, i) => ({ ...entry, reference: `S${i + 1}` }));
     const profile = workspace.styleProfile;
-    const sampleMaterials = profile.samples.filter(s => s.excerpt).map((s, i) => ({
+    const applicableProfile = profile.scope === 'general' || (profile.scope === 'genre'
+      && profile.genre === 'article' && workspace.article.genre === 'article') || profile.scope === 'article';
+    const sampleMaterials = (applicableProfile ? profile.samples : []).filter(s => s.excerpt).map((s, i) => ({
       id: `profile-${i + 1}`, sourceArticleId: s.sourceArticleId, purpose: 'style', excerpt: s.excerpt
     }));
-    const derived = deriveWritingStyleProfile([...materials, ...sampleMaterials], { userCorrections: profile.userCorrections });
-    const applicableProfile = profile.scope === 'general' || (profile.scope === 'genre' && profile.genre === workspace.article.genre)
-      || profile.scope === 'article';
+    const derived = deriveWritingStyleProfile([...materials, ...sampleMaterials], { userCorrections: applicableProfile ? profile.userCorrections : '' });
     // 明确传入的文字偏好保留为偏好；原始样本一律重新统计，不能序列化整个档案。
     const style = applicableProfile ? { ...derived,
       source: profile.userCorrections ? 'user-corrected' : derived.samples.length ? 'sample' : profile.source || 'temporary',
@@ -71,7 +72,7 @@
       || (m.scope === 'genre' && m.genre && m.genre === workspace.article.genre)
     )).sort((a, b) => ({ article: 0, genre: 1, general: 2 }[a.scope] - { article: 0, genre: 1, general: 2 }[b.scope]));
     const selected = workspace.article.dimensions.filter(d => DIMENSIONS.includes(d));
-    return { ...workspace, round, materials, sourceEntries, style, memories: memories.slice(0, 3),
+    return { ...workspace, round, materials, selectedSources, style, memories: memories.slice(0, 3),
       dimensions: selected.length ? selected : DIMENSIONS,
       counts: {
         sources: list(source.sources).length + list(object(source.round).sources).length + list(object(source.round).materials).length,
@@ -97,12 +98,15 @@
       'source-reviewed': '来源已审阅，不代表独立验证',
       unverified: '未核验，内容待核实'
     };
-    const url = /^https?:\/\/[^\s/?#]+(?:[/?#][^\s]*)?$/iu.test(entry.url)
-      ? summary(entry.url, 240) : entry.url ? '非HTTP(S)或无效URL已省略' : '未提供';
-    return [`来源ID：${entry.id}；用途：${entry.purpose}`,
+    const rawUrl = entry.url || '';
+    const verificationStatus = entry.verificationStatus || 'unverified';
+    const url = /^https?:\/\/[^\s/?#]+(?:[/?#][^\s]*)?$/iu.test(rawUrl)
+      ? summary(rawUrl, 240) : rawUrl ? '非HTTP(S)或无效URL已省略' : '未提供';
+    return [`来源[${entry.reference}]；来源ID：${entry.id || '未提供'}；用途：${entry.purpose}`,
+      ...(entry.sourceArticleId ? [`来源文章ID：${entry.sourceArticleId}`] : []),
       `来源标题：${summary(entry.title, 80) || '未提供'}`,
       `来源URL：${url}`,
-      `来源状态：${entry.verificationStatus}（${status[entry.verificationStatus]}）`].join('\n');
+      `来源状态：${verificationStatus}（${status[verificationStatus]}）`].join('\n');
   }
   function build(input, revision) {
     const data = normalize(input);
@@ -111,16 +115,18 @@
     const header = revision
       ? '交给外部 AI 的下一轮写作指令。本工具只生成提示词；外部 AI 可依据本指令执行修改并输出修改稿。请保留目标、成功标准、保留项、反馈、前轮诊断和风格，勿擅增事实。'
       : '你负责诊断当前稿件。不得直接改写文章或产出文章成品。逐项引用具体句段，给出观察、影响、方向、优先级；方向描述修改意图，不提供替换正文。未确定项写待核实。';
-    const content = data.materials.filter(m => ['content', 'both'].includes(m.purpose) && m.excerpt);
+    const content = data.selectedSources.filter(m => ['content', 'both'].includes(m.purpose) && m.excerpt);
     const historical = data.rounds.filter(h => h !== r && (!r.id || h.id !== r.id)).slice(-2);
     const fixed = [header, COMMON,
-      `来源元数据：选取${Math.min(data.sourceEntries.length, 3)}/${data.sourceEntries.length}条，其余省略；标题≤80字、HTTP(S) URL≤240字，标记摘要时须核对完整地址。`,
-      ...data.sourceEntries.slice(0, 3).map(sourceMetadata), `本轮诊断维度：${data.dimensions.join('、')}`,
+      `来源元数据：选取${data.selectedSources.length}/${data.materials.length}条，其余省略；标题≤80字、HTTP(S) URL≤240字，标记摘要时须核对完整地址。`,
+      ...data.selectedSources.map(sourceMetadata), `本轮诊断维度：${data.dimensions.join('、')}`,
       `关键约束：${a.constraints || '未提供'}`,
+      `用户风格更正（优先于样本）：${data.style.userCorrections || '未提供'}`,
       `当前反馈：${r.feedback || '未提供'}`, `当前用户反馈：${r.userFeedback || '未提供'}`,
       `选取摘要：内容来源${Math.min(content.length, 3)}/${content.length}条；记忆${data.memories.length}/${data.counts.memories}条；旧轮次${historical.length}/${data.counts.rounds}条。未纳入的来源、记忆和旧稿不自动加载；不加载完整资料库。输入正文${data.counts.draft}字，规范化最多保留8000字。`,
       `风格依据：${data.style.source}，置信度${data.style.confidence}，仅形式统计；${data.style.samples.length || data.memories.length || data.style.userCorrections || data.style.source === 'user' ? '偏好仍须结合当前目标核实' : '无样本/适用记忆，临时建议，不当作稳定风格'}`
     ].join('\n');
+    if (fixed.length > 8000) throw new RangeError('关键上下文超过8000字，请精简后重试');
     const cells = [];
     function add(label, value, weight = 1, minimum = 12) {
       if (value) cells.push({ label: label.length > 24 ? label.slice(0, 23) + '…' : label, value, weight, minimum: Math.min(value.length, minimum) });
@@ -131,7 +137,6 @@
     add('标题', a.title);
     a.successCriteria.forEach((s, i) => add(`成功标准${i + 1}`, s, 2, 24));
     a.preserveItems.forEach((s, i) => add(`保留项${i + 1}`, s, 2, 24));
-    add('用户风格更正（优先于样本）', data.style.userCorrections, 4, 30);
     add('风格特征', data.style.traits.join('；'), 2, 60);
     data.style.samples.forEach(s => add('风格样本来源', s.sourceArticleId, 1, 20));
     add('档案来源ID', data.style.sourceArticleIds.join('、'));
@@ -142,7 +147,7 @@
       add(`前轮${i + 1}反馈`, [h.feedback, h.userFeedback].filter(Boolean).join('；'));
     });
     data.memories.forEach(m => add(`适用记忆摘要[${m.id || m.scope}]`, m.preference, 1, 20));
-    content.slice(0, 3).forEach((m, i) => add(`内容来源[${m.sourceArticleId || m.id || i + 1};${m.purpose};待核实]`, m.excerpt, 2, 30));
+    content.forEach(m => add(`内容来源[${m.reference}]`, m.excerpt, 2, 30));
     add('当前稿（截取摘要时须核对原文）', r.draft || a.draft, 6, 60);
     // 先为每个字段留位置，再分配剩余预算；最新反馈和关键约束独立保留，不切提示词末尾。
     const sizes = cells.map(c => c.minimum);

@@ -149,7 +149,7 @@ test('页面脚本 schema 早于 storage，prompts 早于 coordinator，移除 N
   assert.doesNotMatch(html, /<script[^>]+src=["']\/prototype\/local-source-index\.js/);
 });
 
-test('所有白名单字段同时满额时仍不超过8000，纠正、反馈和约束完整保留', () => {
+test('满额强约束超限明确报错，精简反馈后完整保留更正和约束', () => {
   const fill = '长'.repeat(20000);
   const input = { article: { title: fill, goal: fill, audience: fill, platform: fill, constraints: fill,
     draft: fill, successCriteria: Array(20).fill(fill), preserveItems: Array(30).fill(fill) },
@@ -159,11 +159,13 @@ test('所有白名单字段同时满额时仍不超过8000，纠正、反馈和�
     memories: Array(30).fill({ id: fill, preference: fill }),
     rounds: Array(100).fill({ diagnosis: fill, feedback: fill, userFeedback: fill }) };
   for (const build of [diagnose, revise]) {
-    const prompt = build(input);
+    assert.throws(() => build(input), error => error instanceof RangeError && /8000.*精简/.test(error.message));
+    const prompt = build({ ...input, round: { ...input.round, feedback: '长'.repeat(1000), userFeedback: '长'.repeat(1000) } });
     assert.ok(prompt.length <= 8000, prompt.length);
     assert.ok(prompt.includes(`关键约束：${'长'.repeat(500)}`));
-    assert.ok(prompt.includes(`当前反馈：${'长'.repeat(2000)}`));
-    assert.ok(prompt.includes(`当前用户反馈：${'长'.repeat(2000)}`));
+    assert.ok(prompt.includes(`当前反馈：${'长'.repeat(1000)}`));
+    assert.ok(prompt.includes(`当前用户反馈：${'长'.repeat(1000)}`));
+    assert.ok(prompt.includes('用户风格更正（优先于样本）：' + '长'.repeat(2000)));
     assert.ok(prompt.includes('省略') || prompt.includes('未纳入'));
   }
 });
@@ -211,5 +213,57 @@ test('来源元数据单独预算，极长标题和链接仍不挤掉状态、�
     assert.ok(prompt.includes('当前用户反馈：' + '用户'.repeat(1000)));
     assert.ok(prompt.includes('关键约束：' + '关键'.repeat(250)));
     assert.doesNotMatch(prompt, /公告3/);
+  }
+});
+
+test('不适用文体档案先隔离样本和更正，本轮风格材料仍可使用', () => {
+  for (const build of [diagnose, revise]) {
+    for (const [genre, profileGenre] of [['article', 'novel'], ['novel', 'article'], ['novel', 'novel']]) {
+      const input = { article: { genre }, styleProfile: { scope: 'genre', genre: profileGenre,
+        userCorrections: '跨文体更正不得出现', traits: ['跨文体偏好不得出现'], sourceArticleIds: ['foreign-style'],
+        samples: [{ sourceArticleId: 'foreign-sample', excerpt: '长段样本！但是请勿借用。' }] } };
+      const prompt = build(input);
+      assert.doesNotMatch(prompt, /跨文体|foreign-style|foreign-sample|user-corrected/);
+      assert.match(prompt, /temporary/);
+      input.round = { materials: [material('style', '本次样本。短句。', 'current-style')] };
+      const current = build(input);
+      assert.match(current, /source-current-style/);
+      assert.doesNotMatch(current, /跨文体|foreign-style|foreign-sample/);
+    }
+  }
+});
+
+test('完整保留用户更正尾部强约束，超出固定预算明确要求精简', () => {
+  const corrections = '风格'.repeat(240) + '禁止删除结论';
+  const input = { article: { draft: '正文'.repeat(4000), successCriteria: Array(20).fill('标准'.repeat(250)),
+    preserveItems: Array(30).fill('保留'.repeat(250)) }, styleProfile: { userCorrections: corrections } };
+  for (const build of [diagnose, revise]) {
+    const prompt = build(input);
+    assert.ok(prompt.includes(corrections));
+    assert.ok(prompt.length <= 8000);
+    const overloaded = { ...input, article: { ...input.article, constraints: '约束'.repeat(250) },
+      styleProfile: { userCorrections: '更正'.repeat(1000) },
+      round: { feedback: '反馈'.repeat(1000), userFeedback: '用户'.repeat(1000), sources: Array.from({ length: 3 }, () => ({
+        title: '标题'.repeat(80), url: 'https://example.org/' + 'path'.repeat(100), purpose: 'content', excerpt: '证据'
+      })) } };
+    assert.throws(() => build(overloaded), error => error instanceof RangeError && /8000.*精简/.test(error.message));
+  }
+});
+
+test('近似UUID材料使用S序号并在元数据中保留原ID，内容和元数据同一选集', () => {
+  const ids = ['12345678-abcd-1234-abcd-000000000001', '12345678-abcd-1234-abcd-000000000002'];
+  for (const build of [diagnose, revise]) {
+    const prompt = build({ round: { materials: ids.map((id, i) => ({ id, title: `材料标题${i}`,
+      sourceArticleId: `原文章${i}`, purpose: 'content', excerpt: `证据句${i}` })) } });
+    ids.forEach((id, i) => {
+      assert.ok(prompt.includes(id));
+      assert.ok(prompt.includes(`原文章${i}`));
+      assert.match(prompt, new RegExp(`内容来源\\[S${i + 1}\\]：证据句${i}`));
+      assert.match(prompt, new RegExp(`来源\\[S${i + 1}\\]`));
+    });
+    const excluded = build({ round: { sources: [0, 1, 2].map(i => ({ purpose: 'style', title: `样本${i}`, excerpt: '隔离的样本观点。' }))
+      .concat({ purpose: 'content', title: '第四条标题', excerpt: '第四条脱离元数据的内容' }) } });
+    assert.doesNotMatch(excluded, /第四条标题|第四条脱离元数据的内容|隔离的样本观点/);
+    assert.match(excluded, /选取3\/4/);
   }
 });
