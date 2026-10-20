@@ -428,8 +428,12 @@
       }
       return notifications;
     }
-    async function refreshFromStorage() {
-      sessions.clear(); modelRuns.clear();
+    async function refreshFromStorage(options = {}) {
+      // 合并保留尚未落盘的会话，但导入前的异步结果和排队保存仍必须失效。
+      if (options.preserveSessions) {
+        for (const w of sessions.values()) sessionVersions.set(w, {});
+      } else sessions.clear();
+      modelRuns.clear();
       await persistence;
       memories.clear(); pendingMemories.clear(); loadMemories();
       return listArticles();
