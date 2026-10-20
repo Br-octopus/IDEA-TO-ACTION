@@ -5,6 +5,33 @@ const { createWritingWorkbenchCoordinator } = require('../prototype/writing-work
 const storage = require('../prototype/storage.js');
 const { createWritingWorkbenchUI } = require('../prototype/writing-workbench-ui.js');
 
+test('UMD界面从schema配置读取名称、目标标签、维度和说明，选择维度实际进入诊断', async () => {
+  const vm = require('node:vm');
+  const { readFileSync } = require('node:fs');
+  const schema = require('../prototype/writing-workbench-schema.js');
+  const config = { name: '配置文章名', applicability: '适用范围哨兵',
+    targetFields: { title: '标题', goal: '配置目标标签', audience: '读者', platform: '平台', successCriteria: '成功标准', preserveItems: '保留项', constraints: '限制条件' },
+    checkDimensions: ['事实依据'], riskReminders: ['风险提醒哨兵'], styleBaseline: ['风格建议哨兵'], memoryNamespace: '内部记忆标识哨兵' };
+  const context = vm.createContext({ WritingWorkbenchSchema: { ...schema, getWritingGenreConfig: genre => genre === 'article' ? config : null } });
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-workbench-ui.js'), 'utf8'), context);
+  const dom = createWritingDOM();
+  const coordinator = createWritingWorkbenchCoordinator();
+  context.WritingWorkbenchUI.createWritingWorkbenchUI({ document: dom.document, coordinator, getState: () => ({}) });
+  assert.equal(dom.node('writing-genre').value, config.name);
+  assert.deepEqual(dom.mount.querySelectorAll('[data-writing-dimension]').map(n => n.dataset.writingDimension), ['事实依据']);
+  for (const text of ['配置目标标签', '适用范围哨兵', '风险提醒哨兵', '风格建议哨兵']) assert.ok(dom.mount.innerHTML.includes(text), text);
+  assert.ok(!dom.mount.innerHTML.includes('内部记忆标识哨兵'));
+  await dom.change('writing-dimension-0', true);
+  await dom.input('writing-goal', '配置目标输入');
+  await dom.click('create');
+  const article = coordinator.listArticles()[0];
+  assert.equal(article.genre, 'article');
+  assert.equal(article.goal, '配置目标输入');
+  assert.deepEqual(article.dimensions, ['事实依据']);
+  assert.ok(dom.node('writing-diagnosis').value.includes('事实依据'));
+  assert.ok(!dom.node('writing-diagnosis').value.includes('语言表达：'));
+});
+
 function fixture(options = {}) {
   const dom = createWritingDOM();
   let state = storage.createEmptyState();
