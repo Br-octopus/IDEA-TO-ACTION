@@ -9,10 +9,11 @@ function createWritingApp(options = {}) {
   const dom = createWritingDOM();
   const elements = new Map();
   const listeners = new Map();
+  const clicks = [];
   const makeElement = id => ({ id, value: '', textContent: '', innerHTML: '', hidden: false, checked: false, disabled: false, dataset: {}, style: {},
     classList: { add() {}, remove() {}, toggle() {} },
     addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
-    querySelectorAll() { return []; }, querySelector() { return element('send-risk-checkbox'); }, setAttribute() {}, scrollIntoView() {}, focus() {}, click() {}, select() {}, remove() {} });
+    querySelectorAll() { return []; }, querySelector() { return element('send-risk-checkbox'); }, setAttribute() {}, scrollIntoView() {}, focus() {}, click() { clicks.push(id); }, select() {}, remove() {} });
   const element = id => { if (!elements.has(id)) elements.set(id, makeElement(id)); return elements.get(id); };
   const scenes = ['task', 'writing', 'ppt'].map(scene => Object.assign(element(`scene-${scene}`), { dataset: { agentScene: scene } }));
   const nav = ['article', 'prompt-agent'].map(view => Object.assign(element(`nav-${view}`), { dataset: { view } }));
@@ -24,6 +25,7 @@ function createWritingApp(options = {}) {
   let failSave = false;
   let requests = 0;
   let writes = 0;
+  const exports = [];
   const disk = new Map();
   let state = options.initialState || storage.createEmptyState();
   let coordinator;
@@ -40,14 +42,18 @@ function createWritingApp(options = {}) {
     ForwardStepPromptAgentUI: { createPromptAgentUI: () => ({ render() {} }), createPromptAgentScenes: promptUI.createPromptAgentScenes },
     WritingWorkbenchCoordinator: { createWritingWorkbenchCoordinator(deps) { coordinator = coordinatorAPI.createWritingWorkbenchCoordinator(deps); return coordinator; } },
     WritingWorkbenchUI: require('../../prototype/writing-workbench-ui.js'),
-    desktopApi: { getConfig: async () => ({ model: { configured: true, name: '测试模型' }, search: {} }), requestModel: async () => { requests++; return { text: '真实预览确认后的模型诊断' }; }, importBackup: async () => backupRaw, exportBackup: async () => ({ saved: true }) },
+    desktopApi: { getConfig: async () => ({ model: { configured: true, name: '测试模型' }, search: {} }), requestModel: async () => { requests++; return { text: '真实预览确认后的模型诊断' }; }, importBackup: async () => backupRaw, exportBackup: async content => {
+      exports.push(JSON.parse(content));
+      return options.exportBackup ? options.exportBackup(content) : { canceled: false, filePath: 'C:/backups/workspace.json' };
+    } },
     confirm: message => options.confirm ? options.confirm(message) : true,
     scrollTo() {}
   };
   const context = { window, document, localStorage, navigator: { clipboard: { writeText: async () => {} } }, crypto: globalThis.crypto,
-    fetch: async () => ({ ok: true, json: async () => ({}) }), setTimeout: () => 1, clearTimeout() {}, Date, console };
+    fetch: async () => ({ ok: true, json: async () => ({}) }), setTimeout: () => 1, clearTimeout() {}, Date, console, URL, Blob };
+  if (options.browser) delete window.desktopApi;
   vm.runInNewContext(fs.readFileSync(require.resolve('../../prototype/app.js'), 'utf8'), context);
-  return { ...dom, window, element, listeners, get coordinator() { return coordinator; }, get state() { return state; }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
+  return { ...dom, window, element, listeners, exports, clicks, get coordinator() { return coordinator; }, get state() { return state; }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
     async import(backup) { backupRaw = JSON.stringify(backup); await listeners.get('knowledge-import-open:click')(); },
     event(id, type = 'click', event = {}) { return listeners.get(`${id}:${type}`)?.({ target: element(id), preventDefault() {}, ...event }); } };
 }

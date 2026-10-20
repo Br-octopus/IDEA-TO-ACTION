@@ -2889,15 +2889,20 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     refreshKnowledgeView();
     toast("已保存资料摘要");
   }
-  knowledgeForm.addEventListener("submit", saveKnowledgeEntry);  async function exportKnowledgeBackup(scope) {
+  knowledgeForm.addEventListener("submit", saveKnowledgeEntry);
+  async function exportKnowledgeBackup(scope) {
     if (!workspaceBackup) { toast("备份功能暂不可用"); return; }
     try {
       const backup = workspaceBackup.createBackup(state, { scope, now: new Date().toISOString() });
       const content = JSON.stringify(backup, null, 2);
       if (desktopApi?.exportBackup) {
+<<<<<<< HEAD
         const result = await desktopApi.exportBackup(scope === "workspace"
           ? { format: "workspace-archive", content, attachmentIds: (backup.data.researchAttachments || []).map(item => item.id) }
           : content);
+=======
+        const result = await desktopApi.exportBackup(content);
+>>>>>>> bf09a6d (fix: 接通备份导出并修复浏览器导入门禁)
         if (result?.canceled) { toast("已取消导出"); return; }
       }
       else {
@@ -2908,6 +2913,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       toast("备份已导出");
     } catch (error) { toast(`导出失败：${error.message || "备份无效"}`); }
   }
+  document.getElementById("knowledge-export-open").addEventListener("click", () => exportKnowledgeBackup(document.getElementById("knowledge-export-scope").value));
   async function createSafetyBackup() {
     const backup = workspaceBackup.createBackup(state, { scope: "workspace", now: new Date().toISOString() });
     const content = JSON.stringify(backup, null, 2);
@@ -2924,8 +2930,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     confirmBrowserSafetyBackup(window.confirm);
     return { browser: true };
   }
-  async function importBackupContent(raw, importGate) {
-    if (!desktopApi) consumeBrowserImportGate(importGate);
+<<<<<<< HEAD
+  async function importBackupContent(raw) {
     const archiveStage = raw && typeof raw === "object" && raw.format === "workspace-archive" ? raw : null;
     let transactionId = "";
     try {
@@ -3000,6 +3006,20 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       if (archiveStage && !transactionId) await desktopApi?.discardBackupImport?.(archiveStage.stageId).catch(() => {});
       throw error;
     }
+=======
+  async function importBackupContent(raw) {
+    const backup = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const summary = workspaceBackup.getBackupSummary(backup);
+    const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料、${summary.counts.writingArticles || 0} 篇文章、${summary.counts.writingMemories || 0} 条写作记忆。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
+    const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, backup) } : workspaceBackup.mergeState(state, backup);
+    persistWorkbenchState(result.state, { restoreWriting: true });
+    if (summary.scope === "workspace") {
+      await writingCoordinator?.refreshFromStorage();
+      window.WritingWorkbenchUIController?.refreshFromStorage();
+    } else window.WritingWorkbenchUIController?.render();
+    renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
+    toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}`);
+>>>>>>> bf09a6d (fix: 接通备份导出并修复浏览器导入门禁)
   }
   async function importKnowledgeBackup() {
     if (!workspaceBackup) { toast("备份功能暂不可用"); return; }
@@ -3017,7 +3037,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); }
   }
   document.getElementById("knowledge-import-open").addEventListener("click", importKnowledgeBackup);
-  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; const importGate = browserImportGate; browserImportGate = null; try { consumeBrowserImportGate(importGate); await importBackupContent(await file.text(), importGate); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { event.target.value = ""; } });
+  // 浏览器令牌只在文件入口消费一次，且必须先于读取文件；导入函数复用桌面路径。
+  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; const importGate = browserImportGate; browserImportGate = null; try { consumeBrowserImportGate(importGate); await importBackupContent(await file.text()); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { event.target.value = ""; } });
   document.getElementById("knowledge-bulk-hide").addEventListener("click", () => { state.knowledgeSelection.forEach(id => { state = hideKnowledgeEntry(state, id); }); persist(); refreshKnowledgeView(); });
   document.getElementById("knowledge-bulk-delete").addEventListener("click", () => { state = deleteKnowledgeEntries(state, state.knowledgeSelection); persist(); refreshKnowledgeView(); });
   renderCaseProjectOptions();
