@@ -3,7 +3,6 @@
   else root.WritingWorkbenchPrompts = factory(root.WritingWorkbenchSchema);
 })(typeof globalThis === 'undefined' ? this : globalThis, function (schema) {
   'use strict';
-  const DIMENSIONS = ['目标读者', '事实依据', '逻辑结构', '语言表达', '风格修辞', '术语一致', '格式排版', '约束风险'];
   const PRIORITY = '当前用户要求 > 样本/用户更正 > 适用记忆 > 平台基线 > 临时判断';
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const list = value => Array.isArray(value) ? value : [];
@@ -45,6 +44,8 @@
   function normalize(input) {
     const source = object(input);
     const workspace = schema.normalizeWritingWorkspace(source);
+    const config = schema.getWritingGenreConfig(workspace.article.genre);
+    const dimensions = config?.checkDimensions || [];
     const hasRound = source.round !== undefined && source.round !== null;
     const round = hasRound ? schema.normalizeWritingRound(source.round)
       : workspace.rounds.at(-1) || schema.normalizeWritingRound({});
@@ -55,7 +56,7 @@
     const selectedSources = materials.slice(0, 3).map((entry, i) => ({ ...entry, reference: `S${i + 1}` }));
     const profile = workspace.styleProfile;
     const applicableProfile = profile.scope === 'general' || (profile.scope === 'genre'
-      && profile.genre === 'article' && workspace.article.genre === 'article') || profile.scope === 'article';
+      && config && profile.genre === config.memoryNamespace) || profile.scope === 'article';
     const sampleMaterials = (applicableProfile ? profile.samples : []).filter(s => s.excerpt).map((s, i) => ({
       id: `profile-${i + 1}`, sourceArticleId: s.sourceArticleId, purpose: 'style', excerpt: s.excerpt
     }));
@@ -68,12 +69,12 @@
       sourceArticleIds: [...new Set([...derived.sourceArticleIds, ...profile.sourceArticleIds])]
     } : derived;
     const memories = workspace.memories.filter(m => m.preference && !m.undo.undoneAt && (
-      m.scope === 'general' || (m.scope === 'article' && m.articleId && m.articleId === workspace.article.id)
-      || (m.scope === 'genre' && m.genre && m.genre === workspace.article.genre)
+      m.scope === 'general' || (config && (m.scope === 'article' && m.articleId && m.articleId === workspace.article.id
+      || m.scope === 'genre' && m.genre === config.memoryNamespace))
     )).sort((a, b) => ({ article: 0, genre: 1, general: 2 }[a.scope] - { article: 0, genre: 1, general: 2 }[b.scope]));
-    const selected = workspace.article.dimensions.filter(d => DIMENSIONS.includes(d));
-    return { ...workspace, round, materials, selectedSources, style, memories: memories.slice(0, 3),
-      dimensions: selected.length ? selected : DIMENSIONS,
+    const selected = workspace.article.dimensions.filter(d => dimensions.includes(d));
+    return { ...workspace, config, round, materials, selectedSources, style, memories: memories.slice(0, 3),
+      dimensions: selected.length ? selected : dimensions,
       counts: {
         sources: list(source.sources).length + list(object(source.round).sources).length + list(object(source.round).materials).length,
         memories: list(source.memories).length, rounds: list(source.rounds).length,
@@ -112,12 +113,14 @@
     const data = normalize(input);
     const a = data.article;
     const r = data.round;
-    const header = revision
-      ? '交给外部 AI 的下一轮写作指令。本工具只生成提示词；外部 AI 可依据本指令执行修改并输出修改稿。请保留目标、成功标准、保留项、反馈、前轮诊断和风格，勿擅增事实。'
-      : '你负责诊断当前稿件。不得直接改写文章或产出文章成品。逐项引用具体句段，给出观察、影响、方向、优先级；方向描述修改意图，不提供替换正文。未确定项写待核实。';
+    const config = data.config;
+    const header = config ? config.outputRequirements[revision ? 'revision' : 'diagnosis']
+      : `当前文体暂无专用规则。${revision ? '本工具只生成提示词；外部 AI 按当前用户要求执行修改。' : '仅按当前用户要求诊断，不直接改写文章。'}`;
     const content = data.selectedSources.filter(m => ['content', 'both'].includes(m.purpose) && m.excerpt);
     const historical = data.rounds.filter(h => h !== r && (!r.id || h.id !== r.id)).slice(-2);
     const fixed = [header, COMMON,
+      ...(config ? [`${config.name}风险提醒：${config.riskReminders.join('；')}`,
+        `${config.name}风格建议（低于当前要求、样本/用户更正和适用记忆；不推断平台规则）：${config.styleBaseline.join('；')}`] : []),
       `来源元数据：选取${data.selectedSources.length}/${data.materials.length}条，其余省略；标题≤80字、HTTP(S) URL≤240字，标记摘要时须核对完整地址。`,
       ...data.selectedSources.map(sourceMetadata), `本轮诊断维度：${data.dimensions.join('、')}`,
       `关键约束：${a.constraints || '未提供'}`,
@@ -131,12 +134,13 @@
     function add(label, value, weight = 1, minimum = 12) {
       if (value) cells.push({ label: label.length > 24 ? label.slice(0, 23) + '…' : label, value, weight, minimum: Math.min(value.length, minimum) });
     }
-    add('目标', a.goal, 3, 24);
-    add('读者', a.audience);
-    add('平台', a.platform);
-    add('标题', a.title);
-    a.successCriteria.forEach((s, i) => add(`成功标准${i + 1}`, s, 2, 24));
-    a.preserveItems.forEach((s, i) => add(`保留项${i + 1}`, s, 2, 24));
+    const labels = config?.targetFields || {};
+    add(labels.goal || '目标', a.goal, 3, 24);
+    add(labels.audience || '读者', a.audience);
+    add(labels.platform || '平台', a.platform);
+    add(labels.title || '标题', a.title);
+    a.successCriteria.forEach((s, i) => add(`${labels.successCriteria || '成功标准'}${i + 1}`, s, 2, 24));
+    a.preserveItems.forEach((s, i) => add(`${labels.preserveItems || '保留项'}${i + 1}`, s, 2, 24));
     add('风格特征', data.style.traits.join('；'), 2, 60);
     data.style.samples.forEach(s => add('风格样本来源', s.sourceArticleId, 1, 20));
     add('档案来源ID', data.style.sourceArticleIds.join('、'));

@@ -3,6 +3,26 @@ const assert = require('node:assert/strict');
 const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
 const schema = require('../prototype/writing-workbench-schema.js');
 
+test('协调器按配置记忆命名空间筛选本体偏好，未知文体只读通用', async () => {
+  const { readFileSync } = require('node:fs');
+  const vm = require('node:vm');
+  let namespace = 'article';
+  const context = vm.createContext({ WritingWorkbenchPrompts: require('../prototype/writing-workbench-prompts.js'),
+    WritingWorkbenchSchema: { ...schema, getWritingGenreConfig: genre => genre === 'article' ? { memoryNamespace: namespace } : null } });
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-workbench-coordinator.js'), 'utf8'), context);
+  const c = context.WritingWorkbenchCoordinator.createWritingWorkbenchCoordinator({ getState: () => ({ writingMemories: [
+    { id: 'general', scope: 'general', preference: '通用偏好' },
+    { id: 'genre', scope: 'genre', genre: 'article', preference: '普通文章偏好' },
+    { id: 'own', scope: 'article', articleId: 'a', preference: '单篇偏好' },
+    { id: 'other', scope: 'article', articleId: 'b', preference: '其他篇偏好' }
+  ] }) });
+  const ids = genre => Array.from(c.getRelevantMemories(genre, 'a'), m => m.id);
+  assert.deepEqual(ids('article'), ['own', 'genre', 'general']);
+  namespace = '不匹配现有记忆';
+  assert.deepEqual(ids('article'), ['own', 'general'], '更改配置必须改变文体偏好筛选');
+  for (const genre of ['novel', '', null, '__proto__']) assert.deepEqual(ids(genre), ['general']);
+});
+
 test('写作搜索预览零调用，批准真实 bridge 后只发固定方法和独立关键词', async () => {
   const calls = [];
   const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({

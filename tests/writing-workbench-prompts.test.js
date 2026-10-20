@@ -7,6 +7,48 @@ const { buildWritingDiagnosisPrompt: diagnose, buildWritingRevisionPrompt: revis
   deriveWritingStyleProfile: derive, buildLocalWritingDiagnosis: local } = api;
 const material = (purpose, excerpt, id = purpose) => ({ id, sourceArticleId: `source-${id}`, purpose, excerpt });
 
+test('提示词和本地初检实际消费文体配置，保留用户要求与风格优先级', () => {
+  const schema = require('../prototype/writing-workbench-schema.js');
+  const config = {
+    name: '普通文章', applicability: '适用哨兵', targetFields: { goal: '配置目标', title: '标题', audience: '读者', platform: '平台', successCriteria: '成功标准', preserveItems: '保留项', constraints: '限制条件' },
+    checkDimensions: ['事实依据'], outputRequirements: { diagnosis: '诊断输出哨兵', revision: '改稿输出哨兵' },
+    riskReminders: ['风险哨兵'], styleBaseline: ['风格基线哨兵'], memoryNamespace: 'article'
+  };
+  const context = vm.createContext({ WritingWorkbenchSchema: { ...schema,
+    getWritingGenreConfig: genre => genre === 'article' ? config : null } });
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-workbench-prompts.js'), 'utf8'), context);
+  const api = context.WritingWorkbenchPrompts;
+  const input = { article: { goal: '当前目标', constraints: '本次明确要求', dimensions: ['语言表达'] },
+    round: { materials: [material('style', '短句。再一句。')] },
+    styleProfile: { userCorrections: '用户更正优先' }, memories: [{ scope: 'general', preference: '通用偏好' }] };
+  for (const [method, expected] of [['buildWritingDiagnosisPrompt', '诊断输出哨兵'], ['buildWritingRevisionPrompt', '改稿输出哨兵']]) {
+    const prompt = api[method](input);
+    for (const text of [expected, '风险哨兵', '风格基线哨兵', '配置目标：当前目标', '本次明确要求', '用户更正优先', '通用偏好', '句长']) assert.ok(prompt.includes(text), text);
+    assert.ok(prompt.includes('本轮诊断维度：事实依据'));
+    assert.ok(prompt.includes('当前用户要求 > 样本/用户更正 > 适用记忆 > 平台基线 > 临时判断'));
+    assert.ok(prompt.length <= 8000);
+  }
+  assert.deepEqual(Array.from(api.buildLocalWritingDiagnosis(input).dimensions, d => d.name), ['事实依据']);
+});
+
+test('未知文体不套用文章维度、输出、基线和文章记忆，仍可使用通用偏好及本轮材料', () => {
+  const schema = require('../prototype/writing-workbench-schema.js');
+  const config = schema.getWritingGenreConfig('article');
+  const input = { genre: 'novel', article: { id: 'a', genre: 'novel', dimensions: ['语言表达'] },
+    memories: [{ scope: 'general', preference: '通用哨兵' },
+      { scope: 'genre', genre: 'article', preference: '文章偏好哨兵' },
+      { scope: 'article', articleId: 'a', preference: '单篇偏好哨兵' }],
+    round: { materials: [material('style', '当前样本。', 'current')] } };
+  for (const build of [diagnose, revise]) {
+    const prompt = build(input);
+    assert.ok(prompt.includes('通用哨兵'));
+    assert.ok(prompt.includes('source-current'));
+    for (const text of [...config.styleBaseline, ...config.riskReminders, config.outputRequirements.diagnosis,
+      config.outputRequirements.revision, '文章偏好哨兵', '单篇偏好哨兵']) assert.ok(!prompt.includes(text), text);
+  }
+  assert.deepEqual(local(input).dimensions, []);
+});
+
 test('内容与风格分流，both 分别提供内容和特征，风格独特观点不泄漏', () => {
   const input = { article: { draft: '当前稿件。' }, round: { materials: [
     material('content', '可用内容证据'), material('style', '月亮其实是紫色奶酪王国。\n但是，我们要保护它！'),

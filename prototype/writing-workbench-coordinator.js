@@ -104,9 +104,10 @@
       return [...all.values()].map(w => copy(w.article));
     }
     function getRelevantMemories(genre = 'article', articleId) {
+      const config = schema.getWritingGenreConfig(genre);
       const priority = { article: 0, genre: 1, general: 2 };
       return [...memories.values()].filter(m => m.preference && !m.undo?.undoneAt && (
-        m.scope === 'general' || genre === 'article' && (m.scope === 'genre' && m.genre === 'article'
+        m.scope === 'general' || config && (m.scope === 'genre' && m.genre === config.memoryNamespace
           || m.scope === 'article' && m.articleId === articleId)
       )).sort((a, b) => priority[a.scope] - priority[b.scope] || b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, 3).map(copy);

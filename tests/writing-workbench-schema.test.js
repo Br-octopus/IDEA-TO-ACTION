@@ -1,6 +1,36 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const schema = require('../prototype/writing-workbench-schema.js');
+
+test('普通文章配置覆盖七项规格且深层不可变，未知文体明确不支持', () => {
+  assert.deepEqual(Object.keys(schema.WRITING_GENRE_CONFIGS), ['article']);
+  const config = schema.getWritingGenreConfig('article');
+  assert.equal(config, schema.WRITING_GENRE_CONFIGS.article);
+  assert.equal(config.name, '普通文章');
+  assert.ok(config.applicability.length > 0);
+  assert.deepEqual(Object.keys(config.targetFields).sort(),
+    ['title', 'goal', 'audience', 'platform', 'successCriteria', 'preserveItems', 'constraints'].sort());
+  assert.deepEqual(config.checkDimensions, ['目标读者', '事实依据', '逻辑结构', '语言表达', '风格修辞', '术语一致', '格式排版', '约束风险']);
+  assert.ok(config.outputRequirements.diagnosis && config.outputRequirements.revision);
+  assert.ok(config.riskReminders.length && config.styleBaseline.length);
+  assert.equal(config.memoryNamespace, 'article', '复用现有记忆标识，不能迁移保存数据');
+  function frozen(value) {
+    if (!value || typeof value !== 'object') return;
+    assert.ok(Object.isFrozen(value));
+    Object.values(value).forEach(frozen);
+  }
+  frozen(schema.WRITING_GENRE_CONFIGS);
+  assert.equal(Reflect.set(config.targetFields, 'goal', '篡改目标'), false);
+  assert.throws(() => config.checkDimensions.push('新维度'), TypeError);
+  assert.equal(schema.getWritingGenreConfig('article').targetFields.goal, '目标');
+  for (const genre of [undefined, null, '', 'novel', 'Article', 'constructor', '__proto__', [], Symbol('article'), { toString() { throw new Error('不应转换'); } }]) {
+    assert.equal(schema.getWritingGenreConfig(genre), null);
+  }
+  const context = vm.createContext({});
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-workbench-schema.js'), 'utf8'), context);
+  assert.equal(JSON.stringify(context.WritingWorkbenchSchema.getWritingGenreConfig('article')), JSON.stringify(config));
+  assert.equal(context.WritingWorkbenchSchema.getWritingGenreConfig('novel'), null);
+});
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 
