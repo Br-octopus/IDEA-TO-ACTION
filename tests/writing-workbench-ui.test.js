@@ -551,3 +551,38 @@ test('完整工作区合并空备份及新增文章保留未保存会话和未�
   }
   assert.equal(f.coordinator.getWorkspace(importedId).article.title, '备份文章');
 });
+
+test('追加第二次真实写入失败仍展示现存新轮，保留回带输入且模型预览对应可见稿', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp();
+  await f.settle();
+  const id = await create(f);
+  await f.change('writing-save', true);
+  await f.input('writing-goal', '更新目标已成功落盘');
+  await f.input('writing-new-draft', '新轮正文：客户完成三次试用。');
+  await f.input('writing-feedback', '保留三次试用这个事实');
+  const writes = f.writes;
+  f.failWriteAt = writes + 2;
+  await f.click('append');
+  assert.equal(f.writes, writes + 2, '先保存目标成功，再让新轮的实际setItem失败');
+  assert.equal(f.diskState.writingArticles[0].article.goal, '更新目标已成功落盘');
+  assert.equal(f.diskState.writingArticles[0].rounds.length, 1);
+  const round = f.coordinator.getWorkspace(id).rounds.at(-1);
+  assert.equal(f.coordinator.getWorkspace(id).rounds.length, 2);
+  assert.equal(f.node('writing-draft').readOnly, true);
+  assert.equal(f.node('writing-draft').value, round.draft);
+  assert.equal(f.node('writing-prompt').value, round.prompt);
+  assert.equal(f.node('writing-diagnosis').value, round.diagnosis);
+  assert.equal(f.node('writing-new-draft').value, '新轮正文：客户完成三次试用。');
+  assert.equal(f.node('writing-feedback').value, '保留三次试用这个事实');
+  assert.match(f.mount.innerHTML, /1\/2.*尚未保存/);
+  assert.match(f.mount.innerHTML, /磁盘已满/);
+  const pending = f.click('model');
+  await f.settle();
+  assert.equal(f.requests, 0);
+  assert.match(f.element('send-preview-text').value, /新轮正文：客户完成三次试用/);
+  await f.event('send-preview-cancel');
+  await pending;
+  assert.equal(f.node('writing-draft').value, round.draft);
+  assert.equal(f.node('writing-new-draft').value, '新轮正文：客户完成三次试用。');
+});
