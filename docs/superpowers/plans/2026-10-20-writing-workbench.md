@@ -32,7 +32,7 @@
 - Create: prototype/writing-workbench-schema.js
 - Create: tests/writing-workbench-schema.test.js
 
-- [ ] **Step 1: 编写 schema 失败测试**
+- [x] **Step 1: 编写 schema 失败测试**
 
 覆盖普通文章类型默认值、文章保存开关、轮次稿件/反馈、材料用途（内容/风格/两者）、风格档案来源和把握度、通用/文体记忆范围、来源文章 ID、撤销信息、长度/数量上限，以及未知字段和凭证字段被拒绝或剔除。
 
@@ -49,21 +49,21 @@ test("只允许已知写作字段并限制记忆适用范围", () => {
 });
 ~~~
 
-- [ ] **Step 2: 运行专项测试确认失败**
+- [x] **Step 2: 运行专项测试确认失败**
 
 Run: node --test tests/writing-workbench-schema.test.js  
 Expected: FAIL，提示 schema 模块尚不存在。
 
-- [ ] **Step 3: 实现最小白名单 schema**
+- [x] **Step 3: 实现最小白名单 schema**
 
 实现纯函数 normalizeWritingArticle、normalizeWritingRound、normalizeWritingStyleProfile、normalizeWritingMemory 和 normalizeWritingWorkspace；未知文体不伪装为已支持，所有文本字段限长，轮次/样本/记忆数组限量，凭证字段不得进入持久化结果。
 
-- [ ] **Step 4: 运行 schema 测试**
+- [x] **Step 4: 运行 schema 测试**
 
 Run: node --test tests/writing-workbench-schema.test.js  
 Expected: PASS，所有白名单、边界和默认值断言通过。
 
-- [ ] **Step 5: 提交数据契约**
+- [x] **Step 5: 提交数据契约**
 
 ~~~bash
 git add prototype/writing-workbench-schema.js tests/writing-workbench-schema.test.js
@@ -80,29 +80,29 @@ git commit -m "feat: 定义写作工作台数据契约"
 - Modify: tests/backup-manager.test.js
 - Modify: tests/workspace-backup.test.js
 
-- [ ] **Step 1: 增加状态迁移与备份失败测试**
+- [x] **Step 1: 增加状态迁移与备份失败测试**
 
 测试旧状态读取时新增空的 writingArticles 和 writingMemories；往返保存已启用文章时保留轮次和风格档案；关闭保存后停止写入新轮次但不删除旧记录；资料库专属备份不包含正文或个人记忆，完整备份包含它们；导入仍经过 schema 白名单。
 
-- [ ] **Step 2: 运行关联测试确认失败**
+- [x] **Step 2: 运行关联测试确认失败**
 
 Run: node --test tests/storage.test.js tests/backup-manager.test.js tests/workspace-backup.test.js  
 Expected: 新增断言失败，旧行为测试保持可运行。
 
-- [ ] **Step 3: 实现状态迁移与逐篇保存语义**
+- [x] **Step 3: 实现状态迁移与逐篇保存语义**
 
 在 storage.js 的 state schema 中登记写作字段，使用 Task 1 规范化器；持久化层仅接受保存开关开启的文章新轮次。关闭开关保留已有历史，删除文章由显式删除操作完成。
 
-- [ ] **Step 4: 实现两种备份范围**
+- [x] **Step 4: 实现两种备份范围**
 
 完整工作区备份包含已保存文章和写作记忆；仅资料库备份明确排除这两类数据。导入预览、合并/替换和敏感字段清理沿用已有规则。
 
-- [ ] **Step 5: 运行关联测试**
+- [x] **Step 5: 运行关联测试**
 
 Run: node --test tests/storage.test.js tests/backup-manager.test.js tests/workspace-backup.test.js  
 Expected: PASS，原有备份/迁移行为不回归。
 
-- [ ] **Step 6: 提交本地状态与备份边界**
+- [x] **Step 6: 提交本地状态与备份边界**
 
 ~~~bash
 git add prototype/storage.js prototype/backup-manager.js prototype/workspace-backup.js tests/storage.test.js tests/backup-manager.test.js tests/workspace-backup.test.js
@@ -116,7 +116,7 @@ git commit -m "feat: 保存文章轮次和写作记忆"
 - Create: tests/writing-workbench-prompts.test.js
 - Modify: prototype/index.html（脚本加载顺序）
 
-- [ ] **Step 1: 编写提示词边界测试**
+- [x] **Step 1: 编写提示词边界测试**
 
 覆盖：风格样本只传入提炼后的可观察特征和来源，不把样本观点当成目标内容；当前要求优先于样本、记忆和平台基线；无样本时明确临时判断；诊断提示词要求引用具体段落、区分事实问题和偏好、不输出 AI 身份分数、不改写文章；下一轮提示词含保留项和用户反馈。
 
@@ -131,21 +131,21 @@ test("无风格样本时标明临时判断且不直接产出文章", () => {
 });
 ~~~
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: node --test tests/writing-workbench-prompts.test.js  
 Expected: FAIL，提示词模块尚不存在。
 
-- [ ] **Step 3: 实现纯提示词构造器**
+- [x] **Step 3: 实现纯提示词构造器**
 
 实现 buildWritingDiagnosisPrompt 和 buildWritingRevisionPrompt；将来源限制为 Task 1 已规范化字段，风格冲突按规格优先级组织，长度超限时按相关性截断。
 
-- [ ] **Step 4: 运行提示词测试**
+- [x] **Step 4: 运行提示词测试**
 
 Run: node --test tests/writing-workbench-prompts.test.js  
 Expected: PASS，提示词保留约束且不包含被 schema 丢弃的未知字段。
 
-- [ ] **Step 5: 提交提示词模块**
+- [x] **Step 5: 提交提示词模块**
 
 ~~~bash
 git add prototype/writing-workbench-prompts.js tests/writing-workbench-prompts.test.js prototype/index.html
@@ -158,29 +158,29 @@ git commit -m "feat: 增加文章风格诊断提示词"
 - Create: prototype/writing-workbench-coordinator.js
 - Create: tests/writing-workbench-coordinator.test.js
 
-- [ ] **Step 1: 编写轮次和记忆行为测试**
+- [x] **Step 1: 编写轮次和记忆行为测试**
 
 验证新稿创建唯一文章 ID；外部新稿/反馈作为同一文章的新轮次；保存关闭时不新增持久化记录；“记住这个偏好”可立即选择通用或普通文章范围；相同偏好仅在两篇不同文章中出现才自动提升；同篇重复不能触发晋升；自动保存可撤销；当前要求覆盖冲突记忆但不静默修改记忆；未来文体只加载通用偏好。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: node --test tests/writing-workbench-coordinator.test.js  
 Expected: FAIL，协调器模块尚不存在。
 
-- [ ] **Step 3: 实现文章与轮次协调**
+- [x] **Step 3: 实现文章与轮次协调**
 
 以 schema 规范化输入，提供新建/打开/追加轮次/启停保存/删除文章/读取轮次操作；持久化失败返回可见错误并保留调用方当前会话数据。
 
-- [ ] **Step 4: 实现记忆晋升、撤销与相关选择**
+- [x] **Step 4: 实现记忆晋升、撤销与相关选择**
 
 反馈先挂在文章轮次。显式按钮立即保存；自动晋升按规范化偏好和不同文章 ID 计数，达到两篇后写入普通文章记忆并返回可撤销记录。上下文只选择与当前目标和文体相关的少量偏好。
 
-- [ ] **Step 5: 运行协调器测试**
+- [x] **Step 5: 运行协调器测试**
 
 Run: node --test tests/writing-workbench-coordinator.test.js  
 Expected: PASS，轮次、保存和跨文章记忆门槛符合规格。
 
-- [ ] **Step 6: 提交协调器**
+- [x] **Step 6: 提交协调器**
 
 ~~~bash
 git add prototype/writing-workbench-coordinator.js tests/writing-workbench-coordinator.test.js
@@ -349,3 +349,16 @@ git commit -m "docs: 更新写作工作台交付说明"
 - 真实界面操作、刷新持久化、窄屏检查和可访问错误状态：Task 8；静态 smoke 或 DOM mock 不替代此项。
 
 边界说明：本计划是一条共用数据契约和同一写作任务流程的端到端交付，存储、提示词、记忆、界面和搜索不是可独立交付的多 Agent/多产品，因此暂合并为一份有顺序的计划；每个任务仍能单独测试和提交。
+
+## 续接执行记录（2026-10-20）
+
+- 沿用 `codex/writing-workbench` 分支；设计稿优先，已纠正旧实现把逐篇保存默认设为开启的问题。
+- Task 1 已通过独立规格及代码质量审查；数据契约专项测试 20 项通过。
+- Task 2 存储、备份和数据契约相关测试 92 项通过；备份恢复通过显式 `restoreWriting` 选项保留关闭保存的历史，应用导入入口在 Task 5 接入。
+- Task 3 已通过独立规格与代码复审；风格适用范围先于样本和更正选择，来源统一对应最多三条资料，用户强约束超限明确报错而不静默截断。
+- 记忆候选采用有限白名单字段：未保存文章的候选仅保留于会话；两篇不同文章重复后可保存偏好及必要例子，不要求开启正文保存，也不暗存正文或完整反馈。
+- 续接时原有非写作测试基线为 417 项：410 通过、6 失败、1 因 Windows 符号链接权限跳过。失败涉及旧 IPC 白名单/计数断言、资料引用数量上限和发送预览静态断言，交付前复核处理。
+- 真实页面基线已在 `http://127.0.0.1:4173/` 打开；发现浏览器误加载 Node 专用 `local-source-index.js` 导致 `require is not defined`，由 Task 3 修复脚本入口。
+- 主工作区有无关的 PPT 文档和打包目录改动，实施保持隔离，不清理这些改动。
+
+- Task 4 已完成独立规格与代码质量复审，提交 1b43efc；真实存储及异步失败边界相关测试 107 项通过，进入 Task 5 统一界面接入。
