@@ -167,3 +167,49 @@ test('所有白名单字段同时满额时仍不超过8000，纠正、反馈和�
     assert.ok(prompt.includes('省略') || prompt.includes('未纳入'));
   }
 });
+
+test('两种指令保留轮次来源的标题、HTTP(S) URL 与状态局限，状态变化可见', () => {
+  for (const build of [diagnose, revise]) {
+    const input = { round: { sources: [{ title: '原始公告甲', url: 'https://example.org/original',
+      excerpt: '销量100台', purpose: 'content', verificationStatus: 'user-confirmed' }] } };
+    const confirmed = build(input);
+    for (const value of ['原始公告甲', 'https://example.org/original', 'user-confirmed', '用户确认', '销量100台']) assert.ok(confirmed.includes(value), value);
+    assert.match(confirmed, /不代表独立验证/);
+    input.round.sources[0].verificationStatus = 'unverified';
+    const unverified = build(input);
+    assert.notEqual(confirmed, unverified);
+    assert.match(unverified, /unverified.*未核验/);
+    input.round.sources[0].verificationStatus = 'source-reviewed';
+    assert.match(build(input), /source-reviewed.*来源已审阅/);
+  }
+});
+
+test('风格来源与顶层来源保留可追溯元数据，原句隔离并拒绝非HTTP(S) URL', () => {
+  for (const build of [diagnose, revise]) {
+    const prompt = build({ round: { sources: [{ title: '风格样本甲', url: 'http://example.org/style',
+      excerpt: '海王星居民只喝蓝色咖啡。', purpose: 'style', verificationStatus: 'user-confirmed' }] },
+      sources: [{ title: '补充公告乙', url: 'https://example.org/extra', purpose: 'both', excerpt: '补充内容', verificationStatus: 'source-reviewed' },
+        { title: '不安全地址', url: 'javascript:secretPayload()', purpose: 'style', excerpt: '不可泄漏的观点' }] });
+    for (const value of ['风格样本甲', 'http://example.org/style', 'round-source-1', 'user-confirmed',
+      '补充公告乙', 'https://example.org/extra', 'source-reviewed']) assert.ok(prompt.includes(value), value);
+    assert.doesNotMatch(prompt, /海王星居民只喝蓝色咖啡|不可泄漏的观点|javascript:|secretPayload/);
+    assert.match(prompt, /非HTTP\(S\).*省略/);
+  }
+});
+
+test('来源元数据单独预算，极长标题和链接仍不挤掉状态、最新反馈及8000字约束', () => {
+  for (const build of [diagnose, revise]) {
+    const prompt = build({ article: { draft: '正文'.repeat(5000), constraints: '关键'.repeat(250),
+      successCriteria: Array(20).fill('标准'.repeat(250)), preserveItems: Array(30).fill('保留'.repeat(250)) },
+      round: { feedback: '反馈'.repeat(1000), userFeedback: '用户'.repeat(1000),
+        sources: Array.from({ length: 20 }, (_, i) => ({ title: `公告${i}` + '长标题'.repeat(100),
+          url: 'https://example.org/' + 'path'.repeat(500), excerpt: '依据'.repeat(600),
+          purpose: i % 2 ? 'style' : 'content', verificationStatus: 'user-confirmed' })) } });
+    assert.ok(prompt.length <= 8000, prompt.length);
+    for (const text of ['https://example.org/', 'user-confirmed', '用户确认', '不代表独立验证', '公告0', '公告1', '公告2', '省略']) assert.ok(prompt.includes(text), text);
+    assert.ok(prompt.includes('当前反馈：' + '反馈'.repeat(1000)));
+    assert.ok(prompt.includes('当前用户反馈：' + '用户'.repeat(1000)));
+    assert.ok(prompt.includes('关键约束：' + '关键'.repeat(250)));
+    assert.doesNotMatch(prompt, /公告3/);
+  }
+});
