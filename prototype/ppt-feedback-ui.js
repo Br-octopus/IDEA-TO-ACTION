@@ -1,6 +1,6 @@
 
 // 最小可用反馈工作台：选择 HTML/图片附件 -> 打开隔离预览 -> 点选标注 -> 保存
-window.ForwardStepPptFeedbackUI = (function () {
+const ForwardStepPptFeedbackUI = (function () {
   async function createPptFeedbackUI({ document, sceneSchema, feedbackSchema, feedback, taskSchema, getState, persistState, notify } = {}) {
     const root = document?.getElementById("ppt-feedback-root");
     if (!root || typeof getState !== "function" || typeof persistState !== "function") {
@@ -73,6 +73,7 @@ window.ForwardStepPptFeedbackUI = (function () {
       } else if (action === "annotate") {
         const current = attachments.find(item => item.id === selectedAttachmentId) || attachments[0];
         if (!current) return;
+        selectedAttachmentId = current.id;
         const result = await api.saveAnnotation({ taskId, attachmentId: current.id, target: { kind: "point", x: 0.5, y: 0.5 }, comment: "请补充这条反馈的具体问题", category: "other" });
         if (result?.error) show(result.error.message || result.error);
         await refresh();
@@ -90,8 +91,8 @@ window.ForwardStepPptFeedbackUI = (function () {
         saveFeedback({ ...task, pptFeedback: { ...(task.pptFeedback || { attachments: [] }), annotations: nextAnnotations } });
         await refresh();
       } else if (action === "copy-context") {
-        const context = feedback.buildSelectedFeedbackContext({ annotations: annotations.filter(item => item.selected === true || item.attachmentId === selectedAttachmentId) });
-        const text = JSON.stringify(context.groups || context, null, 2);
+        const context = feedback.buildSelectedFeedbackContext(annotations.filter(item => item.selected === true || item.attachmentId === selectedAttachmentId).map(item => ({ ...item, selected: true })));
+        const text = JSON.stringify(context, null, 2);
         try { await navigator.clipboard.writeText(text); show("选中反馈已复制。"); } catch { show("复制失败，请手动复制。"); }
       }
       render();
@@ -115,4 +116,8 @@ window.ForwardStepPptFeedbackUI = (function () {
   }
   return { createPptFeedbackUI };
 })();
+
+// 兼容 Node 测试环境直接 require
+if (typeof window === "object") window.ForwardStepPptFeedbackUI = ForwardStepPptFeedbackUI;
+if (typeof module === "object" && module.exports) module.exports = ForwardStepPptFeedbackUI;
 
