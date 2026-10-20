@@ -102,7 +102,7 @@
   }
 
   function isCredentialKey(key) {
-    return /(?:api.?key|token|password|secret|credential|authorization)/i.test(key);
+    return /(?:api.?key|private.?key|auth(?:entication|orization)?.?header|access.?token|refresh.?token|token|password|secret|credential|authorization|bearer|jwt)/i.test(key);
   }
 
   function normalizeItem(input, kind) {

@@ -37,10 +37,11 @@
     const safeConfig = {
       ...defaults,
       ...(config && typeof config === 'object' ? config : {}),
-      targetFields: config?.targetFields && typeof config.targetFields === 'object' ? config.targetFields : defaults.targetFields,
+      targetFields: config?.targetFields && typeof config.targetFields === 'object'
+        ? { ...defaults.targetFields, ...config.targetFields } : defaults.targetFields,
       checkDimensions: Array.isArray(config?.checkDimensions) ? config.checkDimensions : defaults.checkDimensions,
       outputRequirements: config?.outputRequirements && typeof config.outputRequirements === 'object'
-        ? config.outputRequirements : defaults.outputRequirements,
+        ? { ...defaults.outputRequirements, ...config.outputRequirements } : defaults.outputRequirements,
       riskReminders: Array.isArray(config?.riskReminders) ? config.riskReminders : defaults.riskReminders,
       styleBaseline: Array.isArray(config?.styleBaseline) ? config.styleBaseline : defaults.styleBaseline,
       memoryNamespace: typeof config?.memoryNamespace === 'string' ? config.memoryNamespace : defaults.memoryNamespace
