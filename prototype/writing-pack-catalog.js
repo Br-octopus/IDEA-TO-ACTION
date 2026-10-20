@@ -2,10 +2,10 @@
   const schema = typeof module === 'object' && module.exports && typeof require === 'function'
     ? require('./writing-pack-schema.js')
     : root.WritingPackSchema;
-  const api = factory(schema);
+  const api = factory(root, schema);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.WritingPackCatalog = api;
-})(typeof globalThis === 'undefined' ? this : globalThis, function (schema) {
+})(typeof globalThis === 'undefined' ? this : globalThis, function (root, schema) {
   function freezeDeep(value) {
     if (value && typeof value === 'object' && !Object.isFrozen(value)) {
       Object.values(value).forEach(freezeDeep);
@@ -17,7 +17,7 @@
   function createArticlePack() {
     const config = typeof module === 'object' && module.exports && typeof require === 'function'
       ? require('./writing-workbench-schema.js')?.WRITING_GENRE_CONFIGS?.article
-      : globalThis?.WritingWorkbenchSchema?.WRITING_GENRE_CONFIGS?.article;
+      : root?.WritingWorkbenchSchema?.WRITING_GENRE_CONFIGS?.article;
     const defaults = {
       name: '普通文章',
       applicability: '用于普通文章的目标澄清、初稿诊断和连续改稿；其他文体需确认按普通文章处理。',
