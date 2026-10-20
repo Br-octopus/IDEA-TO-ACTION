@@ -3,11 +3,162 @@ const assert = require('node:assert/strict');
 const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
 const schema = require('../prototype/writing-workbench-schema.js');
 
+test('写作搜索预览零调用，批准真实 bridge 后只发固定方法和独立关键词', async () => {
+  const calls = [];
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+    searchWeb: async (query, options) => {
+      calls.push({ query, maximum: options.maxResults });
+      return { results: [{ title: '公开方法', url: `https://example.test/${calls.length}`, summary: '可供评估的公开摘要', applicability: '普通文章', limitations: '需核对原文' }] };
+    }
+  });
+  const { c, state } = setup({ promptAgentCoordinator: agent });
+  const a = await c.createArticle({ draft: '正文隐私哨兵', goal: '目标隐私哨兵', constraints: '必须保留用户要求',
+    materials: [{ title: '用户样本', excerpt: '这是风格样本。', purpose: 'style' }] });
+  await c.appendRound(a.id, { draft: '正文隐私哨兵', feedback: '反馈隐私哨兵',
+    materials: [{ title: '用户样本', excerpt: '这是风格样本。', purpose: 'style' }] });
+  const preview = c.previewResearch(a.id, { keywords: '产品说明', draft: '偷带正文', directory: 'C:/私有目录' });
+  assert.equal(preview.status, 'awaiting-confirmation');
+  assert.equal(calls.length, 0);
+  assert.equal(preview.queries.length, 3);
+  assert.deepEqual(preview.budget, { maxQueries: 3, maxSources: 5 });
+  assert.ok(preview.queries.some(q => q.includes('site:github.com')));
+  assert.doesNotMatch(JSON.stringify(preview), /隐私哨兵|偷带正文|私有目录/);
+  await assert.rejects(c.approveResearch(a.id), /确认/);
+  assert.equal(calls.length, 0);
+  const result = await c.approveResearch(a.id, { confirmed: true });
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(calls.map(c => c.query), preview.queries);
+  assert.ok(calls.every(c => c.maximum <= 5));
+  const round = c.getRounds(a.id).at(-1);
+  assert.equal(round.materials[0].title, '用户样本');
+  assert.equal(round.materials.length + round.sources.length, 3);
+  assert.match(round.prompt, /必须保留用户要求/);
+  assert.match(round.prompt, /未核验|未验证/);
+  assert.match(round.prompt, /普通文章|适用/);
+  assert.match(round.prompt, /需核对原文|局限/);
+  assert.equal(state().writingMemories.length, 0);
+  assert.equal(state().promptAgentTasks.length, 0);
+});
+
+test('搜索拒绝按篇，保存开启跨刷新保留、暂停历史冻结，新篇可搜索', async () => {
+  let searches = 0;
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({ searchWeb: async () => { searches++; return []; } });
+  const env = realStorageSetup({ promptAgentCoordinator: agent });
+  const { c } = env;
+  const a = await c.createArticle({ draft: '保存正文', saveEnabled: true });
+  c.previewResearch(a.id);
+  await c.rejectResearch(a.id);
+  assert.equal(c.getResearchState(a.id).status, 'rejected');
+  await c.refreshFromStorage();
+  assert.equal(c.getResearchState(a.id).status, 'rejected');
+  assert.throws(() => c.previewResearch(a.id), /拒绝/);
+  const b = await c.createArticle({ draft: '新篇', saveEnabled: true });
+  await c.setSaveEnabled(b.id, false);
+  const frozen = structuredClone(env.state().writingArticles.find(w => w.id === b.id));
+  c.previewResearch(b.id);
+  await c.rejectResearch(b.id);
+  assert.deepEqual(env.state().writingArticles.find(w => w.id === b.id), frozen);
+  await c.refreshFromStorage();
+  assert.equal(c.getResearchState(b.id).status, 'idle');
+  assert.equal(c.previewResearch(b.id).status, 'awaiting-confirmation');
+  assert.equal(searches, 0);
+});
+
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
+
+for (const invalidation of ['append', 'refresh', 'merge', 'delete', 'cancel']) {
+  test(`忽略 signal 的真实搜索适配器在 ${invalidation} 后不续查询、不复活迟到结果`, async () => {
+    const pending = deferred();
+    const started = deferred();
+    let calls = 0;
+    const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+      searchWeb: async () => { calls++; started.resolve(); return pending.promise; }
+    });
+    const { c, state } = setup({ promptAgentCoordinator: agent });
+    const a = await c.createArticle({ draft: '甲', saveEnabled: true });
+    const b = await c.createArticle({ draft: '乙', saveEnabled: true });
+    c.previewResearch(a.id);
+    const running = c.approveResearch(a.id, { confirmed: true });
+    await started.promise;
+    if (invalidation === 'append') await c.appendRound(a.id, { draft: '新轮' });
+    if (invalidation === 'refresh') await c.refreshFromStorage();
+    if (invalidation === 'merge') await c.refreshFromStorage({ preserveSessions: true });
+    if (invalidation === 'delete') await c.deleteArticle(a.id, { confirmed: true });
+    if (invalidation === 'cancel') c.cancelResearch(a.id);
+    pending.resolve({ results: [{ title: '迟到资料', url: 'https://example.test/late', summary: '绝不能复活' }] });
+    const result = await running;
+    assert.equal(result.status, 'cancelled');
+    assert.equal(calls, 1);
+    assert.equal(c.getRounds(b.id).at(-1).sources.length, 0);
+    assert.doesNotMatch(JSON.stringify(state()), /迟到资料|绝不能复活/);
+    if (invalidation !== 'delete') assert.doesNotMatch(JSON.stringify(c.getWorkspace(a.id)), /迟到资料|绝不能复活/);
+  });
+}
+
+test('搜索关键词超长或含路径时拒绝而非静默截断，正文反馈绝不用于默认查询', async () => {
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator();
+  const { c } = setup({ promptAgentCoordinator: agent });
+  const a = await c.createArticle({ draft: '正文哨兵', goal: '目标哨兵', audience: '读者哨兵' });
+  for (const keywords of ['字'.repeat(41), 'C:/私有目录', 'https://private.test', '甲\n乙', 'user@example.test']) {
+    assert.throws(() => c.previewResearch(a.id, { keywords }), /关键词/);
+  }
+  const preview = c.previewResearch(a.id);
+  assert.doesNotMatch(JSON.stringify(preview), /哨兵/);
+});
+
+test('本地自动来源占满三份时公开摘要至少纳入一份，手工材料与style/both来源保留', async () => {
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+    searchWeb: async () => [{ title: '公开新摘要', url: 'https://public.test/guide', summary: '公开案例的可评估内容', applicability: '普通文章', limitations: '尚待验证' }]
+  });
+  agent.selectMaterials = async () => Array.from({ length: 3 }, (_, i) => ({ id: `auto-${i}`, title: `自动资料${i}`, location: `https://local.test/${i}`, excerpt: `本地内容${i}` }));
+  const { c } = setup({ promptAgentCoordinator: agent });
+  const a = await c.createArticle({ draft: '初稿' });
+  await c.selectMaterials(a.id);
+  assert.equal(c.getRounds(a.id)[0].sources.length, 3);
+  c.previewResearch(a.id);
+  const result = await c.approveResearch(a.id, { confirmed: true });
+  assert.equal(result.sources.length, 3);
+  assert.ok(result.sources.some(s => s.url === 'https://public.test/guide'));
+  assert.match(c.getRounds(a.id)[0].prompt, /公开新摘要/);
+  const b = await c.createArticle({ draft: '初稿', materials: [{ title: '手工', purpose: 'content', excerpt: '必须保留手工' }], sources: [
+    { title: '风格', purpose: 'style', excerpt: '必须保留风格' }, { title: '两用', purpose: 'both', excerpt: '必须保留两用' }
+  ] });
+  const before = c.getRounds(b.id)[0];
+  c.previewResearch(b.id);
+  const blocked = await c.approveResearch(b.id, { confirmed: true });
+  const after = c.getRounds(b.id)[0];
+  assert.deepEqual(after.materials, before.materials);
+  assert.deepEqual(after.sources, before.sources);
+  assert.equal(blocked.includedSources, 0);
+  assert.match(c.getResearchState(b.id).contextNote, /未纳入.*提示词/);
+});
+
+test('真实storage搜索写失败只尝试一次，结果和来源可读取且磁盘保持旧快照', async () => {
+  let writes = 0;
+  let failing = false;
+  const values = new Map();
+  const storage = require('../prototype/storage.js');
+  const store = { getItem: key => values.get(key), setItem(key, value) { writes++; if (failing) throw new Error('磁盘写入失败'); values.set(key, value); } };
+  let state = storage.createEmptyState();
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+    searchWeb: async () => [{ title: '可见来源', url: 'https://public.test/write', summary: '合并摘要' }]
+  });
+  const c = createWritingWorkbenchCoordinator({ getState: () => state, persistState(next) { state = storage.saveState(store, next); return state; }, promptAgentCoordinator: agent });
+  const a = await c.createArticle({ draft: '稿件', saveEnabled: true });
+  const snapshot = structuredClone(state);
+  c.previewResearch(a.id);
+  const beforeWrites = writes;
+  failing = true;
+  await assert.rejects(c.approveResearch(a.id, { confirmed: true }), { code: 'PERSIST_FAILED' });
+  assert.equal(writes - beforeWrites, 1);
+  assert.deepEqual(state, snapshot);
+  assert.match(c.getRounds(a.id)[0].prompt, /可见来源/);
+  assert.equal(c.getRounds(a.id)[0].sources[0].title, '可见来源');
+});
 
 function realStorageSetup(extra = {}) {
   const storage = require('../prototype/storage.js');

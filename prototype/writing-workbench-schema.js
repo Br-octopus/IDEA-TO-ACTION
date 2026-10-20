@@ -17,10 +17,10 @@
   const ARTICLE_FIELDS = new Set([
     "id", "title", "genre", "goal", "audience", "platform", "preserveItems", "dimensions", "constraints",
     "successCriteria", "sourceArticleId", "draft", "saveEnabled", "styleProfileId",
-    "createdAt", "updatedAt"
+    "createdAt", "updatedAt", "research"
   ]);
   const MATERIAL_FIELDS = new Set(["id", "title", "purpose", "excerpt", "sourceArticleId"]);
-  const SOURCE_FIELDS = new Set(["title", "url", "excerpt", "purpose", "verificationStatus"]);
+  const SOURCE_FIELDS = new Set(["title", "url", "excerpt", "purpose", "verificationStatus", "origin"]);
   const ROUND_FIELDS = new Set([
     "id", "articleId", "draft", "feedback", "userFeedback", "revisionNote",
     "parentRoundId", "diagnosis", "prompt", "sources", "materials", "preferences", "undo", "createdAt", "updatedAt"
@@ -91,6 +91,8 @@
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
     };
+    // 研究计划只在会话中，持久化仅记录本篇拒绝，导入不能自动授权搜索。
+    if (isObject(source.research) && source.research.status === 'rejected') article.research = { status: 'rejected' };
     return Object.fromEntries(Object.entries(article).filter(([key]) => ARTICLE_FIELDS.has(key)));
   }
 
@@ -148,6 +150,7 @@
       purpose: MATERIAL_PURPOSES.includes(source.purpose) ? source.purpose : "content",
       verificationStatus: VERIFICATION_STATES.includes(source.verificationStatus) ? source.verificationStatus : "unverified"
     };
+    if (["local-search", "public-research"].includes(source.origin)) entry.origin = source.origin;
     return Object.fromEntries(Object.entries(entry).filter(([key]) => SOURCE_FIELDS.has(key)));
   }
 

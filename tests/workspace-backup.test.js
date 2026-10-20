@@ -992,6 +992,34 @@ function backupWritingSnapshot(id = 'article-1', saveEnabled = true) {
   };
 }
 
+test('真实拒绝搜索的完整备份导出导入保存重载保留拒绝及自动来源白名单', async () => {
+  const storage = require('../prototype/storage.js');
+  const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
+  const { createPromptAgentCoordinator } = require('../prototype/prompt-agent-coordinator.js');
+  const values = new Map();
+  const store = { getItem: k => values.get(k), setItem: (k, v) => values.set(k, v) };
+  let state = storage.createEmptyState();
+  const agent = createPromptAgentCoordinator();
+  agent.selectMaterials = async () => [{ title: '自动本地', location: 'https://local.test', excerpt: '本地摘要' }];
+  const dependencies = { getState: () => state, persistState(next) { state = storage.saveState(store, next); return state; }, promptAgentCoordinator: agent };
+  const c = createWritingWorkbenchCoordinator(dependencies);
+  const a = await c.createArticle({ draft: '稿件', saveEnabled: true });
+  await c.selectMaterials(a.id);
+  c.previewResearch(a.id);
+  await c.rejectResearch(a.id);
+  const exported = JSON.parse(JSON.stringify(createBackup(state)));
+  assert.equal(validateBackup(exported), true);
+  state = storage.saveState(store, replaceState({}, exported), { restoreWriting: true });
+  state = storage.loadState(store).state;
+  const restored = createWritingWorkbenchCoordinator(dependencies);
+  assert.equal(restored.getResearchState(a.id).status, 'rejected');
+  assert.equal(restored.getRounds(a.id)[0].sources[0].origin, 'local-search');
+  assert.throws(() => restored.previewResearch(a.id), /拒绝/);
+  assert.deepEqual(state.promptAgentTasks, []);
+  const knowledge = createBackup(state, { scope: 'knowledge-base' });
+  assert.equal(Object.hasOwn(knowledge.data, 'writingArticles'), false);
+});
+
 test('写作完整备份含历史快照和记忆及摘要计数，资料库备份排除写作集合', () => {
   const schema = require('../prototype/writing-workbench-schema.js');
   const state = {

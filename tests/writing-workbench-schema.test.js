@@ -4,6 +4,18 @@ const schema = require('../prototype/writing-workbench-schema.js');
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 
+test('研究只持久化拒绝状态，自动来源标记有限白名单，不允许导入计划授权', () => {
+  const rejected = schema.normalizeWritingArticle({ research: { status: 'rejected', queries: ['私有输入'], apiKey: 'secret' } });
+  assert.deepEqual(rejected.research, { status: 'rejected' });
+  for (const status of ['approved', 'running', 'awaiting-confirmation', 'complete']) {
+    assert.equal(Object.hasOwn(schema.normalizeWritingArticle({ research: { status } }), 'research'), false);
+  }
+  const source = schema.normalizeWritingRound({ sources: [{ title: '自动资料', origin: 'local-search', apiKey: 'secret' }] }).sources[0];
+  assert.equal(source.origin, 'local-search');
+  assert.equal(Object.hasOwn(source, 'apiKey'), false);
+  assert.equal(Object.hasOwn(schema.normalizeWritingRound({ sources: [{ title: '未知', origin: 'private-folder' }] }).sources[0], 'origin'), false);
+});
+
 test('普通文章类型默认值和文章保存开关', () => {
   const article = schema.normalizeWritingArticle({ title: '  我的文章  ' });
 
