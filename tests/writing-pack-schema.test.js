@@ -95,8 +95,14 @@ test('异常输入安全降级且不修改调用方对象', () => {
 test('基础包的目标字段和提示要求映射会剔除凭证键及非字符串值', () => {
   const pack = schema.normalizeWritingPack({
     ...packInput,
-    targetFields: { title: '标题', apiKey: 'secret-token', nested: { password: 'secret' } },
-    outputRequirements: { revision: '保留原有观点', password: 'secret-pass', callback: () => '不保留' }
+    targetFields: {
+      title: '标题', apiKey: 'secret-token', privateKey: 'secret-private',
+      nested: { password: 'secret' }, authHeader: 'Bearer secret'
+    },
+    outputRequirements: {
+      revision: '保留原有观点', password: 'secret-pass', callback: () => '不保留',
+      privateKey: 'secret-private', authHeader: 'Bearer secret'
+    }
   });
   assert.deepEqual(pack.targetFields, { title: '标题' });
   assert.deepEqual(pack.outputRequirements, { revision: '保留原有观点' });

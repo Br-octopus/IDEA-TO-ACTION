@@ -58,14 +58,19 @@ test('catalog 工厂不接受输入覆盖 builtin 且 UMD 全局可调用', () =
 test('浏览器 UMD 遇到旧版或残缺普通文章配置时安全使用基线默认值', () => {
   const source = readFileSync(require.resolve('../prototype/writing-pack-catalog.js'), 'utf8');
   const schemaSource = readFileSync(require.resolve('../prototype/writing-pack-schema.js'), 'utf8');
-  for (const workbench of [{}, { WRITING_GENRE_CONFIGS: { article: {} } }]) {
+  for (const workbench of [
+    {},
+    { WRITING_GENRE_CONFIGS: { article: {} } },
+    { WRITING_GENRE_CONFIGS: { article: { targetFields: { title: '标题' }, outputRequirements: { revision: '保留观点' } } } }
+  ]) {
     const context = vm.createContext({ WritingWorkbenchSchema: workbench });
     vm.runInContext(schemaSource, context);
     vm.runInContext(source, context);
     const pack = context.WritingPackCatalog.getBuiltinWritingPacks()[0];
     assert.equal(pack.id, 'builtin-article');
     assert.equal(pack.memoryNamespace, 'article');
-    assert.ok(Array.isArray(pack.checkDimensions));
-    assert.ok(pack.outputRequirements && typeof pack.outputRequirements === 'object');
+    assert.equal(pack.checkDimensions.length, 8);
+    assert.deepEqual(Object.keys(pack.outputRequirements), ['diagnosis', 'revision']);
+    assert.equal(pack.targetFields.goal, '目标');
   }
 });
