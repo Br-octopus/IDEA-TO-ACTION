@@ -733,6 +733,12 @@ test('备份按 scope 严格限制 data 和 counts 字段白名单', () => {
   extraKnowledgeField.data.extra = true;
   assert.throws(() => validateBackup(extraKnowledgeField), /字段/);
 
+  for (const field of ['promptAgentTasks', 'writingPacks', 'writingPackSettings']) {
+    const workspaceCountInKnowledgeBackup = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+    workspaceCountInKnowledgeBackup.counts[field] = 0;
+    assert.throws(() => validateBackup(workspaceCountInKnowledgeBackup), /统计字段/);
+  }
+
   const workspaceBackup = createBackup(createState(), { scope: 'workspace', now: exportedAt });
   workspaceBackup.data.extra = true;
   assert.throws(() => validateBackup(workspaceBackup), /字段/);
@@ -1020,6 +1026,66 @@ test('真实拒绝搜索的完整备份导出导入保存重载保留拒绝及�
   assert.equal(Object.hasOwn(knowledge.data, 'writingArticles'), false);
 });
 
+test('写作基础包备份包含包与设置集合并正确计数，资料库备份排除', () => {
+  const schema = require('../prototype/writing-pack-schema.js');
+  const pack = schema.normalizeWritingPack({
+    id: 'pack-1', name: '文献综述包', layer: 'task', version: 1,
+    checks: [{ id: 'c1', statement: '检查', apiKey: 'pack-credential-marker' }],
+    sources: [{ id: 's1', title: '来源', password: 'pack-credential-marker' }]
+  });
+  const state = { writingPacks: [pack], writingPackSettings: [{ id: 'pack-1', enabled: false }] };
+  const backup = createBackup(state);
+  assert.deepEqual(backup.data.writingPacks, [pack]);
+  assert.equal(backup.counts.writingPacks, 1);
+  assert.equal(getBackupSummary(backup).counts.writingPackSettings, 1);
+  const replaced = replaceState({}, JSON.parse(JSON.stringify(backup)));
+  assert.deepEqual(replaced.writingPacks, [pack]);
+  assert.equal(JSON.stringify(replaced).includes('pack-credential-marker'), false);
+  const knowledge = createBackup(state, { scope: 'knowledge-base' });
+  for (const field of ['writingPacks', 'writingPackSettings']) {
+    assert.equal(Object.hasOwn(knowledge.data, field), false);
+    assert.equal(Object.hasOwn(knowledge.counts, field), false);
+  }
+  assert.equal(replaceState(state, knowledge).writingPacks.length, 1);
+});
+
+test('写作基础包合并冲突保留当前版本，旧备份缺新增字段迁移为空集合', () => {
+  const schema = require('../prototype/writing-pack-schema.js');
+  const incoming = schema.normalizeWritingPack({ id: 'incoming-pack', name: '新包', layer: 'task', version: 1 });
+  const backup = createBackup({});
+  backup.data.writingPacks = [incoming];
+  backup.data.writingPackSettings = [{ id: 'incoming-pack', enabled: true }];
+  backup.counts.writingPacks = 1;
+  backup.counts.writingPackSettings = 1;
+  const current = {
+    writingPacks: [schema.normalizeWritingPack({ id: 'incoming-pack', name: '当前版本', layer: 'task', version: 2 })],
+    writingPackSettings: [{ id: 'incoming-pack', enabled: false, updatedAt: '2026-10-20T00:00:00.000Z' }]
+  };
+  const merged = mergeState(current, backup);
+  assert.deepEqual(merged.state.writingPacks.map(item => item.name), ['当前版本']);
+  assert.equal(merged.state.writingPackSettings[0].enabled, false);
+  assert.equal(merged.conflicts.filter(item => item.collection.startsWith('writingPack')).length, 2);
+  const fresh = mergeState({ writingPacks: [], writingPackSettings: [] }, backup);
+  assert.deepEqual(fresh.state.writingPacks.map(item => item.id), ['incoming-pack']);
+  assert.equal(fresh.state.writingPackSettings[0].enabled, true);
+  const legacy = createBackup({});
+  delete legacy.data.writingPacks;
+  delete legacy.data.writingPackSettings;
+  assert.equal(validateBackup(legacy), true);
+  const withCurrent = { writingPacks: [{ id: 'current-1' }], writingPackSettings: [] };
+  assert.deepEqual(replaceState(withCurrent, legacy).writingPacks, []);
+  assert.deepEqual(mergeState(withCurrent, legacy).state.writingPacks.map(item => item.id), ['current-1']);
+  const bad = createBackup({});
+  bad.data.writingPacks = [{ id: '' }];
+  bad.data.writingPackSettings = [{ id: '', enabled: true }];
+  bad.counts.writingPacks = 1;
+  bad.counts.writingPackSettings = 1;
+  assert.throws(() => validateBackup(bad), /id/);
+  const overlong = createBackup({});
+  overlong.data.writingPacks = [{ id: 'p'.repeat(121) }];
+  overlong.counts.writingPacks = 1;
+  assert.throws(() => validateBackup(overlong), /id/);
+});
 test('写作完整备份含历史快照和记忆及摘要计数，资料库备份排除写作集合', () => {
   const schema = require('../prototype/writing-workbench-schema.js');
   const state = {
