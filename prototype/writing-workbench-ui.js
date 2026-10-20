@@ -1,14 +1,13 @@
 (function (root, factory) {
-  const api = factory();
-  if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.WritingWorkbenchUI = api;
-})(typeof globalThis === 'undefined' ? this : globalThis, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./writing-workbench-schema.js'));
+  else root.WritingWorkbenchUI = factory(root.WritingWorkbenchSchema);
+})(typeof globalThis === 'undefined' ? this : globalThis, function (schema) {
   'use strict';
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const clone = value => JSON.parse(JSON.stringify(value));
   const lines = value => String(value || '').split('\n').map(s => s.trim()).filter(Boolean);
-  const dimensions = ['目标读者', '事实依据', '逻辑结构', '语言表达', '风格修辞', '术语一致', '格式排版', '约束风险'];
-  const scopeLabels = { general: '通用', genre: '普通文章', article: '仅本篇' };
+  const articleConfig = schema.getWritingGenreConfig('article');
+  const scopeLabels = { general: '通用', genre: articleConfig.name, article: '仅本篇' };
   const sourceLabels = { temporary: '临时判断', sample: '样本提炼', user: '用户指定', 'user-corrected': '用户纠正', mixed: '样本与用户要求' };
   const confidenceLabels = { low: '低', medium: '中', high: '高' };
   const verificationLabels = { unverified: '未核验', 'source-reviewed': '已核对来源', 'user-confirmed': '用户确认' };
@@ -30,7 +29,8 @@
         const a = w?.article || {};
         const round = w?.rounds.at(-1);
         drafts.set(id, {
-          title: a.title || '', genre: '普通文章', goal: a.goal || '', audience: a.audience || '', platform: a.platform || '',
+          title: a.title || '', genre: w ? schema.getWritingGenreConfig(a.genre)?.name || a.genre || '未支持文体' : articleConfig.name,
+          goal: a.goal || '', audience: a.audience || '', platform: a.platform || '',
           success: (a.successCriteria || []).join('\n'), preserve: (a.preserveItems || []).join('\n'), constraints: a.constraints || '',
           dimensions: a.dimensions || [], draft: round?.draft || '', newDraft: '', feedback: '', preference: '', example: '', counterexample: '',
           scope: 'general', corrections: w?.styleProfile.userCorrections || '', materials: round ? references(round) : [],
@@ -96,15 +96,19 @@
     function render() {
       const f = form();
       const w = workspace(articleId);
+      const config = w ? schema.getWritingGenreConfig(w.article.genre) : articleConfig;
+      const dimensions = config?.checkDimensions || [];
+      const labels = config?.targetFields || articleConfig.targetFields;
       const locked = busy.has(articleId);
       const articles = coordinator.listArticles();
       mount.innerHTML = `<section class="social-panel">
         <div class="social-tools"><h2>写作工作台</h2>${button('new', '新建文章')}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}</div>
         <label class="field" for="writing-article-list"><span class="field-label">文章列表</span><select id="writing-article-list"><option value="">新文章</option>${articles.map(a => `<option value="${escape(a.id)}" ${a.id === articleId ? 'selected' : ''}>${escape(a.title || a.goal || '未命名文章')}</option>`).join('')}</select></label>
-        <div class="social-form-grid">${field('title', '标题', f.title, { input: true })}${field('genre', '文体（首版支持普通文章）', f.genre, { input: true })}</div>
-        ${field('goal', '目标', f.goal)}<div class="social-form-grid">${field('audience', '读者', f.audience, { input: true })}${field('platform', '平台', f.platform, { input: true })}</div>
-        <div class="social-form-grid">${field('success', '成功标准（每行一项）', f.success)}${field('preserve', '必须保留（每行一项）', f.preserve)}</div>${field('constraints', '限制条件（最多500字）', f.constraints)}
-        <fieldset class="writing-dimensions"><legend>诊断维度（可选；不选按全部八维初检）</legend>${dimensions.map((d, i) => `<label><input id="writing-dimension-${i}" type="checkbox" data-writing-dimension="${d}" ${f.dimensions.includes(d) ? 'checked' : ''}>${d}</label>`).join('')}</fieldset>
+        <div class="social-form-grid">${field('title', escape(labels.title), f.title, { input: true })}${field('genre', `文体（首版支持${escape(articleConfig.name)}）`, f.genre, { input: true })}</div>
+        ${field('goal', escape(labels.goal), f.goal)}<div class="social-form-grid">${field('audience', escape(labels.audience), f.audience, { input: true })}${field('platform', escape(labels.platform), f.platform, { input: true })}</div>
+        <div class="social-form-grid">${field('success', `${escape(labels.successCriteria)}（每行一项）`, f.success)}${field('preserve', `${escape(labels.preserveItems)}（每行一项）`, f.preserve)}</div>${field('constraints', `${escape(labels.constraints)}（最多500字）`, f.constraints)}
+        ${config ? `<details><summary>${escape(config.name)}检查依据</summary><p>适用：${escape(config.applicability)}</p><p>风险：${escape(config.riskReminders.join('；'))}</p><p>风格建议（低于当前要求、样本/用户更正和适用记忆）：${escape(config.styleBaseline.join('；'))}</p></details>` : '<p>当前文体暂无专用检查依据，请确认是否按普通文章处理。</p>'}
+        <fieldset class="writing-dimensions"><legend>诊断维度（可选；不选按全部${dimensions.length}项初检）</legend>${dimensions.map((d, i) => `<label><input id="writing-dimension-${i}" type="checkbox" data-writing-dimension="${escape(d)}" ${f.dimensions.includes(d) ? 'checked' : ''}>${escape(d)}</label>`).join('')}</fieldset>
         ${field('draft', w ? '当前稿件（只读；新稿从下方带回）' : '初稿（可选）', f.draft, { readOnly: !!w })}
         <div class="social-tools">${button(w ? 'update' : 'create', w ? '更新目标并本地初检' : '新建并本地初检', '', locked)}${w ? button('build', '重新本地初检', '', locked) : ''}</div>
         <label class="check-row"><input id="writing-save" type="checkbox" ${f.saveEnabled ? 'checked' : ''} ${!w || locked ? 'disabled' : ''}>开启本机保存</label>
@@ -126,7 +130,7 @@
         <h3>可选偏好候选</h3><p class="social-muted">只统计你在下方明确填写的候选；两篇不同文章重复时可晋升，并提供撤销。</p>
         ${field('preference', '偏好候选（可编辑）', f.preference)}<div class="social-form-grid">${field('example', '例句', f.example)}${field('counterexample', '反例', f.counterexample)}</div>
         ${button('append', '回带并新增同篇一轮', '', !w || locked)}
-        <label class="field" for="writing-memory-scope"><span class="field-label">显式记忆范围</span><select id="writing-memory-scope" data-writing-field="scope">${[['general', '通用'], ['genre', '普通文章'], ['article', '仅本篇']].map(([value, label]) => `<option value="${value}" ${f.scope === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+        <label class="field" for="writing-memory-scope"><span class="field-label">显式记忆范围</span><select id="writing-memory-scope" data-writing-field="scope">${Object.entries(scopeLabels).map(([value, label]) => `<option value="${value}" ${f.scope === value ? 'selected' : ''}>${escape(label)}</option>`).join('')}</select></label>
         ${button('remember', '记住这个偏好', '', !w || locked)}${renderNotifications(f)}
       </section>
       ${renderHistory(w, f)}${renderMemories(w)}`;
@@ -169,7 +173,7 @@
       return f.notifications.map(n => `<p role="status">${escape(n.message)}${button('undo-memory', '撤销新增记忆', `data-memory-id="${escape(n.memoryId)}"`)}</p>`).join('');
     }
     function renderMemories(w) {
-      const relevant = coordinator.getRelevantMemories('article', w?.id);
+      const relevant = coordinator.getRelevantMemories(w ? w.genre : 'article', w?.id);
       const all = (state().writingMemories || []).filter(m => !m.undo?.undoneAt);
       return `<section class="social-panel"><h2>当前相关记忆（最多3条）</h2>${relevant.map(m => `<p>${escape(m.preference)} · ${escape(scopeLabels[m.scope])}${m.example ? `<br>例句：${escape(m.example)}` : ''}${m.counterexample ? `<br>反例：${escape(m.counterexample)}` : ''}</p>`).join('') || '<p>暂无相关记忆。</p>'}
         ${managerOpen ? `<h3>全部有效记忆（${all.length}）</h3>${all.map(m => {
@@ -206,7 +210,7 @@
       try {
         if (action === 'create') {
           let confirmAsArticle = false;
-          const genre = ['普通文章', 'article', ''].includes(f.genre.trim()) ? 'article' : f.genre;
+          const genre = [articleConfig.name, 'article', ''].includes(f.genre.trim()) ? 'article' : f.genre;
           if (genre !== 'article') {
             confirmAsArticle = await confirm('当前仅支持普通文章。确认将当前文体按普通文章处理？');
             if (!confirmAsArticle) return;
@@ -215,7 +219,7 @@
           const w = await coordinator.createArticle({ ...articlePatch(submitted), ...roundInput(submitted, submitted.draft, ''), genre, confirmAsArticle });
           drafts.delete(''); drafts.set(w.id, f);
           if (articleId === '') articleId = w.id;
-          f.genre = '普通文章'; updateOutputs(f, w.rounds.at(-1), submitted);
+          f.genre = articleConfig.name; updateOutputs(f, w.rounds.at(-1), submitted);
           acknowledge(f, submitted, ['title', 'goal', 'audience', 'platform', 'success', 'preserve', 'constraints', 'dimensions', 'materials', 'corrections', 'draft']);
           for (const m of state().writingMemories || []) {
             if (!memoryIds.has(m.id) && m.undo?.action === 'auto-promote' && !m.undo.undoneAt && m.evidenceArticleIds.includes(w.id)) {
