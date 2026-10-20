@@ -34,6 +34,7 @@ function createWritingApp(options = {}) {
     createElement() { return makeElement('created'); }, body: { append() {} }, execCommand() { return true; }
   };
   let failSave = false;
+  let failWriteAt = 0;
   let requests = 0;
   let writes = 0;
   const exports = [];
@@ -41,7 +42,7 @@ function createWritingApp(options = {}) {
   let state = options.initialState || storage.createEmptyState();
   let coordinator;
   let backupRaw;
-  const localStorage = { getItem: key => disk.get(key) || null, setItem(key, value) { if (failSave) throw new Error('磁盘已满'); disk.set(key, value); } };
+  const localStorage = { getItem: key => disk.get(key) || null, setItem(key, value) { if (failSave || writes === failWriteAt) throw new Error('磁盘已满'); disk.set(key, value); } };
   const window = {
     ForwardStepStorage: { ...storage, loadState() { if (options.readBlocked) throw new Error('读取失败'); return { state }; }, saveState(store, next, opts) { writes++; const result = storage.saveState(store, next, opts); state = result; return result; } },
     ForwardStepResearchCatalog: require('../../prototype/research-catalog.js'),
@@ -65,7 +66,7 @@ function createWritingApp(options = {}) {
     fetch: async () => ({ ok: true, json: async () => ({}) }), setTimeout: () => 1, clearTimeout() {}, Date, console, URL, Blob };
   if (options.browser) delete window.desktopApi;
   vm.runInNewContext(fs.readFileSync(require.resolve('../../prototype/app.js'), 'utf8'), context);
-  return { ...dom, window, element, listeners, exports, clicks, pageHTML, knowledgeForms, get coordinator() { return coordinator; }, get state() { return state; }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
+  return { ...dom, window, element, listeners, exports, clicks, pageHTML, knowledgeForms, get coordinator() { return coordinator; }, get state() { return state; }, get diskState() { return JSON.parse(disk.get(storage.STORAGE_KEY) || 'null'); }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, set failWriteAt(value) { failWriteAt = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
     async import(backup) { backupRaw = JSON.stringify(backup); await listeners.get('knowledge-import-open:click')(); },
     event(id, type = 'click', event = {}) { return listeners.get(`${id}:${type}`)?.({ target: element(id), preventDefault() {}, ...event }); } };
 }

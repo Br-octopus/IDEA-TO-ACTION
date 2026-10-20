@@ -242,6 +242,12 @@
         else if (action === 'delete-memory') await coordinator.deleteMemory(data.memoryId);
       } catch (error) {
         f.error = error.message || '操作失败，输入已保留';
+        if (action === 'append' && error.code !== 'STALE_RESULT') {
+          // 新轮可能已留在会话，仅落盘失败；可见稿必须与下一次模型诊断使用的轮次一致。
+          const round = coordinator.getWorkspace(id).rounds.at(-1);
+          f.draft = round.draft;
+          updateOutputs(f, round, submitted);
+        }
         if (action === 'create' && error.articleId && error.code !== 'STALE_RESULT') {
           drafts.delete(''); drafts.set(error.articleId, f); if (articleId === '') articleId = error.articleId;
         }
