@@ -17,6 +17,8 @@
     const sessions = new Map();
     const memories = new Map();
     const modelRuns = new Map();
+    const researchRuns = new Map();
+    const researchStates = new Map();
     const pendingMemories = new Set();
     const sessionVersions = new WeakMap();
     const deleting = new WeakSet();
@@ -154,6 +156,156 @@
       }
       validateProfile(w.styleProfile, w.id);
     }
+
+    const researchMethods = [
+      '普通文章如何减少空泛总结并保留具体证据',
+      '普通文章如何组织清晰结构和段落推进',
+      '普通文章如何保持自然表达并避免模板化语气'
+    ];
+    function researchState(w) {
+      return researchStates.get(w.id) || w.article.research || { status: 'idle' };
+    }
+    function writeResearchState(w, next) {
+      const safe = copy(next);
+      researchStates.set(w.id, safe);
+      return safe;
+    }
+    function invalidateResearch(w, status = 'cancelled') {
+      const run = researchRuns.get(w.id);
+      if (run) { run.invalidated = true; run.controller.abort(); researchRuns.delete(w.id); }
+      if (status === 'cancelled' && ['running', 'awaiting-confirmation'].includes(researchState(w).status)) {
+        writeResearchState(w, { ...researchState(w), status });
+      }
+    }
+    function researchKeywords(value) {
+      const keywords = String(value || '').trim();
+      if (!keywords) return '';
+      if (keywords.length > 40 || !/^[\p{L}\p{N} -]+$/u.test(keywords)) {
+        throw failure('INVALID_RESEARCH_KEYWORDS', '搜索关键词最多40字，仅限文字、数字、空格和短横线；请勿填写敏感信息');
+      }
+      return keywords;
+    }
+    function researchScope(method, keywords) {
+      const suffix = keywords ? ` ${keywords}` : '';
+      return {
+        objective: `为普通文章提供可核验的写作方法线索：${method}`,
+        queries: [`site:github.com ${method} skill${suffix}`, `${method} 写作方法${suffix}`, `${method} 案例${suffix}`],
+        sourceTypes: ['web', 'github'],
+        platforms: [],
+        budget: { maxQueries: 3, maxSources: 5 }
+      };
+    }
+    function assertResearchCurrent(w, run) {
+      assertCurrent(w, run.version);
+      if (researchRuns.get(w.id) !== run || run.invalidated || run.controller.signal.aborted || w.rounds.at(-1) !== run.round) {
+        throw failure('RESEARCH_CANCELLED', '搜索结果已过期或已取消', { articleId: w.id });
+      }
+    }
+    function mergeResearchSources(round, result) {
+      const sources = (Array.isArray(result?.results) ? result.results : []).slice(0, 5).map(item => ({
+        title: item.title || '未命名来源', url: item.url || '',
+        excerpt: `公开线索（未验证，不升级为个人记忆）；适用：${item.applicability || '普通文章，需结合原文判断'}；局限：${item.limitations || '搜索摘要未经独立核验'}；摘要：${String(item.summary || '').slice(0, 600)}`,
+        purpose: 'content', verificationStatus: 'unverified', origin: 'public-research'
+      })).filter(item => item.url);
+      // 手工及风格来源不可挤掉；自动内容来源为本次公开线索至少留一个名额。
+      const protectedSources = round.sources.filter(s => ['style', 'both'].includes(s.purpose) || !s.origin);
+      const automatic = round.sources.filter(s => !protectedSources.includes(s));
+      const slots = Math.max(0, 3 - round.materials.length - protectedSources.length);
+      const seen = new Set(protectedSources.map(s => s.url).filter(Boolean));
+      const incoming = sources.filter(s => !seen.has(s.url));
+      const merged = [...protectedSources, ...automatic.slice(0, Math.max(0, slots - (incoming.length ? 1 : 0))), ...incoming];
+      const refs = references({ materials: round.materials, sources: merged.filter(s => {
+        const identity = s.url || JSON.stringify([s.title, s.excerpt, s.purpose]);
+        const duplicate = merged.findIndex(m => (m.url || JSON.stringify([m.title, m.excerpt, m.purpose])) === identity);
+        return merged.indexOf(s) === duplicate;
+      }) });
+      Object.assign(round, refs);
+      const includedSources = refs.sources.filter(s => incoming.some(m => m.url === s.url)).length;
+      return { ...refs, includedSources, contextNote: sources.length && !includedSources
+        ? '公开摘要未纳入提示词：三份上下文已由手工材料或风格样本占用，原资料保留。'
+        : `本次公开摘要纳入提示词${includedSources}份；手工材料和风格样本保留，合计最多3份。` };
+    }
+    function previewResearch(id, options = {}) {
+      const w = workspace(id);
+      const current = researchState(w);
+      if (current.status === 'rejected') throw failure('RESEARCH_REJECTED', '本篇已拒绝搜索，不会重复申请');
+      if (current.status === 'running') throw failure('RESEARCH_RUNNING', '搜索正在进行，请先取消');
+      const method = String(options.method || researchMethods[0]).trim();
+      if (!researchMethods.includes(method)) throw failure('INVALID_RESEARCH_METHOD', '只能选择固定的写作方法问题');
+      const keywords = researchKeywords(options.keywords);
+      invalidateResearch(w);
+      const scope = researchScope(method, keywords);
+      const preview = dependencies.promptAgentCoordinator?.previewExternalResearch?.(scope);
+      if (!preview) throw failure('RESEARCH_UNAVAILABLE', '研究桥接服务未配置');
+      researchRuns.set(id, { version: sessionVersions.get(w), round: roundFor(id), controller: new AbortController(), invalidated: false });
+      return copy(writeResearchState(w, { ...preview, requestId: preview.id,
+        method, keywords, sourceRange: 'GitHub 和公开网页', expectedUse: '只作普通文章写作方法线索，与本地规则合并后用于当前诊断' }));
+    }
+    async function approveResearch(id, confirmation = {}) {
+      const w = workspace(id);
+      const current = researchState(w);
+      if (current.status === 'rejected') throw failure('RESEARCH_REJECTED', '本篇已拒绝搜索，不会重复申请');
+      if (confirmation.confirmed !== true) throw failure('RESEARCH_CONFIRMATION_REQUIRED', '搜索前必须明确确认计划和预算');
+      const requestId = current.requestId;
+      if (!requestId || current.status !== 'awaiting-confirmation') throw failure('RESEARCH_PREVIEW_REQUIRED', '请先预览搜索计划');
+      if (typeof dependencies.promptAgentCoordinator?.approveExternalResearch !== 'function'
+        || typeof dependencies.promptAgentCoordinator?.runExternalResearch !== 'function') throw failure('RESEARCH_UNAVAILABLE', '研究桥接服务未配置');
+      const run = researchRuns.get(id);
+      if (!run) throw failure('RESEARCH_PREVIEW_REQUIRED', '搜索计划已失效，请重新预览');
+      assertResearchCurrent(w, run);
+      dependencies.promptAgentCoordinator.approveExternalResearch(requestId);
+      const round = run.round;
+      writeResearchState(w, { ...current, status: 'running', updatedAt: now() });
+      let onAbort;
+      try {
+        const aborted = new Promise((_, reject) => {
+          onAbort = () => reject(failure('RESEARCH_CANCELLED', '搜索已取消'));
+          run.controller.signal.addEventListener('abort', onAbort, { once: true });
+        });
+        assertResearchCurrent(w, run);
+        const result = await Promise.race([dependencies.promptAgentCoordinator.runExternalResearch(requestId, { signal: run.controller.signal }), aborted]);
+        assertResearchCurrent(w, run);
+        const refs = mergeResearchSources(round, result);
+        const status = result.status || (result.results?.length ? 'complete' : 'failed');
+        writeResearchState(w, { ...current, status, results: result.results || [], contextNote: refs.contextNote,
+          error: result.errors?.map(e => e.message).join('；') || '', usedQueries: result.usedQueries, usedSources: result.usedSources });
+        if (refs.includedSources) generate(w, round);
+        assertResearchCurrent(w, run);
+        await saveWorkspace(w);
+        return copy({ ...result, status, articleId: id, roundId: round.id, ...refs });
+      } catch (error) {
+        if (error.code === 'PERSIST_FAILED') throw error;
+        if (['RESEARCH_CANCELLED', 'STALE_RESULT'].includes(error.code) || run.controller.signal.aborted) {
+          return { status: 'cancelled', articleId: id, roundId: round.id, results: [], errors: [] };
+        }
+        assertCurrent(w, run.version);
+        writeResearchState(w, { ...current, status: 'failed', error: String(error.message || error), updatedAt: now() });
+        return { status: 'failed', articleId: id, roundId: round.id, results: [], errors: [{ message: String(error.message || error) }] };
+      } finally {
+        run.controller.signal.removeEventListener('abort', onAbort);
+        if (researchRuns.get(id) === run) researchRuns.delete(id);
+      }
+    }
+    async function rejectResearch(id) {
+      const w = workspace(id);
+      const current = researchState(w);
+      if (current.status === 'rejected') return copy(current);
+      if (current.status !== 'awaiting-confirmation') throw failure('RESEARCH_PREVIEW_REQUIRED', '请先预览搜索计划');
+      dependencies.promptAgentCoordinator.rejectExternalResearch(current.requestId);
+      invalidateResearch(w);
+      const next = writeResearchState(w, { ...current, status: 'rejected', updatedAt: now() });
+      w.article.research = { status: 'rejected' };
+      if (w.article.saveEnabled) await saveWorkspace(w);
+      return copy(next);
+    }
+    function cancelResearch(id) {
+      const w = workspace(id);
+      const run = researchRuns.get(id);
+      if (!run) return false;
+      invalidateResearch(w);
+      return true;
+    }
+    function getResearchState(id) { return copy(researchState(workspace(id))); }
     function generate(w, round, refreshDiagnosis = false) {
       validateInput(w, round);
       const input = inputFor(w, round);
@@ -220,6 +372,7 @@
     }
     async function appendRound(id, input = {}) {
       const w = workspace(id);
+      invalidateResearch(w);
       validateProfile(input.styleProfile, id);
       const previous = w.rounds.at(-1);
       const round = schema.normalizeWritingRound({ ...input, ...references(input), id: newId('round'), articleId: id,
@@ -251,6 +404,7 @@
     async function deleteArticle(id, options = {}) {
       if (options.confirmed !== true) throw failure('CONFIRMATION_REQUIRED', '删除整篇文章需要明确确认', { articleId: id });
       const w = workspace(id);
+      invalidateResearch(w);
       const version = {};
       sessionVersions.set(w, version);
       deleting.add(w);
@@ -287,7 +441,7 @@
       const sources = (Array.isArray(selected) ? selected : []).slice(0, 3).map(m => ({
         title: `${m.title || '参考资料'}（${m.id || m.location || '来源未提供'}）`,
         url: /^https?:\/\//i.test(m.location || '') ? m.location : '', excerpt: m.excerpt || m.summary || '',
-        purpose: m.purpose || 'content', verificationStatus: m.verificationStatus || 'unverified'
+        purpose: m.purpose || 'content', verificationStatus: m.verificationStatus || 'unverified', origin: 'local-search'
       }));
       // 手工材料和已有来源优先，重复选择同一资料不会占用额外名额。
       const merged = [...round.sources, ...schema.normalizeWritingRound({ sources }).sources];
@@ -430,9 +584,10 @@
     }
     async function refreshFromStorage(options = {}) {
       // 合并保留尚未落盘的会话，但导入前的异步结果和排队保存仍必须失效。
+      for (const w of sessions.values()) invalidateResearch(w);
       if (options.preserveSessions) {
         for (const w of sessions.values()) sessionVersions.set(w, {});
-      } else sessions.clear();
+      } else { sessions.clear(); researchStates.clear(); }
       modelRuns.clear();
       await persistence;
       memories.clear(); pendingMemories.clear(); loadMemories();
@@ -442,7 +597,8 @@
       setSaveEnabled, deleteArticle, getRounds: id => copy(workspace(id).rounds),
       readRound: (id, roundId) => copy(roundFor(id, roundId)), correctStyleProfile,
       build, diagnose: build, runModelDiagnosis, selectMaterials, rememberPreference,
-      editMemory, deleteMemory, undoMemory, getRelevantMemories, refreshFromStorage, reset: refreshFromStorage };
+      editMemory, deleteMemory, undoMemory, getRelevantMemories, refreshFromStorage, reset: refreshFromStorage,
+      previewResearch, approveResearch, rejectResearch, cancelResearch, getResearchState };
   }
   return { createWritingWorkbenchCoordinator };
 });
