@@ -12,7 +12,7 @@
   const confidenceLabels = { low: '低', medium: '中', high: '高' };
   const verificationLabels = { unverified: '未核验', 'source-reviewed': '已核对来源', 'user-confirmed': '用户确认' };
 
-  function createWritingWorkbenchUI({ document, coordinator, getState, copyText, confirm = message => globalThis.confirm(message), notify } = {}) {
+  function createWritingWorkbenchUI({ document, coordinator, packUI, getState, copyText, confirm = message => globalThis.confirm(message), notify } = {}) {
     const mount = document?.getElementById('writing-workbench-root');
     if (!mount || !coordinator || typeof getState !== 'function') throw new TypeError('写作工作台缺少必要依赖');
     const drafts = new Map();
@@ -102,7 +102,7 @@
       const locked = busy.has(articleId);
       const articles = coordinator.listArticles();
       mount.innerHTML = `<section class="social-panel">
-        <div class="social-tools"><h2>写作工作台</h2>${button('new', '新建文章')}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}</div>
+        <div class="social-tools"><h2>写作工作台</h2>${button('new', '新建文章')}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}${button('manage-packs', '专业基础包')}</div>
         <label class="field" for="writing-article-list"><span class="field-label">文章列表</span><select id="writing-article-list"><option value="">新文章</option>${articles.map(a => `<option value="${escape(a.id)}" ${a.id === articleId ? 'selected' : ''}>${escape(a.title || a.goal || '未命名文章')}</option>`).join('')}</select></label>
         <div class="social-form-grid">${field('title', escape(labels.title), f.title, { input: true })}${field('genre', `文体（首版支持${escape(articleConfig.name)}）`, f.genre, { input: true })}</div>
         ${field('goal', escape(labels.goal), f.goal)}<div class="social-form-grid">${field('audience', escape(labels.audience), f.audience, { input: true })}${field('platform', escape(labels.platform), f.platform, { input: true })}</div>
@@ -193,6 +193,7 @@
     async function operate(action, data = {}) {
       if (action === 'new') { if (articleId) coordinator.cancelResearch(articleId); articleId = ''; render(); return; }
       if (action === 'manage-memories') { managerOpen = !managerOpen; render(); return; }
+      if (action === 'manage-packs') { packUI && packUI.handle('pack-open'); return; }
       const id = articleId;
       const f = form(id);
       if (action === 'cancel-research') { coordinator.cancelResearch(id); render(); return; }

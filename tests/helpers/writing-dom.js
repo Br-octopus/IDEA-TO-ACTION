@@ -1,11 +1,12 @@
 // 原生 DOM 的最小测试替身：解析真实渲染控件，并通过委托事件操作界面。
 function createWritingDOM() {
+  const dispatch = async (type, event) => { for (const handler of handlers[type] || []) await handler(event); };
   const nodes = new Map();
   const handlers = {};
   const decode = value => String(value || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
   let html = '';
   const mount = {
-    addEventListener(type, handler) { handlers[type] = handler; },
+    addEventListener(type, handler) { (handlers[type] = handlers[type] || []).push(handler); },
     get innerHTML() { return html; },
     set innerHTML(value) {
       html = value;
@@ -26,9 +27,9 @@ function createWritingDOM() {
   return {
     document, mount,
     node: id => nodes.get(id),
-    async input(id, value, type = 'input') { const target = nodes.get(id); if (!target) throw new Error(`控件不存在：${id}`); target.value = value; await handlers[type]?.({ target }); },
-    async click(action, data = {}) { const target = [...nodes.values()].find(n => n.dataset.writingAction === action && Object.entries(data).every(([key, value]) => n.dataset[key] === value)); if (!target) throw new Error(`操作不存在：${action}`); if (target.disabled) throw new Error(`操作已禁用：${action}`); await handlers.click({ target, preventDefault() {} }); },
-    async change(id, value) { const target = nodes.get(id); if (!target) throw new Error(`控件不存在：${id}`); if (typeof value === 'boolean') target.checked = value; else target.value = value; await handlers.change({ target }); }
+    async input(id, value, type = 'input') { const target = nodes.get(id); if (!target) throw new Error(`控件不存在：${id}`); target.value = value; await dispatch(type, { target }); },
+    async click(action, data = {}) { const target = [...nodes.values()].find(n => (n.dataset.writingAction === action || n.dataset.action === action) && Object.entries(data).every(([key, value]) => n.dataset[key] === value)); if (!target) throw new Error(`操作不存在：${action}`); if (target.disabled) throw new Error(`操作已禁用：${action}`); await dispatch('click', { target, preventDefault() {} }); },
+    async change(id, value) { const target = nodes.get(id); if (!target) throw new Error(`控件不存在：${id}`); if (typeof value === 'boolean') target.checked = value; else target.value = value; await dispatch('change', { target }); }
   };
 }
 module.exports = { createWritingDOM };
