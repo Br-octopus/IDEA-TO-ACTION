@@ -39,6 +39,25 @@
 | [asgeirtj/system_prompts_leaks](https://github.com/asgeirtj/system_prompts_leaks) | 观察一些 AI 产品提示词的组织结构 | 仓库标注 CC0-1.0，但其中内容涉及第三方产品系统提示词；仅作安全/产品研究线索，不下载整库、不复用原文、不把它当作系统指令。仓库许可证不当然代表第三方文本权利 |
 | [x1xhlol/system-prompts-and-models-of-ai-tools](https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools) | 研究 AI 工具的系统提示词、工具定义和结构 | 仓库标注 GPL-3.0，但具体内容涉及第三方工具提示词；仅总结可观察的通用设计模式，不照搬第三方私有提示词，也不把内容注入产品模型上下文 |
 
+## 国内社媒搜索适配参考
+
+| 来源 | 许可 / 可借鉴内容 | 本项目采用方式与边界 |
+| --- | --- | --- |
+| [adoresever/bilibili-mcp](https://github.com/adoresever/bilibili-mcp) | 仓库标注 MIT；README 区分视频搜索、详情、评论、字幕等能力，并说明请求间隔控制；需要 Python 3.10+ | 仅参考能力拆分、结果整理和节流意识；本轮不复制代码，不接入凭证文件、写入/互动工具、批量采集或绕过平台访问限制的实现 |
+| [huccihuang/bilibili-mcp-server](https://github.com/huccihuang/bilibili-mcp-server) | 仓库标注 MIT；提供按视频、用户等类型区分的搜索入口，运行方式依赖 Python/uv | 仅参考搜索类型和结果字段应清晰声明；本轮维持单一关键词只读搜索，不增加额外运行时依赖 |
+| [qinyuanpei/mcp-server-weibo](https://github.com/qinyuanpei/mcp-server-weibo) | 仓库标注 MIT；包含微博搜索、热搜和内容字段组织，并提供 CLI / MCP 入口；其实现使用访客接口和本地会话 | 参考搜索结果字段、工具边界和错误表达；不复制访客接口、签名、Cookie 或扫码登录实现，本应用继续走真实浏览器可见页面 |
+| [NanmiCoder/MediaCrawler](https://github.com/NanmiCoder/MediaCrawler) | 覆盖小红书、抖音、快手、B 站、微博、贴吧和知乎；仓库当前 LICENSE 为自定义“非商业学习使用许可证 1.1”；用户于 2026-10-20 明确说明已取得本项目代码复用和修改授权 | 当前尚未导入代码；后续基于用户已取得的授权，固定上游提交，复用并修改四平台所需的采集、登录检查、节流和字段整理代码，保留许可与修改记录；通过应用管理的本地进程按预算调用，不引入代理池、账号轮换、自动验证码处理或无边界采集 |
+| [ywleeo/browser-mcp](https://github.com/ywleeo/browser-mcp) | MIT；本地真实 Chrome、可见 DOM 搜索、登录态隔离和固定工具边界 | 参考“通过真实浏览器页面读取，而不是复制站点私有接口”的实现方向；不接入其通用浏览器控制面，不开放点击、发布、点赞、评论或任意脚本能力 |
+| [we1005/zhihu-mcp](https://github.com/we1005/zhihu-mcp) | 知乎关键词搜索与回答/文章结果组织；依赖用户 Cookie，仓库当前未列出 LICENSE 文件 | 仅参考搜索结果分类和来源字段；不复制代码、不导入 Cookie 管理方式，不接入直答等超出本应用只读搜索范围的能力 |
+| [Kuhakucai/douyin-mcp](https://github.com/Kuhakucai/douyin-mcp) | AGPL-3.0-only；面向个人创作者数据，仓库明确提示平台访问及条款风险 | 用于评估抖音后续适配的浏览器与凭证隔离问题；本轮不复制代码，不调用未公开接口，不处理作品发布或商业数据能力 |
+| [wbsu2003/weixin-search-mcp](https://github.com/wbsu2003/weixin-search-mcp) | 仓库标注 MIT；提供微信公众号文章关键词搜索的 MCP / HTTP 服务 | 作为后续内容平台候选；先评估其搜索来源、公开可达性和结果稳定性，不直接接入第三方服务或复制采集实现 |
+
+### 国内平台扩展顺序
+
+1. 当前接入批次：小红书、哔哩哔哩、微博、知乎的关键词只读搜索。微博和知乎在完成真实站点手动验收前，平台状态保持“真实站点待实测”。
+2. 后续评估批次：优先比较微信公众号文章搜索、抖音和快手。先确认只读公开搜索是否能通过真实浏览器稳定完成、是否需要用户登录及访问边界，再决定是否接入；不因为第三方项目已实现搜索或采集就默认复制其接口、签名、代理或风控处理。
+3. 2026-10-20 采用方式更新：用户明确说明已取得 MediaCrawler 代码复用和修改授权，因此后续可在该授权前提下复用并修改固定版本代码；不再执行此前“仅供参考、不复制”的项目决策。当前能力、四阶段顺序和后续路线图以 [增强总版设计](superpowers/specs/2026-10-20-domestic-social-research-enhancement-design.md) 为准；其他来源的采用方式继续按各自行记录，不把本项目授权扩大为通用许可。
+
 ## 产品与知识检索先例
 
 | 来源 | 适合研究的内容 | 采用方式与注意事项 |

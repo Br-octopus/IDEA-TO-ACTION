@@ -1,8 +1,12 @@
 # 社媒研究工作流 Agent Implementation Plan
 
+> 2026-10-20：这是基础实施计划，保留历史任务记录。本轮增强以 [增强总版设计](../specs/2026-10-20-domestic-social-research-enhancement-design.md) 的四阶段顺序为准；用户审阅总版后另写增量实施计划，不重复创建本计划中已存在的模块。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在现有 Electron + 本地 Node 服务 + `localStorage` 应用中，增加一个支持小红书、Reddit、YouTube 的社媒研究工作流 Agent，统一编排 API 和真实浏览器两种连接方式，输出结构化报告和可追溯原始结果。
+**Goal:** 在现有 Electron + 本地 Node 服务 + `localStorage` 应用中，增加支持国内平台和历史兼容平台的社媒研究工作流 Agent，统一编排平台工具与确定性工作流，输出结构化报告和可追溯原始结果。
+
+> **2026-10-20 范围增补：** 新建研究只展示国内平台。当前批次为小红书、哔哩哔哩、微博和知乎；Reddit、YouTube 的历史任务和结果通过历史列表继续查看。微博和知乎首期为只读关键词搜索，真实站点验收前不得显示为已验证；微信公众号文章搜索、抖音、快手列入下一轮可行性评估。
 
 **Architecture:** 研究 Agent 只负责理解目标、生成计划和分析；平台适配器负责 API 或真实浏览器搜索；纯函数工作流负责计划确认、预算、状态、失败回退和用户控制。默认有 API 的平台先用 API，失败或结果不足时切换浏览器；无 API 的平台直接使用浏览器。首版不引入多 Agent、数据库或向量检索。
 
@@ -18,9 +22,9 @@
 - `prototype/social-research-workflow.js`：研究计划确认、状态迁移、预算和 API→浏览器回退决策；不访问 DOM、IPC 或网络。
 - `prototype/social-research-prompts.js`：四种研究模板的计划提示词、补搜提示词和报告提示词；只输出文本，不直接执行搜索。
 - `server/social-api-client.js`：平台 API 请求、超时、认证、限流、结果统一化入口；不保存凭证。
-- `server/social-platforms.js`：小红书、Reddit、YouTube 的 API 配置和能力声明；平台差异只放在适配器配置中。
+- `server/social-platforms.js`：国内平台和历史兼容平台的能力声明；平台差异只放在适配器配置中。
 - `electron/social-browser-manager.js`：独立平台 profile、可视化登录窗口、导航、页面读取、关闭、清理和状态检查。
-- `electron/social-browser-adapters.js`：浏览器模式下三个平台的固定搜索/详情动作；只读，页面选择器和提取逻辑与 manager 分离。
+- `electron/social-browser-adapters.js`：各平台固定的只读搜索/详情动作；页面选择器和提取逻辑与 manager 分离。
 - `prototype/social-research-ui.js`：研究计划、平台准备卡、任务进度、结果集和报告的渲染/事件绑定，避免继续扩大 `prototype/app.js`。
 
 ### 修改文件
@@ -269,7 +273,7 @@ adapter.fetchDetail(result)
 adapter.captureEvidence(result, options)
 ```
 
-小红书、Reddit、YouTube 首版都必须支持登录状态检查和只读搜索；详情、评论或截图不支持时返回 `unsupported`，不伪造字段。
+原始平台小红书、Reddit、YouTube 支持登录状态检查和只读搜索；详情、评论或截图不支持时返回 `unsupported`，不伪造字段。2026-10-20 国内范围增量见文末；其中 Reddit、YouTube 仅保留历史查看。
 
 - [ ] **Step 4: 明确高级会话导入边界。**
 
@@ -467,7 +471,7 @@ git commit -m "test: 完成社媒研究工作流集成验收"
 ## Definition of Done
 
 - [ ] 单研究 Agent 能生成四种研究模板的计划，并等待用户确认。
-- [ ] 小红书、Reddit、YouTube 有统一的平台能力和结果契约。
+- [ ] 原始平台小红书、Reddit、YouTube 有统一的平台能力和结果契约；国内范围增量后，新建研究提供小红书、哔哩哔哩、微博和知乎，Reddit、YouTube 只保留历史查看。
 - [ ] 有 API 的平台默认 API 优先，API 失败或结果不足时可切换浏览器。
 - [ ] 没有 API 的平台可直接使用真实浏览器。
 - [ ] 用户可以在可视化准备中心登录、检查能力、清除 profile 和查看错误。
@@ -479,3 +483,54 @@ git commit -m "test: 完成社媒研究工作流集成验收"
 - [ ] 备份不包含 API key、cookies、session token、密码或浏览器 profile。
 - [ ] `npm test`、`npm run check`、`git diff --check` 通过。
 - [ ] Windows 打包和手动验收结果真实记录。
+
+## 国内社媒增量：哔哩哔哩只读搜索
+
+**Files:**
+- Modify: `server/social-platforms.js`
+- Modify: `electron/social-browser-adapters.js`
+- Modify: `electron/social-browser-manager.js`
+- Modify: `electron/main.js`
+- Modify: `prototype/social-research-ui.js`
+- Modify: `tests/social-browser-adapters.test.js`
+- Modify: `tests/social-browser-manager.test.js`
+- Modify: `tests/electron-social-research.test.js`
+- Modify: `tests/social-research-ui.test.js`
+- Modify: `README.md`
+- Modify: `docs/REFERENCE_SOURCES.md`
+- Modify: `docs/superpowers/specs/2026-10-19-social-research-agent-design.md`
+
+- [x] 平台目录标记国内 / 国际市场、浏览器可用能力与是否需要登录；新建研究只提供国内平台，旧任务所需平台卡和结果筛选仍可见。
+- [x] 新增哔哩哔哩安全域名白名单、可视化独立 profile 和只读关键词搜索；标准化标题、作者、摘要、原始视频 URL、查询词和采集方式。
+- [x] 搜索 DOM 不匹配时返回明确的适配器错误；只允许哔哩哔哩平台 HTTPS 结果 URL，不接入其他子域作为结果 URL。
+- [x] 扩展小红书搜索容器和卡片选择器的兼容性；未知页面结构仍按不支持处理。
+- [x] 详情、评论、字幕、弹幕及发布/互动功能本轮不实现；能力卡不得将其显示为可用。
+- [x] 记录参考仓库及许可证；只借鉴能力拆分和结果组织，不复制爬虫代码或登录凭证处理。
+- [x] 补充平台、浏览器、IPC、UI 测试并运行对应测试与 `npm run check`；不执行真实平台采集验收。
+
+## 国内社媒扩展：微博与知乎只读关键词搜索
+
+**Files:**
+- Modify: `server/social-platforms.js`
+- Modify: `electron/social-browser-adapters.js`
+- Modify: `electron/social-browser-manager.js`
+- Modify: `electron/main.js`
+- Modify: `prototype/social-research-prompts.js`
+- Modify: `prototype/social-research-ui.js`
+- Modify: related platform and adapter tests
+- Modify: `README.md`
+- Modify: `docs/REFERENCE_SOURCES.md`
+- Modify: this specification
+
+- [ ] 微博、知乎注册为国内平台并使用固定 HTTPS 搜索地址和独立 profile。
+- [ ] 仅读取平台页面当前可见的关键词搜索卡片，标准化标题、作者、摘要、来源 URL；不接私有签名 API、不抓取评论和正文。
+- [ ] 仅允许各自站点白名单结果 URL；页面结构不识别时明确返回适配器错误，不伪造空结果。
+- [ ] 未完成真实站点验收的平台显示“真实站点待实测”，登录/公开访问状态与搜索能力分开展示。
+- [ ] 新建研究平台选择与研究提示词同步加入微博和知乎；历史 Reddit、YouTube 任务仍可查看但不可重跑。
+- [ ] 补充 IPC、白名单、结果标准化、UI 和平台定义测试并完成本地回归；真实站点验收由用户指定环境后进行。
+
+## 后续平台评估：微信公众号文章、抖音与快手
+
+- [ ] 优先比较微信公众号文章搜索、抖音和快手的公开只读搜索可达性、登录要求、页面稳定性和结果链接结构。
+- [ ] 检查平台规则和第三方参考项目当前许可；不复制逆向签名、代理池、验证码处理或风控规避实现。
+- [ ] 评估通过后再单独排期适配和手动验收，不与微博/知乎首批实现耦合。
