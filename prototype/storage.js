@@ -27,6 +27,9 @@
   const writingSchema = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./writing-workbench-schema.js")
     : typeof globalThis === "undefined" ? null : globalThis.WritingWorkbenchSchema;
+  const writingPackSchema = typeof module === "object" && typeof require === "function"
+    ? require("./writing-pack-schema.js")
+    : typeof globalThis === "undefined" ? null : globalThis.WritingPackSchema;
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
     "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
@@ -42,7 +45,8 @@
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters",
     "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings",
-    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories"
+    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories",
+    "writingPacks", "writingPackSettings"
   ];
 
   function createEmptyState() {
@@ -61,7 +65,9 @@
       promptAgentTasks: [],
       promptAgentSources: [],
       writingArticles: [],
-      writingMemories: []
+      writingMemories: [],
+      writingPacks: [],
+      writingPackSettings: []
     };
   }
 
@@ -375,21 +381,47 @@
   function sanitizeWritingState(state) {
     const articles = Array.isArray(state?.writingArticles) ? state.writingArticles : [];
     const memories = Array.isArray(state?.writingMemories) ? state.writingMemories : [];
-    if (!articles.length && !memories.length) return { writingArticles: [], writingMemories: [] };
-    const schema = writingSchema || globalThis.WritingWorkbenchSchema;
-    if (!schema || typeof schema.normalizeWritingWorkspace !== "function"
-      || typeof schema.normalizeWritingMemory !== "function") {
+    const packs = Array.isArray(state?.writingPacks) ? state.writingPacks : [];
+    const packSettings = Array.isArray(state?.writingPackSettings) ? state.writingPackSettings : [];
+    if (!articles.length && !memories.length && !packs.length && !packSettings.length) {
+      return { writingArticles: [], writingMemories: [], writingPacks: [], writingPackSettings: [] };
+    }
+    const schema = writingSchema || (typeof globalThis === "undefined" ? null : globalThis.WritingWorkbenchSchema);
+    if ((articles.length || memories.length) && (!schema || typeof schema.normalizeWritingWorkspace !== "function"
+      || typeof schema.normalizeWritingMemory !== "function")) {
+      throw new WritingSchemaUnavailableError();
+    }
+    const packSchema = writingPackSchema || (typeof globalThis === "undefined" ? null : globalThis.WritingPackSchema);
+    if ((packs.length || packSettings.length) && (!packSchema
+      || typeof packSchema.normalizeWritingPackCollection !== "function"
+      || typeof packSchema.normalizeWritingPackSettings !== "function")) {
       throw new WritingSchemaUnavailableError();
     }
     // 清洗与保存授权分开：迁移和导入必须保留关闭保存后的历史快照。
     return {
-      writingArticles: stripModelKeys(articles).map(item => {
+      writingArticles: articles.length ? stripModelKeys(articles).map(item => {
         const snapshot = schema.normalizeWritingWorkspace(item);
         if (!snapshot.id) snapshot.id = snapshot.article.id;
         return snapshot;
-      }).filter(item => item.id && item.id === item.article.id),
-      writingMemories: stripModelKeys(memories).map(schema.normalizeWritingMemory).filter(item => item.id)
+      }).filter(item => item.id && item.id === item.article.id) : [],
+      writingMemories: memories.length ? stripModelKeys(memories).map(schema.normalizeWritingMemory).filter(item => item.id) : [],
+      writingPacks: packs.length
+        ? packSchema.normalizeWritingPackCollection(stripModelKeys(packs))
+        : [],
+      writingPackSettings: packSettings.length
+        ? normalizeWritingPackSettings(packSchema, stripModelKeys(packSettings))
+        : []
     };
+  }
+
+  function normalizeWritingPackSettings(schema, settings) {
+    const normalized = settings.map(schema.normalizeWritingPackSettings);
+    const ids = new Set();
+    for (const setting of normalized) {
+      if (ids.has(setting.id)) throw new TypeError(`writingPackSettings 存在重复 ID：${setting.id}`);
+      ids.add(setting.id);
+    }
+    return normalized;
   }
 
   function migrateState(input) {
