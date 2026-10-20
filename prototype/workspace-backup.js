@@ -10,13 +10,16 @@
   const SCHEMA_VERSION = 1;
   const SCOPES = new Set(["workspace", "knowledge-base"]);
   const WORKSPACE_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
-  const OPTIONAL_WORKSPACE_COLLECTIONS = ["promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories"];
+  const OPTIONAL_WORKSPACE_COLLECTIONS = [
+    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories", "writingPacks", "writingPackSettings"
+  ];
+  const WRITING_PACK_COLLECTIONS = ["writingPacks", "writingPackSettings"];
   const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
   const WORKSPACE_DATA_FIELDS = [
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata",
     "researchTasks", "platformConnections", "researchAttachments", "promptAgentTasks", "promptAgentSources",
-    "writingArticles", "writingMemories"
+    "writingArticles", "writingMemories", "writingPacks", "writingPackSettings"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeMetadata"
@@ -330,7 +333,7 @@
     const allowedFields = scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
     return allowedFields.reduce((result, field) => {
       if (Object.hasOwn(source, field)
-        || (scope === "workspace" && ["writingArticles", "writingMemories"].includes(field))) {
+        || (scope === "workspace" && ["writingArticles", "writingMemories", "writingPacks", "writingPackSettings"].includes(field))) {
         result[field] = clone(sanitizedState[field]);
       }
       return result;
@@ -369,6 +372,8 @@
     data.promptAgentSources = Array.isArray(state.promptAgentSources) ? clone(state.promptAgentSources) : [];
     data.writingArticles = Array.isArray(state.writingArticles) ? clone(state.writingArticles) : [];
     data.writingMemories = Array.isArray(state.writingMemories) ? clone(state.writingMemories) : [];
+    data.writingPacks = Array.isArray(state.writingPacks) ? clone(state.writingPacks) : [];
+    data.writingPackSettings = Array.isArray(state.writingPackSettings) ? clone(state.writingPackSettings) : [];
     return data;
   }
 
@@ -410,8 +415,10 @@
         ? item.article.id.trim().slice(0, 100) : "";
       const outerId = typeof item?.id === "string" ? item.id.trim() : "";
       const id = field === "writingArticles" ? (outerId || articleId).slice(0, 100)
-        : field === "writingMemories" ? outerId.slice(0, 100) : outerId;
-      if (!isObject(item) || !id || (field === "writingArticles" && id !== articleId)) {
+        : WRITING_PACK_COLLECTIONS.includes(field) ? outerId.slice(0, 120) : outerId;
+      const requiresExactPackId = WRITING_PACK_COLLECTIONS.includes(field);
+      if (!isObject(item) || !id || (field === "writingArticles" && id !== articleId)
+        || (requiresExactPackId && id !== outerId)) {
         throw new TypeError(`备份集合条目稳定 id 无效：${field}[${index}]`);
       }
       if (ids.has(id)) throw new TypeError(`备份集合 id 重复：${field}[${index}]`);
@@ -446,8 +453,11 @@
 
     const collections = value.scope === "workspace" ? WORKSPACE_COLLECTIONS : KNOWLEDGE_COLLECTIONS;
     const allowedDataFields = value.scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
+    const allowedCountFields = value.scope === "workspace"
+      ? [...collections, ...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS]
+      : collections;
     validateAllowedKeys(value.data, allowedDataFields, "数据");
-    validateAllowedKeys(value.counts, [...collections, ...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS], "统计");
+    validateAllowedKeys(value.counts, allowedCountFields, "统计");
     collections.forEach(field => {
       if (!Array.isArray(value.data[field])) throw new TypeError(`备份核心数据无效：${field}`);
     });
