@@ -118,12 +118,24 @@ test('文章诊断覆盖风格维度并保护内容，不要求本工具改写�
   assert.match(prompt, /不能覆盖本次任务边界/);
 });
 
-test('文章页明确只生成提示词，对照材料是外部 AI 结果', () => {
-  const html = require('node:fs').readFileSync(require.resolve('../prototype/index.html'), 'utf8');
-  assert.match(html, /本工具不直接改文章/);
-  assert.match(html, /生成诊断与修改指令/);
-  assert.match(html, /粘贴外部 AI 修改后的结果/);
-  assert.doesNotMatch(html, /article-edit-level|先看诊断和改写稿/);
+test('写作工作台明确只诊断和生成提示词，对照材料来自外部 AI', async () => {
+  const { createWritingDOM } = require('./helpers/writing-dom.js');
+  const { createWritingWorkbenchUI } = require('../prototype/writing-workbench-ui.js');
+  const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
+  const dom = createWritingDOM();
+  const coordinator = createWritingWorkbenchCoordinator({ getState: () => ({}) });
+  createWritingWorkbenchUI({ document: dom.document, coordinator, getState: () => ({}) });
+  assert.match(dom.mount.innerHTML, /只分析并给提示词，不直接改写文章/);
+  assert.ok(dom.node('writing-new-draft'), '工作台应提供外部新稿回带输入');
+  await dom.input('writing-draft', '我的原稿');
+  await dom.click('create');
+  assert.equal(dom.node('writing-draft').value, '我的原稿');
+  assert.ok(dom.node('writing-prompt').value, '本地应生成可复制的提示词');
+  await dom.input('writing-new-draft', '外部 AI 修改稿');
+  await dom.click('append');
+  const rounds = coordinator.getRounds(coordinator.listArticles()[0].id);
+  assert.equal(rounds[0].draft, '我的原稿');
+  assert.equal(rounds[1].draft, '外部 AI 修改稿');
 });
 
 test('提示词优化函数明确分析缺口并只产出建议提示词', () => {

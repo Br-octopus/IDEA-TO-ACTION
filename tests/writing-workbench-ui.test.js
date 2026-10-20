@@ -406,3 +406,86 @@ test('整篇删除写失败保留全部轮次和未提交输入', async () => {
   assert.equal(f.node('writing-feedback').value, '等待中的反馈');
   assert.match(f.mount.innerHTML, /磁盘已满/);
 });
+
+test('导出按钮真实事件支持完整工作区和仅资料库，范围决定文章记忆是否包含', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp();
+  await create(f);
+  await f.change('writing-save', true);
+  await f.input('writing-preference', '结尾写具体结果');
+  await f.click('remember');
+  assert.ok(f.listeners.has('knowledge-export-open:click'), '导出按钮必须绑定真实事件');
+  f.element('knowledge-export-scope').value = 'workspace';
+  await f.event('knowledge-export-open');
+  const workspace = f.exports.at(-1);
+  assert.equal(workspace.scope, 'workspace');
+  assert.equal(workspace.data.writingArticles.length, 1);
+  assert.equal(workspace.data.writingMemories.length, 1);
+  assert.match(f.element('knowledge-backup-status').textContent, /工作区/);
+  f.element('knowledge-export-scope').value = 'knowledge-base';
+  await f.event('knowledge-export-open');
+  const knowledge = f.exports.at(-1);
+  assert.equal(knowledge.scope, 'knowledge-base');
+  assert.equal(Object.hasOwn(knowledge.data, 'writingArticles'), false);
+  assert.equal(Object.hasOwn(knowledge.data, 'writingMemories'), false);
+  assert.match(f.element('knowledge-backup-status').textContent, /资料库/);
+  assert.equal(f.exports.length, 2);
+});
+
+test('导出API取消或失败保留原备份时间且不能报告成功', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  let result = { canceled: true };
+  const f = createWritingApp({ exportBackup() { if (result instanceof Error) throw result; return result; } });
+  assert.ok(f.listeners.has('knowledge-export-open:click'), '导出按钮必须绑定真实事件');
+  f.element('knowledge-export-scope').value = 'workspace';
+  f.element('knowledge-backup-status').textContent = '最近备份：原时间';
+  await f.event('knowledge-export-open');
+  assert.equal(f.element('knowledge-backup-status').textContent, '最近备份：原时间');
+  assert.match(f.element('toast').textContent, /取消/);
+  assert.doesNotMatch(f.element('toast').textContent, /已导出/);
+  result = new Error('目标目录不可写');
+  await f.event('knowledge-export-open');
+  assert.equal(f.element('knowledge-backup-status').textContent, '最近备份：原时间');
+  assert.match(f.element('toast').textContent, /导出失败.*目标目录不可写/);
+});
+
+test('浏览器安全备份确认后可导入一次，令牌不得重复消费或重放', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const backupAPI = require('../prototype/workspace-backup.js');
+  const source = fixture();
+  await create(source, '浏览器恢复历史');
+  await source.change('writing-save', true);
+  await source.change('writing-save', false);
+  const raw = JSON.stringify(backupAPI.createBackup(source.state, { scope: 'workspace' }));
+  const confirmations = [];
+  const f = createWritingApp({ browser: true, confirm(message) { confirmations.push(message); return true; } });
+  await f.event('knowledge-import-open');
+  assert.deepEqual(f.clicks, ['created', 'knowledge-import-file']);
+  assert.match(confirmations[0], /确认.*保存安全备份/);
+  let reads = 0;
+  const file = { text: async () => { reads++; return raw; } };
+  const input = { files: [file], value: 'backup.json' };
+  await f.event('knowledge-import-file', 'change', { target: input });
+  assert.equal(f.state.writingArticles.length, 1, '确认安全备份后应允许真实浏览器分支写入');
+  assert.equal(f.state.writingArticles[0].article.saveEnabled, false);
+  assert.equal(input.value, '');
+  assert.equal(reads, 1);
+  assert.match(f.element('toast').textContent, /导入成功/);
+  const writes = f.writes;
+  await f.event('knowledge-import-file', 'change', { target: input });
+  assert.equal(f.writes, writes);
+  assert.equal(reads, 1, '已消费的令牌不得再次读取或导入文件');
+  assert.match(f.element('toast').textContent, /未确认已保存安全备份/);
+});
+
+test('浏览器未确认安全备份时不能打开选择器或读取导入文件', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp({ browser: true, confirm: () => false });
+  await f.event('knowledge-import-open');
+  assert.deepEqual(f.clicks, ['created']);
+  let reads = 0;
+  await f.event('knowledge-import-file', 'change', { target: { files: [{ text: async () => { reads++; return '{}'; } }], value: 'backup.json' } });
+  assert.equal(reads, 0);
+  assert.equal(f.writes, 0);
+  assert.match(f.element('toast').textContent, /未确认已保存安全备份/);
+});
