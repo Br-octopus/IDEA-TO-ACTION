@@ -21,6 +21,7 @@
         ? globalThis.WritingWorkbenchSchema.WRITING_GENRE_CONFIGS.article : null);
     const safeConfig = config || {
       applicability: '用于普通文章的目标澄清、初稿诊断和连续改稿；其他文体需确认按普通文章处理。',
+      targetFields: {},
       checkDimensions: [], outputRequirements: {}, riskReminders: [], styleBaseline: []
     };
     const sourceId = 'writing-workbench-article';
@@ -45,9 +46,16 @@
       id: 'builtin-article', name: safeConfig.name || '普通文章', layer: 'genre', genre: 'article',
       taskType: 'article', version: 1, builtin: false, basePackId: '', enabled: true,
       applicability: {
+        description: safeConfig.applicability,
         tasks: ['article'], languages: ['zh'],
         exclusions: ['其他文体需确认按普通文章处理。']
       },
+      targetFields: safeConfig.targetFields,
+      memoryNamespace: safeConfig.memoryNamespace || 'article',
+      checkDimensions: safeConfig.checkDimensions,
+      outputRequirements: safeConfig.outputRequirements,
+      riskReminders: safeConfig.riskReminders,
+      styleBaseline: safeConfig.styleBaseline,
       clarifications: [], materials: [], requirements: [], methods: [], prompts, structures: [], style,
       terminology: [], evidenceRules: [], routes: [], checks, repairs, nextSteps: [], examples: [], sources: [source],
       createdAt: '2026-10-20', updatedAt: '2026-10-20'
