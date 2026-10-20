@@ -24,6 +24,9 @@
       ? null
       : globalThis.ForwardStepPptSceneSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
+  const writingSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./writing-workbench-schema.js")
+    : typeof globalThis === "undefined" ? null : globalThis.WritingWorkbenchSchema;
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
     "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
@@ -39,7 +42,7 @@
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters",
     "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings",
-    "promptAgentTasks", "promptAgentSources"
+    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories"
   ];
 
   function createEmptyState() {
@@ -56,7 +59,9 @@
       platformConnections: {},
       researchAttachments: [],
       promptAgentTasks: [],
-      promptAgentSources: []
+      promptAgentSources: [],
+      writingArticles: [],
+      writingMemories: []
     };
   }
 
@@ -73,6 +78,14 @@
       super(message, { cause });
       this.name = "StorageReadError";
       this.code = code;
+    }
+  }
+
+  class WritingSchemaUnavailableError extends Error {
+    constructor() {
+      super("写作 schema 未加载，无法安全清洗已有写作数据");
+      this.name = "WritingSchemaUnavailableError";
+      this.code = "WRITING_SCHEMA_UNAVAILABLE";
     }
   }
 
@@ -359,6 +372,26 @@
     };
   }
 
+  function sanitizeWritingState(state) {
+    const articles = Array.isArray(state?.writingArticles) ? state.writingArticles : [];
+    const memories = Array.isArray(state?.writingMemories) ? state.writingMemories : [];
+    if (!articles.length && !memories.length) return { writingArticles: [], writingMemories: [] };
+    const schema = writingSchema || globalThis.WritingWorkbenchSchema;
+    if (!schema || typeof schema.normalizeWritingWorkspace !== "function"
+      || typeof schema.normalizeWritingMemory !== "function") {
+      throw new WritingSchemaUnavailableError();
+    }
+    // 清洗与保存授权分开：迁移和导入必须保留关闭保存后的历史快照。
+    return {
+      writingArticles: stripModelKeys(articles).map(item => {
+        const snapshot = schema.normalizeWritingWorkspace(item);
+        if (!snapshot.id) snapshot.id = snapshot.article.id;
+        return snapshot;
+      }).filter(item => item.id && item.id === item.article.id),
+      writingMemories: stripModelKeys(memories).map(schema.normalizeWritingMemory).filter(item => item.id)
+    };
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const knowledgeEntries = normalizeKnowledgeEntries(source.knowledgeEntries);
@@ -387,6 +420,7 @@
           .map(migrateConfirmedCase)
         : [],
       ...sanitizePromptAgentState(stripModelKeys(source)),
+      ...sanitizeWritingState(source),
       ...researchState
     };
     return state;
@@ -408,7 +442,7 @@
     try {
       migrated = migrateState(JSON.parse(raw));
     } catch (error) {
-      if (error && error.code === "KNOWLEDGE_SCHEMA_UNAVAILABLE") throw error;
+      if (error && ["KNOWLEDGE_SCHEMA_UNAVAILABLE", "WRITING_SCHEMA_UNAVAILABLE"].includes(error.code)) throw error;
       throw new StorageReadError("本地数据格式无效，未加载任何数据", error, "STORAGE_PARSE_FAILED");
     }
 
@@ -428,6 +462,17 @@
     if (!store) return createEmptyState();
     try {
       const sanitized = migrateState(state);
+      if (sanitized.writingArticles.some(item => !item.article.saveEnabled)) {
+        const raw = store.getItem(STORAGE_KEY) || store.getItem(LEGACY_STORAGE_KEY);
+        const previous = sanitizeWritingState(raw ? JSON.parse(raw) : {});
+        const previousById = new Map(previous.writingArticles.map(item => [item.id, item]));
+        // 只遍历本次数组，确保显式删除的 id 不会从旧存储被重新并回。
+        sanitized.writingArticles = sanitized.writingArticles.flatMap(item => {
+          if (item.article.saveEnabled) return [item];
+          const saved = previousById.get(item.id);
+          return saved ? [{ ...saved, article: { ...saved.article, saveEnabled: false } }] : [];
+        });
+      }
       store.setItem(STORAGE_KEY, JSON.stringify(sanitized));
       return sanitized;
     } catch (error) {
@@ -629,5 +674,5 @@
   }
 
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, sanitizePromptAgentState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, sanitizePromptAgentState, sanitizeWritingState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

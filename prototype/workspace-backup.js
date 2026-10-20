@@ -10,12 +10,13 @@
   const SCHEMA_VERSION = 1;
   const SCOPES = new Set(["workspace", "knowledge-base"]);
   const WORKSPACE_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
-  const OPTIONAL_WORKSPACE_COLLECTIONS = ["promptAgentTasks", "promptAgentSources"];
+  const OPTIONAL_WORKSPACE_COLLECTIONS = ["promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories"];
   const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
   const WORKSPACE_DATA_FIELDS = [
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata",
-    "researchTasks", "platformConnections", "researchAttachments", "promptAgentTasks", "promptAgentSources"
+    "researchTasks", "platformConnections", "researchAttachments", "promptAgentTasks", "promptAgentSources",
+    "writingArticles", "writingMemories"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeMetadata"
@@ -316,6 +317,10 @@
         : source;
       Object.assign(sanitized, storage.sanitizePromptAgentState(promptAgentSource));
     }
+    if (!storage || typeof storage.sanitizeWritingState !== "function") {
+      throw new Error("备份依赖的写作数据清洗模块未加载");
+    }
+    Object.assign(sanitized, storage.sanitizeWritingState(source));
     return sanitized;
   }
 
@@ -324,7 +329,10 @@
     const sanitizedState = sanitizeState(source);
     const allowedFields = scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
     return allowedFields.reduce((result, field) => {
-      if (Object.hasOwn(source, field)) result[field] = clone(sanitizedState[field]);
+      if (Object.hasOwn(source, field)
+        || (scope === "workspace" && ["writingArticles", "writingMemories"].includes(field))) {
+        result[field] = clone(sanitizedState[field]);
+      }
       return result;
     }, {});
   }
@@ -359,6 +367,8 @@
     data.researchAttachments = Array.isArray(state.researchAttachments) ? clone(state.researchAttachments) : [];
     data.promptAgentTasks = Array.isArray(state.promptAgentTasks) ? clone(state.promptAgentTasks) : [];
     data.promptAgentSources = Array.isArray(state.promptAgentSources) ? clone(state.promptAgentSources) : [];
+    data.writingArticles = Array.isArray(state.writingArticles) ? clone(state.writingArticles) : [];
+    data.writingMemories = Array.isArray(state.writingMemories) ? clone(state.writingMemories) : [];
     return data;
   }
 
@@ -396,10 +406,14 @@
     if (!Array.isArray(data[field])) throw new TypeError(`备份核心数据无效：${field}`);
     const ids = new Set();
     data[field].forEach((item, index) => {
-      if (!isObject(item) || typeof item.id !== "string" || !item.id.trim()) {
+      const articleId = field === "writingArticles" && typeof item?.article?.id === "string"
+        ? item.article.id.trim().slice(0, 100) : "";
+      const outerId = typeof item?.id === "string" ? item.id.trim() : "";
+      const id = field === "writingArticles" ? (outerId || articleId).slice(0, 100)
+        : field === "writingMemories" ? outerId.slice(0, 100) : outerId;
+      if (!isObject(item) || !id || (field === "writingArticles" && id !== articleId)) {
         throw new TypeError(`备份集合条目稳定 id 无效：${field}[${index}]`);
       }
-      const id = item.id.trim();
       if (ids.has(id)) throw new TypeError(`备份集合 id 重复：${field}[${index}]`);
       ids.add(id);
     });
