@@ -812,3 +812,48 @@ test('旧轮模型等待期间更正风格后旧结果失效且不覆盖提示�
   await assert.rejects(pending, { code: 'STALE_RESULT' });
   assert.deepEqual(c.getWorkspace(a.id), before);
 });
+
+test('文章轮次记录所选基础包快照，基础包更新后历史提示词仍使用旧版本', async () => {
+  const pack = {
+    id: 'pack-coordinator', name: '协调器包', layer: 'task', genre: 'article', taskType: 'revision', version: 1, enabled: true,
+    checks: [{ id: 'coordinator-rule', statement: '旧规则哨兵', sourceIds: ['coordinator-source'] }],
+    sources: [{ id: 'coordinator-source', title: '协调器来源', url: 'https://example.test/coordinator' }]
+  };
+  let state = { writingArticles: [], writingMemories: [], writingPacks: [pack], writingPackSettings: [] };
+  const c = createWritingWorkbenchCoordinator({
+    getState: () => state,
+    persistState(next) { state = structuredClone(next); return state; }
+  });
+  const article = await c.createArticle({ draft: '初稿', packSelections: ['pack-coordinator'], saveEnabled: true });
+  const first = c.getRounds(article.id)[0];
+  assert.deepEqual(first.packSelections, ['pack-coordinator']);
+  assert.equal(first.packSnapshot.packs.some(item => item.id === 'pack-coordinator'), true);
+  assert.match(first.prompt, /旧规则哨兵/);
+  state = { ...state, writingPacks: [{ ...pack, version: 2,
+    checks: [{ id: 'coordinator-rule-v2', statement: '新规则哨兵' }] }] };
+  const rebuilt = await c.build(article.id, { roundId: first.id });
+  assert.match(rebuilt.prompt, /旧规则哨兵/);
+  assert.doesNotMatch(rebuilt.prompt, /新规则哨兵/);
+});
+
+test('多个基础包引用同名来源时，历史提示词保留每个包的来源元数据', async () => {
+  const packs = [
+    { id: 'pack-a', name: '包A', layer: 'task', genre: 'article', taskType: 'revision', version: 1, enabled: true,
+      checks: [{ id: 'rule-a', statement: '包A规则哨兵', sourceIds: ['shared-source'] }],
+      sources: [{ id: 'shared-source', title: '包A来源哨兵', locator: 'pack-a#shared-source' }] },
+    { id: 'pack-b', name: '包B', layer: 'task', genre: 'article', taskType: 'revision', version: 1, enabled: true,
+      checks: [{ id: 'rule-b', statement: '包B规则哨兵', sourceIds: ['shared-source'] }],
+      sources: [{ id: 'shared-source', title: '包B来源哨兵', locator: 'pack-b#shared-source' }] }
+  ];
+  let state = { writingArticles: [], writingMemories: [], writingPacks: packs, writingPackSettings: [] };
+  const c = createWritingWorkbenchCoordinator({
+    getState: () => state,
+    persistState(next) { state = structuredClone(next); return state; }
+  });
+  const article = await c.createArticle({ draft: '初稿', packSelections: ['pack-a', 'pack-b'], saveEnabled: true });
+  const round = c.getRounds(article.id)[0];
+  // builtin-article 也会带一个默认来源，加上两个跨包同名来源共 3 条。
+  assert.equal(round.packSnapshot.sources.length, 3);
+  assert.match(round.prompt, /包A来源哨兵/);
+  assert.match(round.prompt, /包B来源哨兵/);
+});

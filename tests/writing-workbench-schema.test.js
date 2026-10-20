@@ -466,3 +466,75 @@ test('自动记忆原候选关联显式保留且限长，缺省不增加字段',
   assert.equal(memory.sourcePreferenceKey.length, 500);
   assert.deepEqual(schema.normalizeWritingMemory(JSON.parse(JSON.stringify(memory))), memory);
 });
+
+test('文章和轮次可选基础包选择与快照按白名单规范化', () => {
+  const workspace = schema.normalizeWritingWorkspace({
+    article: {
+      id: 'article-pack',
+      packSelections: [' pack-a ', '', 'pack-b'],
+      secret: '不得保留'
+    },
+    rounds: [{
+      id: 'round-pack',
+      packSelections: ['pack-a'],
+      packSnapshot: {
+        packs: [{ id: 'pack-a', version: 2, name: '任务包', layer: 'task', genre: 'article', taskType: 'revision', secret: '不得保留' }],
+        entries: [{ id: 'rule-a', packId: 'pack-a', packVersion: 2, kind: 'check', taskType: 'revision', text: '规则', sourceIds: ['source-a'], password: '不得保留' }],
+        sources: [{ id: 'source-a', title: '来源', url: 'https://example.test/source', license: '内部', accessToken: '不得保留' }],
+        skipped: [{ id: 'pack-b', reason: 'disabled', extra: '不得保留' }],
+        unknown: '不得保留'
+      }
+    }]
+  });
+  assert.deepEqual(workspace.article.packSelections, ['pack-a', 'pack-b']);
+  assert.deepEqual(workspace.rounds[0].packSelections, ['pack-a']);
+  assert.deepEqual(workspace.rounds[0].packSnapshot.packs[0], {
+    id: 'pack-a', version: 2, name: '任务包', layer: 'task', genre: 'article', taskType: 'revision'
+  });
+  assert.deepEqual(workspace.rounds[0].packSnapshot.entries[0], {
+    id: 'rule-a', packId: 'pack-a', packVersion: 2, kind: 'check', taskType: 'revision',
+    text: '规则', sourceIds: ['source-a'], verificationStatus: 'unverified'
+  });
+  assert.equal(workspace.rounds[0].packSnapshot.sources[0].id, 'source-a');
+  assert.equal('accessToken' in workspace.rounds[0].packSnapshot.sources[0], false);
+  assert.deepEqual(workspace.rounds[0].packSnapshot.skipped, [{ id: 'pack-b', reason: 'disabled' }]);
+});
+
+test('基础包快照来源跨包同名时保留各自元数据，不按 ID 互相覆盖', () => {
+  const snapshot = schema.normalizeWritingPackSnapshot({
+    packs: [
+      { id: 'pack-a', version: 1, name: '包A', layer: 'task', genre: 'article' },
+      { id: 'pack-b', version: 1, name: '包B', layer: 'task', genre: 'article' }
+    ],
+    entries: [
+      { id: 'rule-1', packId: 'pack-a', packVersion: 1, kind: 'check', text: '包A规则',
+        sourceIds: ['src'], verificationStatus: 'unverified' },
+      { id: 'rule-2', packId: 'pack-b', packVersion: 1, kind: 'check', text: '包B规则',
+        sourceIds: ['src'], verificationStatus: 'source-reviewed' }
+    ],
+    sources: [
+      { id: 'src', title: '包A来源', locator: 'pack-a#src' },
+      { id: 'src', title: '包B来源', locator: 'pack-b#src', verificationStatus: 'source-reviewed' }
+    ],
+    skipped: []
+  });
+  assert.equal(snapshot.sources.length, 2);
+  const locators = snapshot.sources.map(source => source.locator).sort();
+  assert.deepEqual(locators, ['pack-a#src', 'pack-b#src']);
+  assert.ok(snapshot.sources.every(source => source.id === 'src'));
+});
+
+test('基础包快照条目超过 100 条时记录截断降级，不静默丢弃', () => {
+  const entries = [];
+  for (let i = 0; i < 120; i += 1) {
+    // 前 100 条恰好属于 pack-a，后 20 条属于 pack-b，pack-b 整包被截断。
+    entries.push({ id: `rule-${i}`, packId: i < 100 ? 'pack-a' : 'pack-b', text: `规则${i}` });
+  }
+  const snapshot = schema.normalizeWritingPackSnapshot({
+    packs: [{ id: 'pack-a', version: 1 }, { id: 'pack-b', version: 1 }],
+    entries, skipped: []
+  });
+  assert.equal(snapshot.entries.length, 100);
+  // 截掉的规则按包去重记录，用户能看到哪些包的条目被截断。
+  assert.deepEqual(snapshot.skipped, [{ id: 'pack-b', reason: 'entries-truncated' }]);
+});
