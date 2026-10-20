@@ -26,7 +26,16 @@
     const searchLocalSources = dependencies.searchLocalSources || (async () => []);
     const requestModel = dependencies.requestModel;
     const researchBridge = dependencies.researchBridge || defaultResearchBridge?.createPromptAgentResearchBridge?.({
-      searchWeb: dependencies.searchWeb,
+      searchWeb: typeof dependencies.searchWeb === 'function' ? async (query, options = {}) => {
+        // Electron 适配器可能只使用 query，前后检查可挡住取消后的迟到来源。
+        const assertActive = () => {
+          if (options.signal?.aborted) throw Object.assign(new Error('搜索已取消'), { name: 'AbortError' });
+        };
+        assertActive();
+        const result = await dependencies.searchWeb(query, options);
+        assertActive();
+        return result;
+      } : undefined,
       createSocialResearchPlan: dependencies.createSocialResearchPlan
     });
     const timeoutMs = Math.max(1, Number(dependencies.timeoutMs) || 30000);

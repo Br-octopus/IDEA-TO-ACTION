@@ -16,7 +16,7 @@ function fixture(options = {}) {
     getState: () => state,
     persistState(next) { if (failSave) throw new Error('磁盘已满'); state = storage.saveState({ getItem: key => disk.get(key), setItem: (key, value) => disk.set(key, value) }, next); return state; },
     requestModel: async payload => { requests++; return options.requestModel ? options.requestModel(payload) : '模型诊断'; },
-    promptAgentCoordinator: { selectMaterials: async () => [{ id: 'local-1', title: '本地资料', excerpt: '来源事实', location: 'https://example.test/source' }] }
+    promptAgentCoordinator: options.promptAgentCoordinator || { selectMaterials: async () => [{ id: 'local-1', title: '本地资料', excerpt: '来源事实', location: 'https://example.test/source' }] }
   });
   const ui = createWritingWorkbenchUI({ document: dom.document, coordinator, getState: () => state, copyText: async text => copied.push(text), confirm: options.confirm || (() => true) });
   return { ...dom, ui, coordinator, copied, get state() { return state; }, get requests() { return requests; }, set failSave(value) { failSave = value; } };
@@ -28,6 +28,143 @@ async function create(f, title = '文章甲', draft = '众所周知，这个产�
   await f.click('create');
   return f.coordinator.listArticles().at(-1)?.id;
 }
+
+test('真实按钮展示搜索精确预览并确认，未配置明确降级且保留未提交输入和可复制诊断', async () => {
+  let calls = 0;
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+    searchWeb: async () => { calls++; return { configured: false, message: '尚未配置搜索服务' }; }
+  });
+  const f = fixture({ promptAgentCoordinator: agent });
+  const id = await create(f);
+  await f.input('writing-new-draft', '未提交的新稿');
+  await f.input('writing-feedback', '未提交的反馈');
+  await f.input('writing-research-keywords', '产品说明');
+  const diagnosis = f.node('writing-diagnosis').value;
+  const prompt = f.node('writing-prompt').value;
+  await f.click('preview-research');
+  assert.equal(calls, 0);
+  assert.match(f.mount.innerHTML, /site:github.com|site:github\.com/);
+  assert.match(f.mount.innerHTML, /最多.*3.*5|3.*查询.*5.*来源/);
+  await f.click('approve-research');
+  assert.ok(calls <= 3 && calls > 0);
+  assert.equal(f.coordinator.getResearchState(id).status, 'failed');
+  assert.match(f.mount.innerHTML, /尚未配置搜索服务/);
+  assert.equal(f.node('writing-new-draft').value, '未提交的新稿');
+  assert.equal(f.node('writing-feedback').value, '未提交的反馈');
+  assert.equal(f.node('writing-diagnosis').value, diagnosis);
+  assert.equal(f.node('writing-prompt').value, prompt);
+  await f.click('copy-prompt');
+  assert.equal(f.copied.at(-1), prompt);
+});
+
+test('拒绝搜索真实控件可达、零搜索且不重复申请，新篇可独立预览', async () => {
+  let calls = 0;
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({ searchWeb: async () => { calls++; return []; } });
+  const f = fixture({ promptAgentCoordinator: agent });
+  await create(f);
+  await f.click('preview-research');
+  await f.click('reject-research');
+  assert.match(f.mount.innerHTML, /已拒绝/);
+  assert.equal(f.mount.querySelector('[data-writing-action="preview-research"]').disabled, true);
+  await f.click('new');
+  await create(f, '新篇');
+  await f.click('preview-research');
+  assert.equal(calls, 0);
+});
+
+test('搜索成功后真实保存失败显示会话最新提示词和来源，保留未提交输入', async () => {
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+    searchWeb: async () => [{ title: '写失败也必须可见的来源', url: 'https://public.test/visible', summary: '摘要' }]
+  });
+  const f = fixture({ promptAgentCoordinator: agent });
+  const id = await create(f);
+  await f.change('writing-save', true);
+  await f.input('writing-new-draft', '不能丢的新稿');
+  await f.input('writing-feedback', '不能丢的反馈');
+  await f.click('preview-research');
+  f.failSave = true;
+  await f.click('approve-research');
+  assert.match(f.mount.innerHTML, /保存失败/);
+  assert.equal(f.node('writing-prompt').value, f.coordinator.getRounds(id).at(-1).prompt);
+  assert.match(f.node('writing-prompt').value, /写失败也必须可见的来源/);
+  assert.equal(f.node('writing-material-0-title').value, '写失败也必须可见的来源');
+  assert.equal(f.node('writing-new-draft').value, '不能丢的新稿');
+  assert.equal(f.node('writing-feedback').value, '不能丢的反馈');
+});
+
+test('搜索进行中切篇或取消控件立即生效，迟到适配器不续查询且不污染另一篇', async () => {
+  for (const action of ['switch', 'cancel']) {
+    let release, started;
+    const pending = new Promise(resolve => { release = resolve; });
+    const ready = new Promise(resolve => { started = resolve; });
+    let calls = 0;
+    const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+      searchWeb: async () => { calls++; started(); return pending; }
+    });
+    const f = fixture({ promptAgentCoordinator: agent });
+    const a = await create(f, '甲');
+    await f.click('new');
+    const b = await create(f, '乙');
+    f.ui.openArticle(a);
+    await f.click('preview-research');
+    const running = f.click('approve-research');
+    await ready;
+    assert.equal(f.coordinator.getResearchState(a).status, 'running');
+    if (action === 'switch') await f.change('writing-article-list', b);
+    else await f.click('cancel-research');
+    await running;
+    assert.equal(f.coordinator.getResearchState(a).status, 'cancelled');
+    release([{ title: '迟到公开来源', url: 'https://late.test', summary: '不得写回' }]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 1);
+    assert.doesNotMatch(f.node('writing-prompt').value, /迟到公开来源/);
+    assert.equal(f.coordinator.getRounds(b).at(-1).sources.length, 0);
+  }
+});
+
+test('部分、空结果、成功均明确显示，已有模型诊断保留且公开来源不升级记忆', async () => {
+  for (const mode of ['partial', 'empty', 'complete']) {
+    let calls = 0;
+    const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({ searchWeb: async () => {
+      calls++;
+      if (mode === 'empty') return [];
+      if (mode === 'partial' && calls > 1) throw new Error('第二查询不可用');
+      return [{ title: '公开skill', url: 'https://public.test/skill', summary: '公开技能线索', applicability: '普通文章', limitations: '不能当作个人经验' }];
+    } });
+    const f = fixture({ promptAgentCoordinator: agent });
+    const id = await create(f);
+    await f.click('model');
+    const diagnosis = f.node('writing-diagnosis').value;
+    await f.input('writing-new-draft', '未提交新稿');
+    await f.click('preview-research');
+    await f.click('approve-research');
+    assert.equal(f.coordinator.getResearchState(id).status, mode === 'empty' ? 'failed' : mode);
+    assert.equal(f.node('writing-diagnosis').value, diagnosis);
+    assert.equal(f.node('writing-new-draft').value, '未提交新稿');
+    assert.equal(f.state.writingMemories.length, 0);
+    if (mode === 'partial') assert.match(f.mount.innerHTML, /部分完成[\s\S]*第二查询不可用/);
+    if (mode === 'empty') assert.match(f.mount.innerHTML, /无结果/);
+    if (mode === 'complete') assert.match(f.mount.innerHTML, /适用：普通文章[\s\S]*局限：不能当作个人经验/);
+  }
+});
+
+test('三份受保护上下文占满时UI明确外部摘要未纳入提示词，手工与style/both不丢失', async () => {
+  const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
+    searchWeb: async () => [{ title: '未纳入的公开摘要', url: 'https://public.test/unused', summary: '公开线索' }]
+  });
+  const f = fixture({ promptAgentCoordinator: agent });
+  const w = await f.coordinator.createArticle({ draft: '草稿', materials: [{ title: '手工材料', excerpt: '内容', purpose: 'content' }], sources: [
+    { title: '风格样本', excerpt: '风格', purpose: 'style' }, { title: '两用样本', excerpt: '两用', purpose: 'both' }
+  ] });
+  f.ui.openArticle(w.id);
+  await f.click('preview-research');
+  await f.click('approve-research');
+  assert.match(f.mount.innerHTML, /公开摘要未纳入提示词/);
+  assert.doesNotMatch(f.node('writing-prompt').value, /未纳入的公开摘要/);
+  assert.equal(f.node('writing-material-0-title').value, '手工材料');
+  assert.equal(f.node('writing-material-1-purpose').value, 'style');
+  assert.equal(f.node('writing-material-2-purpose').value, 'both');
+});
 
 test('同一表单离线新建与继续回带，更新目标不增加轮次，偏好来自显式候选', async () => {
   const f = fixture();

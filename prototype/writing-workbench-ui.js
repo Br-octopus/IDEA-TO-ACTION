@@ -35,7 +35,8 @@
           dimensions: a.dimensions || [], draft: round?.draft || '', newDraft: '', feedback: '', preference: '', example: '', counterexample: '',
           scope: 'general', corrections: w?.styleProfile.userCorrections || '', materials: round ? references(round) : [],
           prompt: round?.prompt || '', diagnosis: round?.diagnosis || '', saveEnabled: a.saveEnabled === true,
-          historyId: '', error: '', notifications: [], dirty: []
+          historyId: '', error: '', notifications: [], dirty: [],
+          researchMethod: '普通文章如何减少空泛总结并保留具体证据', researchKeywords: ''
         });
       }
       return drafts.get(id);
@@ -73,6 +74,12 @@
     function acknowledge(f, submitted, keys) {
       f.dirty = f.dirty.filter(key => !keys.includes(key) || JSON.stringify(f[key]) !== JSON.stringify(submitted[key]));
     }
+    function syncResearch(f, round, submitted) {
+      updateOutputs(f, round, submitted);
+      if (JSON.stringify(f.materials) === JSON.stringify(submitted.materials) && !f.dirty.includes('materials')) {
+        f.materials = references(round);
+      }
+    }
     function persistenceStatus(w) {
       if (!w) return '默认仅本次会话；尚未保存到本机';
       const saved = (state().writingArticles || []).find(a => a.id === w.id);
@@ -109,6 +116,7 @@
       <section class="social-panel"><h2>参考材料与风格</h2><p class="social-muted">内容 / 风格 / 两者合计最多3份。风格样本只提供提炼特征，不把原文观点作为文章内容。材料编辑在新建或下一轮时应用。</p>
         ${renderMaterials(f)}<div class="social-tools">${button('add-material', '添加材料', '', f.materials.length >= 3)}${button('select-materials', '选择本地资料', '', !w || locked)}</div>
         ${renderStyle(w)}${field('style-corrections', '用户纠正（最多2000字）', f.corrections, { name: 'corrections' })}${button('correct-style', '应用风格纠正', '', !w || locked)}
+        ${renderResearch(w, f, locked)}
       </section>
       <section class="social-panel"><h2>本轮初检与下一轮提示词</h2><p class="social-muted">可编辑后复制；编辑副本不会覆盖历史轮次。模型诊断只分析并给提示词，不直接改写文章。正文和反馈可能离开本机，发送前仍需确认。</p>
         ${field('diagnosis', '具体诊断（本地初检不等于模型判断）', f.diagnosis)}${button('copy-diagnosis', '复制诊断')}
@@ -130,6 +138,23 @@
         <label class="field">摘要或样本（最多1200字）<textarea id="writing-material-${i}-excerpt" data-material-index="${i}" data-material-field="excerpt">${escape(m.excerpt)}</textarea></label>
         ${m.url && /^https?:\/\//i.test(m.url) ? `<a href="${escape(m.url)}" target="_blank" rel="noreferrer">来源</a>` : ''}${m.kind === 'source' ? `<p>来源核验：${escape(verificationLabels[m.verificationStatus] || '未核验')}</p>` : ''}
         ${button('remove-material', '移除材料', `data-index="${i}"`)}</div>`).join('');
+    }
+    function renderResearch(w, f, locked) {
+      const research = w ? coordinator.getResearchState(w.id) : { status: 'idle' };
+      const status = { idle: '尚未搜索', 'awaiting-confirmation': '等待批准搜索计划', running: '正在搜索', rejected: '本篇已拒绝搜索，不再重复申请',
+        cancelled: '搜索已取消，保留本地初检', failed: '搜索失败或无结果，仍可离线初检并复制提示词', partial: '搜索部分完成，来源仍待核验', complete: '搜索完成，公开线索仍待核验' };
+      const waiting = research.status === 'awaiting-confirmation';
+      const methods = ['普通文章如何减少空泛总结并保留具体证据', '普通文章如何组织清晰结构和段落推进', '普通文章如何保持自然表达并避免模板化语气'];
+      return `<h3>查找写作案例/Skill</h3><p class="social-muted">仅用下方固定问题和单独填写的短关键词构造查询，不自动读取正文、完整反馈、记忆或私有目录。关键词最多40字，仅限文字、数字、空格和短横线；请自行核对敏感信息，本工具不保证识别所有敏感信息。</p>
+        <label class="field" for="writing-research-method"><span class="field-label">写作方法问题</span><select id="writing-research-method" data-writing-field="researchMethod">${methods.map(m => `<option value="${escape(m)}" ${m === f.researchMethod ? 'selected' : ''}>${escape(m)}</option>`).join('')}</select></label>
+        ${field('research-keywords', '独立搜索关键词（可选，最多40字）', f.researchKeywords, { input: true, name: 'researchKeywords' })}
+        ${button('preview-research', '查找写作案例/Skill：预览计划', '', !w || locked || research.status === 'rejected')}
+        <p id="writing-research-status" role="status">${escape(status[research.status] || '计划已失效，请重新预览')}${research.error ? `：${escape(research.error)}` : ''}</p>
+        ${research.contextNote ? `<p role="status">${escape(research.contextNote)}</p>` : ''}
+        ${research.queries?.length ? `<p>目标：${escape(research.objective)}<br>来源范围：GitHub / 公开网页<br>预算：最多3次查询 / 5个来源<br>预期用途：${escape(research.expectedUse)}</p><ol>${research.queries.map(q => `<li>${escape(q)}</li>`).join('')}</ol>` : ''}
+        ${waiting ? `<div class="social-tools">${button('approve-research', '批准以上精确查询并搜索', '', locked)}${button('reject-research', '本篇拒绝搜索', '', locked)}</div>` : ''}
+        ${research.status === 'running' ? button('cancel-research', '取消本次搜索') : ''}
+        ${research.results?.length ? `<p>本轮最多合并3份上下文，手工材料和已有风格样本优先；其余来源仅展示。公开Skill仅作线索，不会自动升级记忆。</p>${research.results.map(s => `<p>${escape(s.title)} · 未验证<br>${/^https?:\/\//i.test(s.url) ? `<a href="${escape(s.url)}" target="_blank" rel="noreferrer">${escape(s.url)}</a>` : ''}<br>适用：${escape(s.applicability)}<br>局限：${escape(s.limitations)}<br>摘要：${escape(s.summary)}</p>`).join('')}` : ''}`;
     }
     function renderStyle(w) {
       const p = w?.styleProfile;
@@ -162,10 +187,11 @@
       if (d.memoryField) { const m = memoryDrafts.get(d.memoryId); if (m) m[d.memoryField] = target.value; }
     }
     async function operate(action, data = {}) {
-      if (action === 'new') { articleId = ''; render(); return; }
+      if (action === 'new') { if (articleId) coordinator.cancelResearch(articleId); articleId = ''; render(); return; }
       if (action === 'manage-memories') { managerOpen = !managerOpen; render(); return; }
       const id = articleId;
       const f = form(id);
+      if (action === 'cancel-research') { coordinator.cancelResearch(id); render(); return; }
       if (action === 'round') { f.historyId = data.roundId; render(); return; }
       if (action === 'add-material') { if (f.materials.length < 3) f.materials.push({ title: '', excerpt: '', purpose: 'content', kind: 'material' }); render(); return; }
       if (action === 'remove-material') { f.materials.splice(Number(data.index), 1); render(); return; }
@@ -229,6 +255,17 @@
             f.materials = [...f.materials, ...selected.filter(m => !f.materials.some(old => identity(old) === identity(m)))].slice(0, 3);
           }
           updateOutputs(f, coordinator.readRound(id, result.roundId), submitted);
+        } else if (action === 'preview-research') {
+          coordinator.previewResearch(id, { method: submitted.researchMethod, keywords: submitted.researchKeywords });
+        } else if (action === 'reject-research') {
+          await coordinator.rejectResearch(id);
+        } else if (action === 'approve-research') {
+          const pending = coordinator.approveResearch(id, { confirmed: true });
+          render();
+          const result = await pending;
+          if (result.status !== 'cancelled') {
+            syncResearch(f, coordinator.readRound(id, result.roundId), submitted);
+          }
         } else if (action === 'model') {
           const roundId = coordinator.getWorkspace(id).rounds.at(-1).id;
           const result = await coordinator.runModelDiagnosis(id, { roundId });
@@ -242,6 +279,10 @@
         else if (action === 'delete-memory') await coordinator.deleteMemory(data.memoryId);
       } catch (error) {
         f.error = error.message || '操作失败，输入已保留';
+        if (action === 'approve-research' && error.code === 'PERSIST_FAILED') {
+          syncResearch(f, coordinator.getWorkspace(id).rounds.at(-1), submitted);
+          f.error += '；搜索上下文与提示词仅在会话中，尚未保存到本机';
+        }
         if (action === 'append' && error.code !== 'STALE_RESULT') {
           // 新轮可能已留在会话，仅落盘失败；可见稿必须与下一次模型诊断使用的轮次一致。
           const round = coordinator.getWorkspace(id).rounds.at(-1);
@@ -257,7 +298,7 @@
     mount.addEventListener('input', event => capture(event.target));
     mount.addEventListener('change', async event => {
       const target = event.target;
-      if (target.id === 'writing-article-list') { articleId = target.value; render(); }
+      if (target.id === 'writing-article-list') { if (articleId && articleId !== target.value) coordinator.cancelResearch(articleId); articleId = target.value; render(); }
       else if (target.id === 'writing-save') { form().saveEnabled = target.checked; await operate('save'); }
       else capture(target);
     });
@@ -268,7 +309,7 @@
       return operate(target.dataset.writingAction, target.dataset);
     });
     render();
-    return { render, openArticle(id) { articleId = id || ''; render(); },
+    return { render, openArticle(id) { if (articleId && articleId !== id) coordinator.cancelResearch(articleId); articleId = id || ''; render(); },
       refreshFromStorage() {
         memoryDrafts.clear();
         const ids = new Set(coordinator.listArticles().map(a => a.id));
