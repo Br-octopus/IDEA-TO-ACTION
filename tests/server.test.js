@@ -201,11 +201,12 @@ test('设置页区分浏览器开发模式和 Windows 桌面安全存储文案',
 
 test('发送失败时保留面板，只有成功收到非空模型文本才关闭', () => {
   const appSource = fs.readFileSync(path.join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
-  assert.match(appSource, /const succeeded = await requestModel\(text\);\s*draft\.sending = false;\s*if \(sendDraft !== draft\) return;\s*if \(succeeded\) closeSendPanel\(\);/);
+  assert.match(appSource, /const succeeded = await requestModel\(text, draft\.onModelResult, draft\.onModelError\);\s*draft\.sending = false;\s*if \(sendDraft !== draft\) return;\s*if \(succeeded\) closeSendPanel\(\{ cancelled: false \}\);/);
   assert.match(appSource, /if \(data\.code\) \{[\s\S]*return false;/);
   assert.match(appSource, /if \(!text\) \{[\s\S]*return false;/);
-  assert.match(appSource, /output\.textContent = text;\s*return true;/);
-  assert.doesNotMatch(appSource, /closeSendPanel\(\);\s*await requestModel\(text\);/);
+  assert.match(appSource, /output\.textContent = text;\s*onSuccess\?\.\(text\);\s*return true;/);
+  assert.match(appSource, /if \(options\.cancelled !== false && sendDraft\?\.onCancel\) sendDraft\.onCancel\(new Error\("用户取消发送"\)\);/);
+  assert.doesNotMatch(appSource, /closeSendPanel\([^;]*\);\s*(?:const succeeded = )?await requestModel\(text[,)]/);
 });
 
 test('用户编辑发送文本后删除资料不会用 basePrompt 覆盖实际文本', () => {
@@ -215,5 +216,5 @@ test('用户编辑发送文本后删除资料不会用 basePrompt 覆盖实际�
   assert.match(appSource, /sendDraft\.renderedText = event\.target\.value;\s*sendDraft\.userEdited = true;/);
   assert.match(appSource, /function buildSendContent\(\)[\s\S]*sendDraft\.userEdited[\s\S]*const text = sendDraft\.renderedText/);
   assert.match(appSource, /const \{ text, segments \} = buildSendContent\(\);\s*if \(!draft\.userEdited\) draft\.renderedText = text;\s*if \(!text\.trim\(\)\)/);
-  assert.match(appSource, /const report = buildSendReport\(segments\);[\s\S]*requestModel\(text\)/);
+  assert.match(appSource, /const report = buildSendReport\(segments\);[\s\S]*requestModel\(text, draft\.onModelResult, draft\.onModelError\)/);
 });

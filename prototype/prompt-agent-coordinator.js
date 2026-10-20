@@ -137,7 +137,7 @@
           selected,
           score: Number(source.score) || 0
         });
-        if (merged.length === 8) break;
+        if (merged.length === 3) break;
       }
       return merged;
     }
