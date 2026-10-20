@@ -489,3 +489,41 @@ test('浏览器未确认安全备份时不能打开选择器或读取导入文�
   assert.equal(f.writes, 0);
   assert.match(f.element('toast').textContent, /未确认已保存安全备份/);
 });
+
+test('真实页面资料表单和字段ID唯一，资料类型具有可选默认值', () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp();
+  const ids = [...f.pageHTML.matchAll(/\bid="(knowledge-entry-[^"]+)"/g)].map(match => match[1]);
+  assert.equal(f.knowledgeForms.length, 1, '必须只有一个可操作的资料表单');
+  assert.equal(new Set(ids).size, ids.length, '资料字段ID不得重复');
+  assert.equal(f.element('knowledge-entry-type').value, 'manual-note', '首个表单必须有真实可选类型');
+});
+
+test('两种资料打开取消入口共用表单，保存手工资料后写作可选入本篇', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp({ realMaterials: true });
+  for (const [open, cancel] of [['open-knowledge-entry', 'cancel-knowledge-entry'], ['knowledge-add-open', 'knowledge-entry-cancel']]) {
+    await f.event(open);
+    assert.equal(f.element('knowledge-entry-form').hidden, false);
+    await f.event(cancel);
+    assert.equal(f.element('knowledge-entry-form').hidden, true);
+  }
+  await f.event('knowledge-add-open');
+  assert.equal(f.element('knowledge-entry-type').value, 'manual-note', '应沿用真实HTML中的默认类型');
+  f.element('knowledge-entry-title').value = '产品交付事实';
+  f.element('knowledge-entry-summary').value = '产品交付事实：三个客户已完成试用';
+  f.element('knowledge-entry-domains').value = '普通文章';
+  await f.event('knowledge-entry-form', 'submit');
+  assert.equal(f.state.knowledgeEntries.length, 1, '一次提交只能新增一条资料');
+  assert.equal(f.state.knowledgeEntries[0].type, 'manual-note');
+  assert.equal(f.state.knowledgeEntries[0].verificationStatus, 'unverified');
+  assert.equal(f.element('knowledge-entry-form').hidden, true);
+  await create(f);
+  await f.input('writing-goal', '产品交付事实');
+  await f.click('update');
+  await f.click('select-materials');
+  const workspace = f.coordinator.getWorkspace(f.coordinator.listArticles()[0].id);
+  assert.ok(workspace.rounds[0].sources.some(source => source.title.includes('产品交付事实') && source.excerpt.includes('三个客户已完成试用')));
+  assert.match(f.node('writing-prompt').value, /三个客户已完成试用/);
+  assert.equal(f.requests, 0);
+});
