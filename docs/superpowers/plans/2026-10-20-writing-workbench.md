@@ -236,29 +236,29 @@ git commit -m "feat: 合并文章新建与连续修改工作台"
 - Modify: tests/writing-workbench-ui.test.js
 - Modify: tests/prompt-agent-integration.test.js
 
-- [ ] **Step 1: 编写搜索确认门禁测试**
+- [x] **Step 1: 编写搜索确认门禁测试**
 
 验证点按钮只生成范围/查询/预算预览；未确认时搜索调用次数为 0；确认后只调用现有 web/GitHub 搜索适配器；查询不含整篇正文和敏感字段；拒绝后本文章不再重复申请；结果摘要附来源、适用范围和未验证状态并与本地规则一起进入诊断。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: node --test tests/writing-workbench-coordinator.test.js tests/writing-workbench-ui.test.js tests/prompt-agent-integration.test.js  
 Expected: 新增搜索门禁断言失败，现有研究工作流回归保持可见。
 
-- [ ] **Step 3: 在提示词 Agent 协调器复用研究计划和预算边界**
+- [x] **Step 3: 在提示词 Agent 协调器复用研究计划和预算边界**
 
 为写作搜索构建有限查询计划，来源限定 GitHub/网页；在 prototype/prompt-agent-coordinator.js 调用现有 researchBridge.preview 生成预览、researchBridge.approve 记录用户批准，再调用 researchBridge.execute。展示计划前后均不得搜索；不新建搜索服务或绕过现有确认逻辑。
 
-- [ ] **Step 4: 组合外部摘要与本地写作上下文**
+- [x] **Step 4: 组合外部摘要与本地写作上下文**
 
 只将少量摘要、来源和适用限制并入本轮诊断；公开 Skill 保持未验证线索，不能覆盖当前用户要求或已确认个人记忆。
 
-- [ ] **Step 5: 运行搜索集成测试**
+- [x] **Step 5: 运行搜索集成测试**
 
 Run: node --test tests/writing-workbench-coordinator.test.js tests/writing-workbench-ui.test.js tests/prompt-agent-integration.test.js  
 Expected: PASS，拒绝/失败时仍可走内置规则并复制提示词。
 
-- [ ] **Step 6: 提交搜索入口**
+- [x] **Step 6: 提交搜索入口**
 
 ~~~bash
 git add prototype/writing-workbench-coordinator.js prototype/writing-workbench-ui.js prototype/prompt-agent-coordinator.js tests/writing-workbench-coordinator.test.js tests/writing-workbench-ui.test.js tests/prompt-agent-integration.test.js
