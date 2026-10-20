@@ -106,7 +106,12 @@
       r.sources = r.sources.slice(0, 3 - r.materials.length);
       return { materials: r.materials, sources: r.sources };
     }
-    function generate(w, round) {
+    function applyProfile(w, profile) {
+      w.styleProfile = schema.normalizeWritingStyleProfile(profile);
+      // 更正属于强约束，不能先截断再把生成结果当作成功。
+      if (typeof profile.userCorrections === 'string') w.styleProfile.userCorrections = profile.userCorrections;
+    }
+    function generate(w, round, refreshDiagnosis = false) {
       // schema 会截断文字；对硬约束先报错，保留会话中的完整输入供用户精简。
       for (const [text, limit] of [[w.article.constraints, 500], [w.styleProfile.userCorrections, 2000],
         [round.feedback, 2000], [round.userFeedback, 2000], [round.draft, 8000]]) {
@@ -115,17 +120,19 @@
       validateProfile(w.styleProfile, w.id);
       const input = inputFor(w, round);
       const localDiagnosis = prompts.buildLocalWritingDiagnosis(input);
-      const diagnosis = round.diagnosis || `${localDiagnosis.label}\n${localDiagnosis.dimensions.map(d =>
+      const isLocal = round.diagnosis.startsWith(`${localDiagnosis.label}\n`);
+      const diagnosis = (!refreshDiagnosis && !isLocal && round.diagnosis) || `${localDiagnosis.label}\n${localDiagnosis.dimensions.map(d =>
         `${d.name}：${d.findings.length ? d.findings.map(f => `${f.quote}：${f.observation}；${f.direction}`).join('；') : d.note}`).join('\n')}`;
       const prompt = prompts.buildWritingRevisionPrompt({ ...input, round: { ...round, diagnosis } });
       round.diagnosis = diagnosis;
       round.prompt = prompt;
+      if (refreshDiagnosis) modelRuns.delete(round.id);
       return { localDiagnosis, diagnosis, prompt };
     }
     async function build(id, options = {}) {
       const w = workspace(id);
       const round = roundFor(id, options.roundId);
-      const result = generate(w, round);
+      const result = generate(w, round, true);
       await saveWorkspace(w);
       return copy({ articleId: id, roundId: round.id, ...result });
     }
@@ -138,7 +145,7 @@
       const article = schema.normalizeWritingArticle({ ...input, id, genre: 'article', saveEnabled: false, createdAt: now(), updatedAt: now() });
       if (typeof input.constraints === 'string') article.constraints = input.constraints;
       const w = { id, genre: 'article', article, rounds: [], styleProfile: prompts.deriveWritingStyleProfile([], {}) };
-      if (input.styleProfile) w.styleProfile = schema.normalizeWritingStyleProfile(input.styleProfile);
+      if (input.styleProfile) applyProfile(w, input.styleProfile);
       sessions.set(id, w);
       try {
         await appendRound(id, input);
@@ -156,11 +163,11 @@
       w.article = { ...schema.normalizeWritingArticle({ ...w.article, ...patch }), id, genre: 'article',
         createdAt: w.article.createdAt, saveEnabled: w.article.saveEnabled, updatedAt: now() };
       if (typeof patch.constraints === 'string') w.article.constraints = patch.constraints;
-      if (patch.styleProfile) w.styleProfile = schema.normalizeWritingStyleProfile(patch.styleProfile);
+      if (patch.styleProfile) applyProfile(w, patch.styleProfile);
       if (Object.hasOwn(patch, 'draft')) {
         await appendRound(id, { draft: patch.draft });
       } else {
-        generate(w, roundFor(id));
+        generate(w, roundFor(id), true);
         await saveWorkspace(w);
       }
       if (save === true && !w.article.saveEnabled) await setSaveEnabled(id, true);
@@ -177,7 +184,7 @@
       w.rounds.push(round);
       w.article.draft = round.draft;
       w.article.updatedAt = now();
-      if (input.styleProfile) w.styleProfile = schema.normalizeWritingStyleProfile(input.styleProfile);
+      if (input.styleProfile) applyProfile(w, input.styleProfile);
       derive(w, round, input.userCorrections);
       generate(w, round);
       await saveWorkspace(w);
@@ -218,14 +225,23 @@
         currentState: `读者：${w.article.audience}；平台：${w.article.platform}`, allowResearch: false
       }, { stage: 'clarification' });
       if (sessions.get(id) !== w || !w.rounds.includes(round)) throw failure('STALE_RESULT', '文章已删除或刷新');
-      const refs = references({ sources: (Array.isArray(selected) ? selected : []).slice(0, 3).map(m => ({
+      const sources = (Array.isArray(selected) ? selected : []).slice(0, 3).map(m => ({
         title: `${m.title || '参考资料'}（${m.id || m.location || '来源未提供'}）`,
         url: /^https?:\/\//i.test(m.location || '') ? m.location : '', excerpt: m.excerpt || m.summary || '',
         purpose: m.purpose || 'content', verificationStatus: m.verificationStatus || 'unverified'
-      })) });
+      }));
+      // 手工材料和已有来源优先，重复选择同一资料不会占用额外名额。
+      const merged = [...round.sources, ...schema.normalizeWritingRound({ sources }).sources];
+      const seen = new Set();
+      const refs = references({ materials: round.materials, sources: merged.filter(source => {
+        const identity = JSON.stringify([source.title, source.url, source.excerpt, source.purpose]);
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      }) });
       Object.assign(round, refs);
       derive(w, round);
-      generate(w, round);
+      generate(w, round, true);
       await saveWorkspace(w);
       return copy({ articleId: id, roundId: round.id, ...refs, prompt: round.prompt });
     }
@@ -252,7 +268,9 @@
         if (typeof result !== 'string' || !result.trim()) throw new Error('模型未返回诊断文字');
       } catch (cause) {
         if (cause.code === 'MODEL_CANCELLED' || cause.name === 'AbortError') throw failure('MODEL_CANCELLED', '模型诊断已取消', { articleId: id, roundId: round.id, cause });
-        throw failure('MODEL_FAILED', `模型诊断失败：${cause.message || cause}`, { articleId: id, roundId: round.id, cause });
+        throw failure('MODEL_FAILED', `模型诊断失败：${cause.message || cause}`, {
+          articleId: id, roundId: round.id, cause, diagnosisCurrent: false
+        });
       } finally { signal?.removeEventListener('abort', onAbort); }
       if (modelRuns.get(round.id) !== token || sessions.get(id) !== w || !w.rounds.includes(round)) {
         throw failure('STALE_RESULT', '诊断结果已过期', { articleId: id, roundId: round.id });
@@ -284,7 +302,9 @@
       const memory = findMemory(id);
       if (Object.hasOwn(patch, 'preference') && !String(patch.preference || '').trim()) throw failure('INVALID_INPUT', '记忆偏好不能为空');
       const editable = Object.fromEntries(['preference', 'reason', 'example', 'counterexample'].filter(f => Object.hasOwn(patch, f)).map(f => [f, patch[f]]));
-      const updated = schema.normalizeWritingMemory({ ...memory, ...editable, updatedAt: now() });
+      const sourcePreferenceKey = memory.sourcePreferenceKey || (memory.undo?.action === 'auto-promote' ? key(memory.preference) : '');
+      const updated = schema.normalizeWritingMemory({ ...memory, ...editable,
+        ...(sourcePreferenceKey ? { sourcePreferenceKey } : {}), updatedAt: now() });
       memories.set(id, updated);
       await saveMemory(updated);
       return copy(updated);
@@ -317,7 +337,8 @@
       const notifications = [];
       for (const [normalizedKey, candidate] of candidates) {
         if (candidate.ids.size < 2) continue;
-        const existing = [...memories.values()].find(m => m.scope === 'genre' && m.genre === 'article' && key(m.preference) === normalizedKey);
+        const existing = [...memories.values()].find(m => m.scope === 'genre' && m.genre === 'article'
+          && (key(m.preference) === normalizedKey || m.sourcePreferenceKey === normalizedKey));
         if (existing?.undo?.undoneAt) continue;
         if (existing) {
           const ids = [...new Set([...existing.evidenceArticleIds, ...candidate.ids])];
@@ -329,7 +350,7 @@
           continue;
         }
         const id = newId('memory');
-        const memory = schema.normalizeWritingMemory({ ...candidate, id, scope: 'genre', genre: 'article',
+        const memory = schema.normalizeWritingMemory({ ...candidate, id, scope: 'genre', genre: 'article', sourcePreferenceKey: normalizedKey,
           sourceArticleId: [...candidate.ids][0], evidenceArticleIds: [...candidate.ids],
           undo: { action: 'auto-promote', memoryId: id }, createdAt: now(), updatedAt: now() });
         memories.set(id, memory);
