@@ -957,9 +957,6 @@ ipcMain.handle('backup:read', async (_event, filename) => getBackupStore().readB
 
 registerSocialHandlers();
 registerPptFeedbackHandlers();
-registerPptFeedbackHandlers();
-registerPptFeedbackHandlers();
-registerPptFeedbackHandlers();
 createPromptAgentSources({ fs, path, userDataPath: app.getPath('userData'), dialog, ipcMain });
 createPptSourceReader({ fs, path, dialog, ipcMain });
 
