@@ -2889,7 +2889,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     refreshKnowledgeView();
     toast("已保存资料摘要");
   }
-  knowledgeForm.addEventListener("submit", saveKnowledgeEntry);  async function exportKnowledgeBackup(scope) {
+  knowledgeForm.addEventListener("submit", saveKnowledgeEntry);
+  async function exportKnowledgeBackup(scope) {
     if (!workspaceBackup) { toast("备份功能暂不可用"); return; }
     try {
       const backup = workspaceBackup.createBackup(state, { scope, now: new Date().toISOString() });
@@ -3014,7 +3015,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); }
   }
   document.getElementById("knowledge-import-open").addEventListener("click", importKnowledgeBackup);
-  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; const importGate = browserImportGate; browserImportGate = null; try { consumeBrowserImportGate(importGate); await importBackupContent(await file.text(), importGate); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { event.target.value = ""; } });
+  // 浏览器令牌只在文件入口消费一次，且必须先于读取文件；导入函数复用桌面路径。
+  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; const importGate = browserImportGate; browserImportGate = null; try { consumeBrowserImportGate(importGate); await importBackupContent(await file.text()); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { event.target.value = ""; } });
   document.getElementById("knowledge-bulk-hide").addEventListener("click", () => { state.knowledgeSelection.forEach(id => { state = hideKnowledgeEntry(state, id); }); persist(); refreshKnowledgeView(); });
   document.getElementById("knowledge-bulk-delete").addEventListener("click", () => { state = deleteKnowledgeEntries(state, state.knowledgeSelection); persist(); refreshKnowledgeView(); });
   renderCaseProjectOptions();
