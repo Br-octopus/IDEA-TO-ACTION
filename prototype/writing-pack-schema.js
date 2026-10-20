@@ -17,7 +17,8 @@
 
   const PACK_FIELDS = new Set([
     'id', 'name', 'layer', 'genre', 'taskType', 'version', 'builtin', 'basePackId', 'enabled',
-    'applicability', 'clarifications', 'materials', 'requirements', 'methods', 'prompts',
+    'applicability', 'targetFields', 'memoryNamespace', 'checkDimensions', 'outputRequirements',
+    'riskReminders', 'styleBaseline', 'clarifications', 'materials', 'requirements', 'methods', 'prompts',
     'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs',
     'nextSteps', 'examples', 'sources', 'createdAt', 'updatedAt'
   ]);
@@ -79,10 +80,25 @@
   function normalizeApplicability(input) {
     const source = isObject(input) ? input : {};
     return {
+      description: text(source.description),
       tasks: list(source.tasks),
       languages: list(source.languages),
       exclusions: list(source.exclusions)
     };
+  }
+
+  function normalizeTargetFields(input) {
+    if (!isObject(input)) return {};
+    return Object.fromEntries(Object.entries(input).slice(0, WRITING_PACK_LIMITS.itemsPerCollection)
+      .map(([key, value]) => [text(key, WRITING_PACK_LIMITS.id), text(value)])
+      .filter(([key, value]) => key && value));
+  }
+
+  function normalizeOutputRequirements(input) {
+    if (!isObject(input)) return {};
+    return Object.fromEntries(Object.entries(input).slice(0, WRITING_PACK_LIMITS.itemsPerCollection)
+      .map(([key, value]) => [text(key, WRITING_PACK_LIMITS.id), text(value)])
+      .filter(([key, value]) => key && value));
   }
 
   function normalizeItem(input, kind) {
@@ -132,9 +148,10 @@
   }
 
   function normalizeWritingPack(input) {
+    if (!isObject(input)) return {};
     const source = isObject(input) ? input : {};
     const pack = {
-      id: source.id === undefined ? '' : requiredId(source.id, 'pack.id'),
+      id: requiredId(source.id, 'pack.id'),
       name: text(source.name),
       layer: source.layer === undefined ? 'task' : source.layer,
       genre: text(source.genre, WRITING_PACK_LIMITS.id),
@@ -144,6 +161,12 @@
       basePackId: text(source.basePackId, WRITING_PACK_LIMITS.id),
       enabled: source.enabled !== false,
       applicability: normalizeApplicability(source.applicability),
+      targetFields: normalizeTargetFields(source.targetFields),
+      memoryNamespace: text(source.memoryNamespace, WRITING_PACK_LIMITS.id),
+      checkDimensions: list(source.checkDimensions, WRITING_PACK_LIMITS.listItems),
+      outputRequirements: normalizeOutputRequirements(source.outputRequirements),
+      riskReminders: list(source.riskReminders, WRITING_PACK_LIMITS.listItems),
+      styleBaseline: list(source.styleBaseline, WRITING_PACK_LIMITS.listItems),
       clarifications: normalizePackItems(source.clarifications, 'clarifications'),
       materials: normalizePackItems(source.materials, 'materials'),
       requirements: normalizePackItems(source.requirements, 'requirements'),
@@ -170,9 +193,10 @@
   }
 
   function normalizeWritingPackSettings(input) {
+    if (!isObject(input)) return {};
     const source = isObject(input) ? input : {};
     return {
-      id: source.id === undefined ? '' : requiredId(source.id, 'settings.id'),
+      id: requiredId(source.id, 'settings.id'),
       enabled: source.enabled !== false,
       updatedAt: text(source.updatedAt, 80)
     };
@@ -180,7 +204,7 @@
 
   function normalizeWritingPackCollection(input) {
     if (!Array.isArray(input)) return [];
-    const packs = input.slice(0, WRITING_PACK_LIMITS.packs).map(normalizeWritingPack);
+    const packs = input.slice(0, WRITING_PACK_LIMITS.packs).filter(isObject).map(normalizeWritingPack);
     return uniqueIds(packs, 'writingPacks');
   }
 
