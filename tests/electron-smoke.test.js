@@ -397,15 +397,17 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'start-bundled-service:127.0.0.1:0',
     'load-url:http://127.0.0.1:50987'
   ]);
-  assert.equal(registeredHandlers.size, 20);
-  for (const channel of ['backup:export', 'backup:import', 'backup:list', 'backup:read']) {
-    assert.equal(registeredHandlers.has(channel), true);
-  }
-  for (const channel of [
+  const expectedChannels = [
+    'config:get', 'config:save', 'model:request', 'search:request',
+    'backup:export', 'backup:import', 'backup:list', 'backup:read',
     'social:list-platforms', 'social:get-status', 'social:open-login', 'social:check', 'social:search',
     'social:fetch-detail', 'social:capture-evidence', 'social:close', 'social:clear-profile',
-    'research:save-attachment', 'research:read-attachment', 'research:delete-attachment'
-  ]) assert.equal(registeredHandlers.has(channel), true, channel);
+    'research:save-attachment', 'research:read-attachment', 'research:delete-attachment',
+    'prompt-agent-sources:select-directory', 'prompt-agent-sources:list-authorized',
+    'prompt-agent-sources:refresh-index', 'prompt-agent-sources:search-index',
+    'prompt-agent-sources:set-authorization-enabled', 'prompt-agent-sources:remove-authorization'
+  ];
+  assert.deepEqual([...registeredHandlers.keys()].sort(), expectedChannels.sort());
   assert.doesNotMatch(mainSource, /loadFile\(/);
 
   let prevented = false;
