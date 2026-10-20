@@ -318,5 +318,28 @@
     }).catch(error => setStatus(`本地授权目录读取失败：${error.message}`));
     return { render, openTask(id) { taskId = id; render(); } };
   }
-  return { createPromptAgentUI };
+  function createPromptAgentScenes({ document, onSceneChange } = {}) {
+    const roots = { task: 'prompt-agent-root', writing: 'writing-workbench-root', ppt: 'ppt-scene-root' };
+    const labels = { task: '任务梳理', writing: '写作工作台', ppt: 'PPT 规划' };
+    let current = 'task';
+    function selectScene(scene) {
+      if (!Object.hasOwn(roots, scene)) scene = 'task';
+      current = scene;
+      for (const [key, id] of Object.entries(roots)) {
+        const panel = document.getElementById(id);
+        if (panel) panel.hidden = key !== scene;
+      }
+      document.querySelectorAll('[data-agent-scene]').forEach(button => {
+        const selected = button.dataset.agentScene === scene;
+        button.setAttribute('aria-pressed', String(selected));
+        button.classList.toggle('active', selected);
+      });
+      onSceneChange?.(scene, labels[scene]);
+      return scene;
+    }
+    document.querySelectorAll('[data-agent-scene]').forEach(button => button.addEventListener('click', () => selectScene(button.dataset.agentScene)));
+    selectScene(current);
+    return { selectScene, getScene: () => current };
+  }
+  return { createPromptAgentUI, createPromptAgentScenes };
 });

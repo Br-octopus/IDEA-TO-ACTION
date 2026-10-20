@@ -109,7 +109,8 @@ test('案例确认会为不完整输入补齐统一字段，页面提供完整�
   for (const phrase of ['确认记录', '修改判断', '暂不记录', '目标', '保留项', '外部结果', '用户意见', '证据', '建议标签', '下一条指令']) {
     assert.match(html, new RegExp(phrase));
   }
-  assert.match(html, /原稿和外部结果可能会离开本机/);
+  const ui = fs.readFileSync(require.resolve('../prototype/writing-workbench-ui.js'), 'utf8');
+  assert.match(ui, /正文和反馈可能离开本机，发送前仍需确认/);
 });
 
 test('修改判断更新已有案例结论但不产生重复 id', () => {
@@ -409,7 +410,7 @@ test('软件方案过度复杂案例可生成复盘并确认保存', () => {
   assert.equal(confirmed.cases[0].nextPrompt, reviewedCase.nextPrompt);
 });
 
-test('项目和文章复盘重新开始时会清理旧判断与结果，但项目未生成输入只在切换项目时清理', () => {
+test('项目复盘重新开始时清理旧判断与结果，未生成输入只在切换项目时清理', () => {
   const app = fs.readFileSync(require.resolve('../prototype/app.js'), 'utf8');
 
   assert.match(app, /function resetProjectReviewFields\(\{ clearInputs = false \} = \{\}\)/);
@@ -421,13 +422,29 @@ test('项目和文章复盘重新开始时会清理旧判断与结果，但项�
   assert.match(app, /if \(clearInputs\) \{[\s\S]*project-review-before/);
   assert.match(app, /if \(clearInputs\) \{[\s\S]*project-review-external-result/);
 
-  assert.match(app, /function resetArticleReviewResult\(\{ clearFeedback = false \} = \{\}\)/);
-  assert.match(app, /resetArticleReviewResult\(\{ clearFeedback: true \}\);/);
-  const skipArticleReview = app.match(/document\.getElementById\("skip-article-review"\)\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\);/);
-  assert.ok(skipArticleReview, '文章暂不记录事件应存在');
-  assert.match(skipArticleReview[1], /resetArticleReviewResult\(\{ clearFeedback: true \}\);/);
-  for (const field of ['article-review-result', 'article-review-prompt', 'article-review-evidence', 'article-review-label', 'article-review-status', 'article-review-lessons', 'article-review-next-prompt', 'article-revised']) {
-    assert.match(app, new RegExp(`document\\.getElementById\\("${field}"\\)`), `文章复盘应清理 ${field}`);
-  }
-  assert.match(app, /const prompt = document\.getElementById\("article-review-prompt"\)\.textContent;[\s\S]*if \(prompt\) copyText\(prompt\)/);
+});
+
+// 文章改为真实工作台行为，项目复盘断言继续保留。
+test('文章回带反馈新增同篇轮次，回看副本不覆盖未提交输入', async () => {
+  const { createWritingDOM } = require('./helpers/writing-dom.js');
+  const { createWritingWorkbenchUI } = require('../prototype/writing-workbench-ui.js');
+  const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
+  const dom = createWritingDOM();
+  const coordinator = createWritingWorkbenchCoordinator({ getState: () => ({}) });
+  createWritingWorkbenchUI({ document: dom.document, coordinator, getState: () => ({}) });
+  await dom.input('writing-draft', '初稿');
+  await dom.click('create');
+  const id = coordinator.listArticles()[0].id;
+  await dom.input('writing-new-draft', '外部新稿');
+  await dom.input('writing-feedback', '保留关键事实');
+  await dom.click('append');
+  const rounds = coordinator.getRounds(id);
+  assert.equal(rounds.length, 2);
+  assert.equal(rounds[1].feedback, '保留关键事实');
+  assert.equal(rounds[1].parentRoundId, rounds[0].id);
+  await dom.input('writing-feedback', '仍在编辑');
+  await dom.click('round', { roundId: rounds[0].id });
+  assert.equal(dom.node('writing-history-draft').readOnly, true);
+  assert.equal(dom.node('writing-history-draft').value, '初稿');
+  assert.equal(dom.node('writing-feedback').value, '仍在编辑');
 });

@@ -397,3 +397,29 @@ test('PPT 规划工作台从提示词 Agent 入口加载并保持文件输出边
   assert.match(sceneUi, /normalizePptScene/);
   assert.doesNotMatch(app, /writeFile|saveAs\(|createPresentation|pptxgen/i, '规划工作台不能写入最终演示文稿或成品文件');
 });
+
+
+test('统一写作入口只加载一个root，旧文章DOM移除且脚本依赖有序', () => {
+  assert.equal((html.match(/id="writing-workbench-root"/g) || []).length, 1);
+  assert.doesNotMatch(html, /id="view-article"|id="article-form"/);
+  assert.doesNotMatch(app, /currentArticleReviewCase|resetArticleReviewResult|article-original|article-revised/);
+  const scripts = ['writing-workbench-schema', 'writing-workbench-prompts', 'writing-workbench-coordinator', 'writing-workbench-ui', 'app'];
+  const positions = scripts.map(name => html.indexOf('src="/prototype/' + name + '.js"'));
+  assert.ok(positions.every((pos, i) => pos >= 0 && (i === 0 || pos > positions[i - 1])));
+  for (const scene of ['task', 'writing', 'ppt']) assert.ok(html.includes('data-agent-scene="' + scene + '"'));
+  assert.match(html, /#view-prompt-agent \[hidden\]\s*\{\s*display:\s*none/);
+});
+
+test('写作、任务、PPT 场景切换使用真实控制器隔离root', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp();
+  await f.event('nav-article');
+  assert.equal(f.mount.hidden, false);
+  assert.match(f.element('breadcrumb').textContent, /写作工作台/);
+  await f.event('scene-ppt');
+  assert.equal(f.element('ppt-scene-root').hidden, false);
+  assert.equal(f.mount.hidden, true);
+  await f.event('scene-task');
+  assert.equal(f.element('prompt-agent-root').hidden, false);
+  assert.equal(f.element('ppt-scene-root').hidden, true);
+});
