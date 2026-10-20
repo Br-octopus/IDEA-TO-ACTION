@@ -92,6 +92,17 @@ test('异常输入安全降级且不修改调用方对象', () => {
   assert.equal(JSON.stringify(input), original);
 });
 
+test('基础包的目标字段和提示要求映射会剔除凭证键及非字符串值', () => {
+  const pack = schema.normalizeWritingPack({
+    ...packInput,
+    targetFields: { title: '标题', apiKey: 'secret-token', nested: { password: 'secret' } },
+    outputRequirements: { revision: '保留原有观点', password: 'secret-pass', callback: () => '不保留' }
+  });
+  assert.deepEqual(pack.targetFields, { title: '标题' });
+  assert.deepEqual(pack.outputRequirements, { revision: '保留原有观点' });
+  assert.equal(JSON.stringify(pack).includes('secret'), false);
+});
+
 test('schema 以 WritingPackSchema 名称提供 UMD 全局导出', () => {
   const context = vm.createContext({});
   vm.runInContext(readFileSync(require.resolve('../prototype/writing-pack-schema.js'), 'utf8'), context);

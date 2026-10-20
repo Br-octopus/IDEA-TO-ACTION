@@ -91,14 +91,18 @@
     if (!isObject(input)) return {};
     return Object.fromEntries(Object.entries(input).slice(0, WRITING_PACK_LIMITS.itemsPerCollection)
       .map(([key, value]) => [text(key, WRITING_PACK_LIMITS.id), text(value)])
-      .filter(([key, value]) => key && value));
+      .filter(([key, value]) => key && value && /^[A-Za-z][A-Za-z0-9_-]*$/.test(key) && !isCredentialKey(key)));
   }
 
   function normalizeOutputRequirements(input) {
     if (!isObject(input)) return {};
     return Object.fromEntries(Object.entries(input).slice(0, WRITING_PACK_LIMITS.itemsPerCollection)
       .map(([key, value]) => [text(key, WRITING_PACK_LIMITS.id), text(value)])
-      .filter(([key, value]) => key && value));
+      .filter(([key, value]) => key && value && /^[A-Za-z][A-Za-z0-9_-]*$/.test(key) && !isCredentialKey(key)));
+  }
+
+  function isCredentialKey(key) {
+    return /(?:api.?key|token|password|secret|credential|authorization)/i.test(key);
   }
 
   function normalizeItem(input, kind) {
