@@ -457,12 +457,13 @@
     }
   }
 
-  function saveState(storage, state) {
+  function saveState(storage, state, options = {}) {
     const store = resolveStorage(storage);
     if (!store) return createEmptyState();
     try {
       const sanitized = migrateState(state);
-      if (sanitized.writingArticles.some(item => !item.article.saveEnabled)) {
+      // 仅已校验的显式导入/恢复可写入关闭保存的历史；普通编辑不能携带此选项。
+      if (options.restoreWriting !== true && sanitized.writingArticles.some(item => !item.article.saveEnabled)) {
         const raw = store.getItem(STORAGE_KEY) || store.getItem(LEGACY_STORAGE_KEY);
         const previous = sanitizeWritingState(raw ? JSON.parse(raw) : {});
         const previousById = new Map(previous.writingArticles.map(item => [item.id, item]));
