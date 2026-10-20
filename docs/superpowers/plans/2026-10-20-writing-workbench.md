@@ -197,29 +197,29 @@ git commit -m "feat: 管理文章轮次和偏好记忆"
 - Create: tests/writing-workbench-ui.test.js
 - Modify: tests/e2e-smoke.test.js
 
-- [ ] **Step 1: 编写 UI 行为测试**
+- [x] **Step 1: 编写 UI 行为测试**
 
 使用仓库现有 DOM mock 测试约定，覆盖同一入口新建/继续、文章列表切换、稿件用途标记、风格档案纠正、轮次反馈回填、保存开关、记忆按钮/撤销/管理入口、删除整篇历史的明确动作，以及模型发送仍走现有预览。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: node --test tests/writing-workbench-ui.test.js tests/e2e-smoke.test.js  
 Expected: 新 UI 测试失败；原有 smoke 测试运行通过或明确指出缺失入口。
 
-- [ ] **Step 3: 实现写作工作台视图**
+- [x] **Step 3: 实现写作工作台视图**
 
 创建与现有原生 UI 一致的单页工作区。新建和继续使用同一表单与轮次视图；显示样本用途和提炼的风格特征；保存状态、记忆写入和错误结果必须可见。不给已保存文章默认打开正文持久化。
 
-- [ ] **Step 4: 接入提示词 Agent 与应用入口**
+- [x] **Step 4: 接入提示词 Agent 与应用入口**
 
 在现有 Agent 导航下进入写作视图，复用 requestModel、发送预览、通知和任务状态保存接口；避免同时渲染两套互不关联的“新建/改稿”窗口。
 
-- [ ] **Step 5: 运行 UI 与 smoke 测试**
+- [x] **Step 5: 运行 UI 与 smoke 测试**
 
 Run: node --test tests/writing-workbench-ui.test.js tests/e2e-smoke.test.js  
 Expected: PASS，同一文章的新建/多轮流程可以通过界面入口触达。
 
-- [ ] **Step 6: 提交工作台 UI**
+- [x] **Step 6: 提交工作台 UI**
 
 ~~~bash
 git add prototype/writing-workbench-ui.js prototype/prompt-agent-ui.js prototype/app.js prototype/index.html tests/writing-workbench-ui.test.js tests/e2e-smoke.test.js
@@ -362,3 +362,5 @@ git commit -m "docs: 更新写作工作台交付说明"
 - 主工作区有无关的 PPT 文档和打包目录改动，实施保持隔离，不清理这些改动。
 
 - Task 4 已完成独立规格与代码质量复审，提交 1b43efc；真实存储及异步失败边界相关测试 107 项通过，进入 Task 5 统一界面接入。
+
+- Task 5 已通过独立规格及质量复审，最终提交17200cf，相关219项测试通过；真实界面发现的备份、资料入口、导入会话和追加保存失败问题已补回归修复，开始Task 6搜索。
