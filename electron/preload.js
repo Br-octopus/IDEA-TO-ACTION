@@ -63,5 +63,26 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
     searchIndex: (id, query, filters) => ipcRenderer.invoke('prompt-agent-sources:search-index', id, query, filters),
     setAuthorizationEnabled: (id, enabled) => ipcRenderer.invoke('prompt-agent-sources:set-authorization-enabled', id, enabled),
     removeAuthorization: id => ipcRenderer.invoke('prompt-agent-sources:remove-authorization', id)
+  }),
+  pptFeedback: Object.freeze({
+    chooseFile: taskId => ipcRenderer.invoke('ppt-feedback:choose-file', { taskId }),
+    listAttachments: taskId => ipcRenderer.invoke('ppt-feedback:list-attachments', { taskId }),
+    openPreview: attachmentId => ipcRenderer.invoke('ppt-feedback:open-preview', { attachmentId }),
+    closePreview: attachmentId => ipcRenderer.invoke('ppt-feedback:close-preview', { attachmentId }),
+    deleteAttachment: attachmentId => ipcRenderer.invoke('ppt-feedback:delete-attachment', { attachmentId }),
+    saveAnnotation: payload => ipcRenderer.invoke('ppt-feedback:save-annotation', payload)
+  }),
+  pptSourceReader: Object.freeze({
+    selectFile: () => ipcRenderer.invoke('ppt-source:select-file'),
+    selectDirectory: () => ipcRenderer.invoke('ppt-source:select-directory'),
+    listDirectory: sourceId => ipcRenderer.invoke('ppt-source:list-directory', { sourceId }),
+    read: (sourceId, options = {}) => {
+      const request = { sourceId };
+      for (const key of ['relativePath', 'purpose', 'pageRange', 'requestId']) {
+        if (Object.prototype.hasOwnProperty.call(options, key)) request[key] = options[key];
+      }
+      return ipcRenderer.invoke('ppt-source:read', request);
+    },
+    cancel: requestId => ipcRenderer.invoke('ppt-source:cancel', { requestId })
   })
 }));

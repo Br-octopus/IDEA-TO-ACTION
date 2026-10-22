@@ -14,6 +14,9 @@ const { createSocialApiClient, listSocialPlatformDefinitions, SOCIAL_API_CODES }
 const { createSocialAttachmentStore } = require(path.join(__dirname, 'social-attachment-store.js'));
 const workspaceArchive = require(path.join(__dirname, 'workspace-backup-archive.js'));
 const { createPromptAgentSources } = require(path.join(__dirname, 'prompt-agent-sources.js'));
+const { createPptSourceReader } = require(path.join(__dirname, 'ppt-source-reader.js'));
+const { createPptFeedbackAttachmentStore } = require(path.join(__dirname, 'ppt-feedback-attachment-store.js'));
+const { createPptPreviewManager } = require(path.join(__dirname, 'ppt-preview-manager.js'));
 
 const DEV_PAGE_URL = process.env.DESKTOP_SERVICE_URL || 'http://127.0.0.1:4173';
 const SERVER_SHUTDOWN_TIMEOUT_MS = 2000;
@@ -27,6 +30,10 @@ let socialBrowserManager;
 let socialSourceManager;
 const socialBrowserAdapters = new Map();
 let socialAttachmentStore;
+let pptFeedbackAttachmentStore;
+let pptPreviewManager;
+const activePptPreviews = new Set();
+const deletedPptAttachments = new Set();
 const socialProfiles = new Map();
 const backupImportStages = new Map();
 const backupImportTransactions = new Map();
@@ -123,6 +130,222 @@ function getSocialAdapter(platform, profileId) {
 function getSocialAttachmentStore() {
   if (!socialAttachmentStore) socialAttachmentStore = createSocialAttachmentStore({ userDataPath: app.getPath('userData') });
   return socialAttachmentStore;
+}
+
+function getPptFeedbackAttachmentStore() {
+  if (!pptFeedbackAttachmentStore) {
+    pptFeedbackAttachmentStore = createPptFeedbackAttachmentStore({ app, fs, path });
+  }
+  return pptFeedbackAttachmentStore;
+}
+
+function getPptPreviewManager() {
+  if (!pptPreviewManager) {
+    pptPreviewManager = createPptPreviewManager({
+      BrowserWindow,
+      session,
+      fs,
+      path,
+      app,
+      attachmentStore: getPptFeedbackAttachmentStore(),
+      createId: () => randomUUID()
+    });
+  }
+  return pptPreviewManager;
+}
+
+function createPptFeedbackError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+function validatePptFeedbackId(value, code, label) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw createPptFeedbackError(code, `${label}无效。`);
+  }
+  return value;
+}
+
+function validatePptFeedbackRequest(value, allowedKeys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some(key => !allowedKeys.includes(key))) {
+    throw createPptFeedbackError('INVALID_REQUEST', '请求参数无效。');
+  }
+}
+
+function validatePptFeedbackTaskRequest(request) {
+  validatePptFeedbackRequest(request, ['taskId']);
+  return validatePptFeedbackId(request.taskId, 'INVALID_TASK_ID', '任务标识');
+}
+
+function validatePptFeedbackAttachmentRequest(request) {
+  validatePptFeedbackRequest(request, ['attachmentId']);
+  return validatePptFeedbackId(request.attachmentId, 'INVALID_ATTACHMENT_ID', '附件标识');
+}
+
+function validatePptAnnotationTarget(target) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注定位无效。');
+  }
+  const finiteCoordinate = (value, label) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', `${label}无效。`);
+    }
+    return value;
+  };
+  if (target.kind === 'element') {
+    validatePptFeedbackRequest(target, ['kind', 'selector']);
+    if (typeof target.selector !== 'string' || !target.selector.trim() || target.selector.length > 500) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', 'HTML selector 无效。');
+    }
+    return { kind: 'element', selector: target.selector.trim() };
+  }
+  if (target.kind === 'point') {
+    validatePptFeedbackRequest(target, ['kind', 'x', 'y']);
+    return { kind: 'point', x: finiteCoordinate(target.x, '横坐标'), y: finiteCoordinate(target.y, '纵坐标') };
+  }
+  if (target.kind === 'region') {
+    validatePptFeedbackRequest(target, ['kind', 'x', 'y', 'width', 'height']);
+    const x = finiteCoordinate(target.x, '横坐标');
+    const y = finiteCoordinate(target.y, '纵坐标');
+    if (typeof target.width !== 'number' || !Number.isFinite(target.width) || target.width <= 0
+      || typeof target.height !== 'number' || !Number.isFinite(target.height) || target.height <= 0
+      || x + target.width > 1 || y + target.height > 1) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '标注区域无效。');
+    }
+    return { kind: 'region', x, y, width: target.width, height: target.height };
+  }
+  throw createPptFeedbackError('INVALID_ANNOTATION', '标注定位类型无效。');
+}
+
+function validatePptAnnotation(annotation) {
+  const allowedKeys = [
+    'id', 'taskId', 'attachmentId', 'contentHash', 'pageIndex', 'target',
+    'comment', 'category', 'createdAt', 'status', 'selected'
+  ];
+  validatePptFeedbackRequest(annotation, allowedKeys);
+  const taskId = validatePptFeedbackId(annotation.taskId, 'INVALID_TASK_ID', '任务标识');
+  const attachmentId = validatePptFeedbackId(annotation.attachmentId, 'INVALID_ATTACHMENT_ID', '附件标识');
+  if (annotation.id !== undefined) validatePptFeedbackId(annotation.id, 'INVALID_ANNOTATION', '标注标识');
+  if (typeof annotation.contentHash !== 'string' || !annotation.contentHash.trim() || annotation.contentHash.length > 140) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注版本摘要无效。');
+  }
+  const comment = typeof annotation.comment === 'string' ? annotation.comment.trim() : '';
+  if (!comment || comment.length > 2000 || /^data:/i.test(comment)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注评论无效。');
+  }
+  const category = annotation.category === undefined ? 'other' : annotation.category;
+  if (!['content', 'logic', 'evidence', 'style', 'layout', 'format', 'readability', 'other'].includes(category)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注分类无效。');
+  }
+  const pageIndex = annotation.pageIndex === undefined ? 0 : annotation.pageIndex;
+  if (!Number.isSafeInteger(pageIndex) || pageIndex < 0) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注页码无效。');
+  }
+  const status = annotation.status === undefined ? 'active' : annotation.status;
+  if (!['active', 'stale'].includes(status)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注状态无效。');
+  }
+  if (annotation.createdAt !== undefined && (typeof annotation.createdAt !== 'string' || annotation.createdAt.length > 80)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注时间无效。');
+  }
+  if (annotation.selected !== undefined && typeof annotation.selected !== 'boolean') {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注选择状态无效。');
+  }
+  const target = validatePptAnnotationTarget(annotation.target);
+  const id = annotation.id || crypto.randomUUID();
+  const createdAt = annotation.createdAt || new Date().toISOString();
+  return { id, taskId, attachmentId, contentHash: annotation.contentHash.trim(), pageIndex, target, comment, category, createdAt, status, selected: annotation.selected === true };
+}
+
+function annotationsPath(taskId) {
+  return path.join(app.getPath('userData'), 'ppt-feedback', taskId, 'annotations.json');
+}
+
+function readPptAnnotations(taskId) {
+  const filePath = annotationsPath(taskId);
+  if (!fs.existsSync(filePath)) return [];
+  try {
+    const stored = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!Array.isArray(stored)) throw new Error('annotations must be an array');
+    return stored.map(validatePptAnnotation);
+  } catch (cause) {
+    throw createPptFeedbackError('ANNOTATION_READ_FAILED', `标注读取失败：${cause.message}`);
+  }
+}
+
+function savePptAnnotations(taskId, annotations) {
+  const filePath = annotationsPath(taskId);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(filePath, JSON.stringify(annotations), { encoding: 'utf8', mode: 0o600 });
+  if (typeof fs.chmodSync === 'function') fs.chmodSync(filePath, 0o600);
+}
+
+function registerPptFeedbackHandlers() {
+  ipcMain.handle('ppt-feedback:choose-file', async (_event, request) => {
+    const taskId = validatePptFeedbackTaskRequest(request);
+    const result = await showFileDialog('showOpenDialog', {
+      title: '选择 PPT 反馈附件',
+      properties: ['openFile'],
+      filters: [{ name: 'HTML 与图片', extensions: ['html', 'htm', 'png', 'jpg', 'jpeg', 'webp'] }]
+    });
+    const sourcePath = result.filePaths?.[0];
+    if (result.canceled || !sourcePath) return { canceled: true };
+    const extension = path.extname(sourcePath).toLowerCase();
+    const mimeType = {
+      '.html': 'text/html', '.htm': 'text/html', '.png': 'image/png',
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'
+    }[extension];
+    if (!mimeType) throw createPptFeedbackError('INVALID_ATTACHMENT', '附件格式不受支持。');
+    const attachment = await getPptFeedbackAttachmentStore().saveAttachment({ taskId, sourcePath, mimeType });
+    return { canceled: false, attachment };
+  });
+
+  ipcMain.handle('ppt-feedback:list-attachments', async (_event, request) => {
+    const taskId = validatePptFeedbackTaskRequest(request);
+    const attachments = getPptFeedbackAttachmentStore().listAttachments(taskId)
+      .filter(attachment => !deletedPptAttachments.has(attachment.id));
+    return { status: 'ok', attachments };
+  });
+
+  ipcMain.handle('ppt-feedback:open-preview', async (_event, request) => {
+    const attachmentId = validatePptFeedbackAttachmentRequest(request);
+    if (deletedPptAttachments.has(attachmentId)) throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '附件不存在。');
+    const result = await getPptPreviewManager().openPreview({ attachmentId });
+    if (result.status === 'opened') activePptPreviews.add(attachmentId);
+    return result;
+  });
+
+  ipcMain.handle('ppt-feedback:close-preview', async (_event, request) => {
+    const attachmentId = validatePptFeedbackAttachmentRequest(request);
+    const closed = pptPreviewManager ? await pptPreviewManager.closePreview(attachmentId) : false;
+    activePptPreviews.delete(attachmentId);
+    return { status: 'ok', attachmentId, closed };
+  });
+
+  ipcMain.handle('ppt-feedback:delete-attachment', async (_event, request) => {
+    const attachmentId = validatePptFeedbackAttachmentRequest(request);
+    if (deletedPptAttachments.has(attachmentId)) throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '附件不存在。');
+    const store = getPptFeedbackAttachmentStore();
+    const attachmentPath = store.getAttachmentPath(attachmentId);
+    if (pptPreviewManager) await pptPreviewManager.closePreview(attachmentId);
+    activePptPreviews.delete(attachmentId);
+    fs.rmSync(path.dirname(attachmentPath), { recursive: true, force: true });
+    deletedPptAttachments.add(attachmentId);
+    return { status: 'ok', attachmentId };
+  });
+
+  ipcMain.handle('ppt-feedback:save-annotation', async (_event, annotation) => {
+    const normalized = validatePptAnnotation(annotation);
+    if (deletedPptAttachments.has(normalized.attachmentId)) {
+      throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '附件不存在。');
+    }
+    const annotations = readPptAnnotations(normalized.taskId);
+    const index = annotations.findIndex(item => item.id === normalized.id);
+    if (index === -1) annotations.push(normalized);
+    else annotations[index] = normalized;
+    savePptAnnotations(normalized.taskId, annotations);
+    return { status: 'ok', annotation: normalized };
+  });
 }
 
 function validateSocialPlatform(platform) {
@@ -733,7 +956,9 @@ ipcMain.handle('backup:list', async () => getBackupStore().listBackups());
 ipcMain.handle('backup:read', async (_event, filename) => getBackupStore().readBackup(filename));
 
 registerSocialHandlers();
+registerPptFeedbackHandlers();
 createPromptAgentSources({ fs, path, userDataPath: app.getPath('userData'), dialog, ipcMain });
+createPptSourceReader({ fs, path, dialog, ipcMain });
 
 app.whenReady().then(() => createWindow()).catch(reportStartupError);
 

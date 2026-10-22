@@ -1870,6 +1870,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         copyText,
         notify: toast
       });
+
+    if (window.ForwardStepPptFeedbackUI && window.ForwardStepPptFeedback) {
+      window.ForwardStepPptFeedbackUIController = window.ForwardStepPptFeedbackUI.createPptFeedbackUI({
+        document,
+        sceneSchema: window.ForwardStepPptSceneSchema,
+        feedbackSchema: window.ForwardStepPptFeedbackSchema,
+        feedback: window.ForwardStepPptFeedback,
+        taskSchema: window.ForwardStepPromptAgentSchema,
+        getState: () => state,
+        persistState(nextState) { state = saveState(localStorage, nextState); return state; },
+        notify: toast
+      });
+    }
     }
   }
   document.querySelectorAll(".domain").forEach(button => button.addEventListener("click", () => {

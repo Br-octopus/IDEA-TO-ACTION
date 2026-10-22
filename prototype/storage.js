@@ -23,6 +23,11 @@
     : typeof globalThis === "undefined"
       ? null
       : globalThis.ForwardStepPptSceneSchema;
+  const pptFeedbackSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./ppt-feedback-schema.js")
+    : typeof globalThis === "undefined"
+      ? null
+      : globalThis.ForwardStepPptFeedbackSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
   const writingSchema = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./writing-workbench-schema.js")
@@ -367,21 +372,32 @@
     }
     const sanitized = promptAgentSchema.sanitizePromptAgentState(state);
     const sceneSchema = pptSceneSchema || globalThis.ForwardStepPptSceneSchema;
-    if (!sceneSchema || typeof sceneSchema.normalizePptScene !== "function" || !Array.isArray(state?.promptAgentTasks)) {
+    if (!Array.isArray(state?.promptAgentTasks)) {
       return sanitized;
     }
     const scenesById = new Map();
+    const feedbackById = new Map();
     for (const task of state.promptAgentTasks) {
-      if (!task || typeof task.id !== "string" || !task.pptScene) continue;
+      if (!task || typeof task.id !== "string") continue;
       const normalizedId = task.id.trim().slice(0, 100);
-      if (!scenesById.has(normalizedId)) scenesById.set(normalizedId, []);
-      scenesById.get(normalizedId).push(sceneSchema.normalizePptScene(task.pptScene));
+      if (task.pptScene && sceneSchema?.normalizePptScene) {
+        if (!scenesById.has(normalizedId)) scenesById.set(normalizedId, []);
+        scenesById.get(normalizedId).push(sceneSchema.normalizePptScene(task.pptScene));
+      }
+      if (task.pptFeedback && pptFeedbackSchema?.normalizePptFeedbackState) {
+        if (!feedbackById.has(normalizedId)) feedbackById.set(normalizedId, []);
+        feedbackById.get(normalizedId).push(pptFeedbackSchema.normalizePptFeedbackState(task.pptFeedback));
+      }
     }
     return {
       ...sanitized,
       promptAgentTasks: sanitized.promptAgentTasks.map(task => {
+        let result = task;
         const scenes = scenesById.get(task.id);
-        return scenes?.length ? { ...task, pptScene: scenes.shift() } : task;
+        const feedback = feedbackById.get(task.id);
+        if (scenes?.length) result = { ...result, pptScene: scenes.shift() };
+        if (feedback?.length) result = { ...result, pptFeedback: feedback.shift() };
+        return result;
       })
     };
   }
