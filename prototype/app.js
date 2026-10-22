@@ -199,7 +199,8 @@
               const items = Array.isArray(response) ? response : response?.results || [];
               const retrievalMethod = response?.retrievalMethod || (mode === "browser" ? "browser" : mode === "api" ? "api" : "browser");
               const normalized = retriever.dedupeResearchResults(items).map(item => schema.normalizeSocialResult({ ...item, platform, retrievalMethod, searchQueries: [...(item.searchQueries || []), query] }));
-              results.push(...normalized);
+              const mergedResults = retriever.dedupeResearchResults([...results, ...normalized]);
+              results.splice(0, results.length, ...mergedResults);
               task = workflow.consumeResearchBudget(task, { platform, queries: 1, pages: 1, details: normalized.length });
               updateTask({ ...task, results, resultIds: results.map(item => item.id) });
               activeRun.emit({ type: "result-count", taskId, platform, mode, query, resultCount: results.length });

@@ -22,12 +22,14 @@ function response(body, status = 200, contentType = 'application/json') {
 
 test('平台白名单说明 API 可用性、配置要求、上限与实际能力', () => {
   const definitions = listSocialPlatformDefinitions();
-  assert.deepEqual(definitions.map(item => item.platform), ['xiaohongshu', 'reddit', 'youtube']);
+  assert.deepEqual(definitions.map(item => item.platform), ['xiaohongshu', 'bilibili', 'reddit', 'youtube']);
   assert.equal(definitions.find(item => item.platform === 'xiaohongshu').apiAvailable, false);
+  assert.equal(definitions.find(item => item.platform === 'bilibili').apiAvailable, false);
+  assert.equal(definitions.find(item => item.platform === 'bilibili').supportsSearch, true);
   assert.deepEqual(definitions.find(item => item.platform === 'reddit').requiredConfig, ['accessToken', 'userAgent']);
   assert.deepEqual(definitions.find(item => item.platform === 'youtube').requiredConfig, ['apiKey']);
   assert.ok(definitions.filter(item => item.apiAvailable).every(item => Number.isInteger(item.maxResults) && item.maxResults > 0));
-  assert.equal(definitions.find(item => item.platform === 'xiaohongshu').maxResults, 0);
+  assert.equal(definitions.find(item => item.platform === 'xiaohongshu').maxResults, 20);
   assert.ok(definitions.filter(item => item.apiAvailable).every(item => item.supportsSearch && !item.supportsDetail && !item.supportsComments));
   assert.ok(definitions.every(item => Array.isArray(item.supportedFields)));
   assert.equal(createSocialApiClient({ platform: 'xiaohongshu', config: { baseUrl: 'https://search.example', apiKey: 'secret' } }).configured, false);

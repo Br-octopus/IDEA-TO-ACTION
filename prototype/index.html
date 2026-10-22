@@ -484,11 +484,12 @@
         </section>
 
         <section class="view" id="view-social-research">
-          <div class="eyebrow">只读研究工作台</div><h1>社媒研究</h1>
+          <div class="eyebrow">国内社媒只读研究工作台</div><h1>社媒研究</h1>
           <p class="lede">连接平台、确认研究计划，再查看可追溯结果。研究只读，不会自动发布内容。</p>
           <div class="social-layout">
             <section class="social-panel" aria-labelledby="social-research-entry-title">
               <h2 id="social-research-entry-title">研究目标</h2>
+              <label class="field" for="social-research-history">历史研究<select id="social-research-history"><option value="">开始新研究</option></select></label>
               <form id="social-research-entry">
                 <div class="social-form-grid"><div class="field"><label class="field-label" for="social-research-topic">你想研究什么？</label><input id="social-research-topic" required placeholder="例如：独立开发者如何评价记账工具"></div>
                   <div class="field"><label class="field-label" for="social-research-template">研究模板</label><select id="social-research-template"><option value="trends">趋势与热点</option><option value="pain-points">用户痛点与口碑</option><option value="content-competitors">内容与竞品研究</option><option value="fact-check">事实与方案核查</option></select></div></div>
@@ -496,7 +497,7 @@
                 <div class="button-row"><button class="button-primary" id="social-research-create-plan" type="submit">生成研究计划</button></div>
               </form>
             </section>
-            <section class="social-panel" id="social-platform-preparation"><div class="block-top"><div><h2>平台准备</h2><p class="block-desc">自动回退模式会优先使用已配置 API；API 失败或结果不足时切换到真实浏览器。浏览器使用独立 profile。</p></div><button class="button-secondary" id="social-platform-refresh" type="button">刷新平台状态</button></div><div id="social-platform-cards" class="social-grid"></div><p class="social-muted">仅只读搜索；不会点赞、评论或发布。登录状态由本机独立 profile 管理。</p></section>
+            <section class="social-panel" id="social-platform-preparation"><div class="block-top"><div><h2>平台准备</h2><p class="block-desc">当前新建研究仅提供小红书和哔哩哔哩，通过应用管理的独立 profile 和真实浏览器搜索；哔哩哔哩公开搜索无需登录。确认研究计划前不会开始搜索。</p></div><button class="button-secondary" id="social-platform-refresh" type="button">刷新平台状态</button></div><div id="social-platform-cards" class="social-grid"></div><p class="social-muted">仅只读搜索；不会点赞、评论或发布。Reddit、YouTube 的历史报告和结果仍可查看，当前新建研究不再调用它们。</p></section>
             <section class="social-panel" id="social-research-plan"><div class="block-top"><div><h2>研究计划</h2><div class="social-muted" id="social-research-status" role="status">填写目标后生成计划，确认前不会开始搜索。</div></div><div class="button-row"><button class="button-secondary" id="social-research-plan-confirm" type="button" disabled>确认并运行</button><button class="button-secondary" id="social-research-pause" type="button" disabled>暂停</button><button class="button-quiet" id="social-research-cancel" type="button" disabled>取消</button></div></div><div id="social-research-plan-detail" class="social-plan-detail">等待生成计划</div><div class="social-progress" aria-label="研究进度"><span id="social-research-progress"></span></div><div class="social-muted" id="social-research-progress-detail" role="status" aria-live="polite"></div></section>
             <section class="social-panel" id="social-research-results"><div class="block-top"><div><h2>结果集</h2><p class="block-desc">结果默认未核验；保存前请检查来源和内容。</p></div><button class="button-primary" id="social-research-save-selection" type="button" disabled>保存勾选结果</button></div><div class="social-filters"><label>平台 <select id="social-filter-platform"><option value="">全部平台</option></select></label><label>查询词 <select id="social-filter-query"><option value="">全部查询</option></select></label><label>证据 <select id="social-filter-evidence"><option value="">全部状态</option><option value="unverified">未核验</option><option value="source-reviewed">已核对来源</option><option value="user-confirmed">用户确认</option><option value="multiple-sources">多个来源</option><option value="conflicting">存在冲突</option></select></label><label>保存状态 <select id="social-filter-saved"><option value="">全部</option><option value="saved">已保存</option><option value="unsaved">未保存</option></select></label><label>发布时间 <input id="social-filter-from" type="date" aria-label="发布时间起始"></label><label>至 <input id="social-filter-to" type="date" aria-label="发布时间结束"></label></div><div id="social-research-results-list"></div></section>
             <section class="social-panel" id="social-research-report"><h2>研究报告</h2><div id="social-research-report-content" class="social-muted">报告结论会关联到对应原始结果。</div></section>

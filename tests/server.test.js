@@ -6,10 +6,42 @@ const { startServer } = require('../server');
 const { MODEL_CODES, createModelClient, normalizeModelError } = require('../server/model-client');
 const { SEARCH_CODES, createSearchClient, normalizeResult } = require('../server/search-client');
 const { SOCIAL_API_CODES } = require('../server/social-api-client');
+const { listSocialPlatformDefinitions } = require('../server/social-platforms');
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) };
 }
+
+test('平台定义标注市场并暴露国内平台只读搜索能力', () => {
+  const platforms = listSocialPlatformDefinitions();
+  const byId = Object.fromEntries(platforms.map(platform => [platform.platform, platform]));
+  assert.deepEqual({
+    xiaohongshu: byId.xiaohongshu.market,
+    bilibili: byId.bilibili.market,
+    weibo: byId.weibo.market,
+    zhihu: byId.zhihu.market,
+    reddit: byId.reddit.market,
+    youtube: byId.youtube.market
+  }, {
+    xiaohongshu: 'domestic', bilibili: 'domestic', weibo: 'domestic', zhihu: 'domestic', reddit: 'international', youtube: 'international'
+  });
+  for (const platform of ['xiaohongshu', 'bilibili', 'weibo', 'zhihu']) {
+    assert.equal(byId[platform].apiAvailable, false);
+    assert.equal(byId[platform].supportsSearch, true);
+    assert.equal(byId[platform].supportsDetail, false);
+    assert.equal(byId[platform].supportsComments, false);
+  }
+  assert.equal(byId.bilibili.requiresLogin, false);
+  assert.equal(byId.bilibili.searchVerified, false);
+  assert.equal(byId.bilibili.requiredConfig.length, 0);
+  assert.equal(byId.bilibili.maxResults, 20);
+  for (const platform of ['weibo', 'zhihu']) {
+    assert.equal(byId[platform].requiresLogin, false);
+    assert.equal(byId[platform].searchVerified, false);
+    assert.equal(byId[platform].requiredConfig.length, 0);
+    assert.equal(byId[platform].maxResults, 20);
+  }
+});
 
 test('未配置模型返回稳定错误码', async () => {
   assert.deepEqual(normalizeModelError(new Error('MODEL_NOT_CONFIGURED')), {
@@ -182,6 +214,21 @@ test('社媒 API 路由限制查询长度和结果数量，且不将通用搜索
   const noPlatformApiPayload = await noPlatformApi.json();
   assert.equal(noPlatformApi.status, 501);
   assert.equal(noPlatformApiPayload.code, SOCIAL_API_CODES.UNSUPPORTED_CAPABILITY);
+
+  const noBilibiliApi = await fetch(`${baseUrl}/api/social/search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'bilibili', query: '主题' })
+  });
+  const noBilibiliApiPayload = await noBilibiliApi.json();
+  assert.equal(noBilibiliApi.status, 501);
+  assert.equal(noBilibiliApiPayload.code, SOCIAL_API_CODES.UNSUPPORTED_CAPABILITY);
+
+  for (const platform of ['weibo', 'zhihu']) {
+    const unsupportedApi = await fetch(`${baseUrl}/api/social/search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform, query: '关键词' })
+    });
+    assert.equal(unsupportedApi.status, 501, platform);
+    assert.equal((await unsupportedApi.json()).code, SOCIAL_API_CODES.UNSUPPORTED_CAPABILITY, platform);
+  }
 });
 
 test('搜索结果页面、远程结果 id 和发送上下文统一使用 url', () => {

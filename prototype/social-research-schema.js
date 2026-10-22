@@ -26,6 +26,15 @@
     return String(value ?? fallback).trim();
   }
 
+  function resolveResearchProfileId(platform, profileId) {
+    return text(profileId) || `social-research-${text(platform).toLowerCase()}`;
+  }
+
+  function normalizeProfileId(value) {
+    const id = text(value);
+    return /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id) ? id : "";
+  }
+
   function listValue(value) {
     const values = Array.isArray(value)
       ? value
@@ -79,11 +88,12 @@
   function normalizeBudget(input) {
     const source = isObject(input) ? input : {};
     return {
-      maxPlatforms: positiveInteger(source.maxPlatforms, 3),
-      maxQueriesPerPlatform: positiveInteger(source.maxQueriesPerPlatform, 5),
-      maxPages: positiveInteger(source.maxPages, 3),
-      maxDetails: positiveInteger(source.maxDetails, 20),
-      maxDurationMs: positiveInteger(source.maxDurationMs, 300000),
+      maxPlatforms: positiveInteger(source.maxPlatforms, 4),
+      maxQueriesPerPlatform: positiveInteger(source.maxQueriesPerPlatform, 3),
+      maxResultsPerQuery: positiveInteger(source.maxResultsPerQuery, 20),
+      maxPages: positiveInteger(source.maxPages, 24),
+      maxDetails: positiveInteger(source.maxDetails, 10),
+      maxDurationMs: positiveInteger(source.maxDurationMs, 600000),
       maxAttachmentBytes: positiveInteger(source.maxAttachmentBytes, 25 * 1024 * 1024),
       maxAnalysisTokens: positiveInteger(source.maxAnalysisTokens, 10000)
     };
@@ -169,6 +179,7 @@
       discussionSummary: text(source.discussionSummary),
       publicMetrics: normalizeMetrics(source.publicMetrics),
       contentType: text(source.contentType),
+      contentId: text(source.contentId),
       retrievalMethod,
       evidenceStatus,
       marketingRisk: text(source.marketingRisk, "unknown") || "unknown",
@@ -241,8 +252,22 @@
       status: "needs-recheck",
       connectionMode: CONNECTION_MODES.has(source.connectionMode) ? source.connectionMode : "auto",
       apiConfigured: booleanValue(source.apiConfigured),
-      browserPrepared: booleanValue(source.browserPrepared),
-      lastErrorCategory: text(source.lastErrorCategory)
+      // 保存的检查只作历史信息；恢复后必须在当前进程重新确认准备状态。
+      profileId: normalizeProfileId(source.profileId),
+      checked: false,
+      browserReady: false,
+      browserPrepared: false,
+      browserStatus: text(source.browserStatus, "needs-recheck") || "needs-recheck",
+      loginState: text(source.loginState, "unknown") || "unknown",
+      searchVerified: source.searchVerified === true,
+      checkedAt: text(source.checkedAt || source.lastCheckedAt),
+      lastSuccessfulSearchAt: text(source.lastSuccessfulSearchAt),
+      lastErrorCategory: text(source.lastErrorCategory),
+      lastErrorCode: text(source.lastErrorCode || source.code),
+      code: text(source.code || source.lastErrorCode),
+      message: text(source.message),
+      error: text(source.error),
+      lastError: text(source.lastError)
     };
   }
 
@@ -265,7 +290,7 @@
       plan: normalizeResearchPlan(source.plan),
       platforms: listValue(source.platforms),
       preparedPlatforms: listValue(source.preparedPlatforms),
-      profileId: text(source.profileId),
+      profileId: normalizeProfileId(source.profileId),
       connectionModes: isObject(source.connectionModes)
         ? Object.entries(source.connectionModes).reduce((result, [platform, mode]) => {
           if (CONNECTION_MODES.has(mode)) result[text(platform).toLowerCase()] = mode;
@@ -346,6 +371,7 @@
 
   return {
     createResearchTask,
+    resolveResearchProfileId,
     normalizeResearchPlan,
     normalizeSocialResult,
     normalizePlatformCapability,

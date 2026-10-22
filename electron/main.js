@@ -7,6 +7,7 @@ const { createModelClient } = require(path.join(__dirname, '..', 'server', 'mode
 const { createSearchClient } = require(path.join(__dirname, '..', 'server', 'search-client.js'));
 const { createSocialBrowserManager } = require(path.join(__dirname, 'social-browser-manager.js'));
 const { createBrowserPlatformAdapters } = require(path.join(__dirname, 'social-browser-adapters.js'));
+const { parseSocialContentUrl } = require(path.join(__dirname, 'social-content-url.js'));
 const { createSocialApiClient, listSocialPlatformDefinitions } = require(path.join(__dirname, '..', 'server', 'social-api-client.js'));
 const { createSocialAttachmentStore } = require(path.join(__dirname, 'social-attachment-store.js'));
 
@@ -22,16 +23,16 @@ let socialBrowserManager;
 const socialBrowserAdapters = new Map();
 let socialAttachmentStore;
 const socialProfiles = new Map();
-const SOCIAL_PLATFORMS = new Set(listSocialPlatformDefinitions().map(item => item.platform));
+const SOCIAL_PLATFORM_DEFINITIONS = listSocialPlatformDefinitions();
+const SOCIAL_PLATFORMS = new Set(SOCIAL_PLATFORM_DEFINITIONS.map(item => item.platform));
+const SOCIAL_API_PLATFORMS = new Set(SOCIAL_PLATFORM_DEFINITIONS.filter(item => item.apiAvailable).map(item => item.platform));
 const SOCIAL_START_URLS = Object.freeze({
   xiaohongshu: 'https://www.xiaohongshu.com/',
   reddit: 'https://www.reddit.com/',
-  youtube: 'https://www.youtube.com/'
-});
-const SOCIAL_RESULT_DOMAINS = Object.freeze({
-  xiaohongshu: new Set(['www.xiaohongshu.com', 'xiaohongshu.com']),
-  reddit: new Set(['www.reddit.com', 'reddit.com']),
-  youtube: new Set(['www.youtube.com', 'youtube.com'])
+  youtube: 'https://www.youtube.com/',
+  bilibili: 'https://www.bilibili.com/',
+  weibo: 'https://weibo.com/',
+  zhihu: 'https://www.zhihu.com/'
 });
 const SOCIAL_MODES = new Set(['auto', 'api', 'browser']);
 
@@ -123,13 +124,7 @@ function validateSocialResultPayload(platform, payload) {
     throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
   }
 
-  let resultUrl;
-  try { resultUrl = new URL(payload.url); }
-  catch { throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' }); }
-
-  const hostname = resultUrl.hostname.toLowerCase();
-  if (!['http:', 'https:'].includes(resultUrl.protocol) || resultUrl.username || resultUrl.password
-    || !SOCIAL_RESULT_DOMAINS[platform].has(hostname)) {
+  if (!parseSocialContentUrl(platform, payload.url)) {
     throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
   }
 }
@@ -142,13 +137,16 @@ function validateSocialPayload(payload, allowedKeys) {
 }
 
 function socialError(error) {
-  const code = ['UNSUPPORTED_PLATFORM', 'INVALID_REQUEST', 'NOT_CONFIGURED', 'UNSUPPORTED_CAPABILITY', 'SESSION_NOT_FOUND', 'SESSION_CLOSED', 'NAVIGATION_TIMEOUT', 'UNSUPPORTED_PAGE', 'PAGE_READ_FAILED', 'NAVIGATION_FAILED', 'AUTH_FAILED', 'RATE_LIMITED', 'UPSTREAM_ERROR', 'TIMEOUT', 'INVALID_RESPONSE', 'EMPTY_RESULTS', 'REQUEST_FAILED', 'ATTACHMENT_ERROR'].includes(error?.code)
+  const code = ['UNSUPPORTED_PLATFORM', 'INVALID_REQUEST', 'NOT_CONFIGURED', 'UNSUPPORTED_CAPABILITY', 'SESSION_NOT_FOUND', 'SESSION_CLOSED', 'SESSION_BUSY', 'NAVIGATION_TIMEOUT', 'UNSUPPORTED_PAGE', 'PAGE_NOT_READY', 'PAGE_READ_FAILED', 'LOGIN_REQUIRED', 'MANUAL_VERIFICATION_REQUIRED', 'NAVIGATION_FAILED', 'AUTH_FAILED', 'RATE_LIMITED', 'UPSTREAM_ERROR', 'TIMEOUT', 'INVALID_RESPONSE', 'EMPTY_RESULTS', 'REQUEST_FAILED', 'ATTACHMENT_ERROR'].includes(error?.code)
     ? error.code : 'REQUEST_FAILED';
   const messages = {
     UNSUPPORTED_PLATFORM: '不支持该平台。', INVALID_REQUEST: '请求参数无效。', NOT_CONFIGURED: '该平台 API 尚未安全配置。',
     UNSUPPORTED_CAPABILITY: '该平台暂不支持此 API 能力。', SESSION_NOT_FOUND: '尚未打开该平台浏览器。',
-    SESSION_CLOSED: '平台浏览器已关闭。', NAVIGATION_TIMEOUT: '平台页面加载超时。', UNSUPPORTED_PAGE: '平台页面结构暂不支持。',
-    PAGE_READ_FAILED: '无法读取平台页面。', NAVIGATION_FAILED: '平台页面导航失败。', AUTH_FAILED: '平台 API 凭证无效或已过期。',
+    SESSION_CLOSED: '平台浏览器已关闭。', SESSION_BUSY: '该平台浏览器正在执行其他操作。',
+    NAVIGATION_TIMEOUT: '平台页面加载超时。', UNSUPPORTED_PAGE: '平台页面结构暂不支持。',
+    PAGE_NOT_READY: '平台搜索结果在等待时间内未就绪。', PAGE_READ_FAILED: '无法读取平台页面。',
+    LOGIN_REQUIRED: '该平台要求登录后才能继续搜索。', MANUAL_VERIFICATION_REQUIRED: '该平台要求人工完成安全验证。',
+    NAVIGATION_FAILED: '平台页面导航失败。', AUTH_FAILED: '平台 API 凭证无效或已过期。',
     RATE_LIMITED: '平台 API 暂时限流。', UPSTREAM_ERROR: '平台 API 暂时不可用。', TIMEOUT: '平台 API 请求超时。',
     INVALID_RESPONSE: '平台 API 返回了无法识别的数据。', EMPTY_RESULTS: '平台 API 未返回可用结果。',
     ATTACHMENT_ERROR: '附件操作失败。', REQUEST_FAILED: '社媒请求失败。'
@@ -159,6 +157,13 @@ function socialError(error) {
 function attachSocialProfile(platform, profileId) {
   socialProfiles.set(`${platform}:${profileId}`, { platform, profileId });
   getSocialAdapter(platform, profileId);
+}
+
+function isSocialApiConfigured(platform) {
+  if (!SOCIAL_API_PLATFORMS.has(platform)) return false;
+  const settings = getSettingsStore();
+  const config = typeof settings.getSocialApiConfig === 'function' ? settings.getSocialApiConfig(platform) : null;
+  return createSocialApiClient({ platform, config: config || {} }).configured === true;
 }
 
 async function browserSocialSearch(platform, profileId, payload) {
@@ -178,7 +183,11 @@ async function runSocialSearch(platform, payload) {
   validateSocialProfileId(payload.profileId);
   const normalized = { query, profileId: payload.profileId, maxResults };
 
-  if (mode !== 'browser' && platform !== 'xiaohongshu') {
+  if (mode === 'api' && !SOCIAL_API_PLATFORMS.has(platform)) {
+    return socialError(Object.assign(new Error(), { code: 'UNSUPPORTED_CAPABILITY' }));
+  }
+
+  if (mode !== 'browser' && SOCIAL_API_PLATFORMS.has(platform)) {
     const settings = getSettingsStore();
     const config = typeof settings.getSocialApiConfig === 'function' ? settings.getSocialApiConfig(platform) : null;
     const client = createSocialApiClient({ platform, config: config || {} });
@@ -206,7 +215,7 @@ function registerSocialHandlers() {
         profileId: item.profileId,
         ...getSocialManager().getSessionStatus(`${platform}:${item.profileId}`)
       }));
-      return { status: 'ok', platform, apiConfigured: false, profiles };
+      return { status: 'ok', platform, apiConfigured: isSocialApiConfigured(platform), profiles };
     } catch (error) { return socialError(error); }
   });
   ipcMain.handle('social:open-login', async (_event, platform, profileId) => {

@@ -14,7 +14,7 @@ test('研究页包含工作流、平台准备、结果和报告入口及明确�
     'social-research-status', 'social-research-results', 'social-research-report',
     'social-research-save-selection'
   ]) assert.ok(html.includes(`id="${id}"`), `缺少研究 UI 入口 ${id}`);
-  for (const copy of ['API', '真实浏览器', '自动回退', '独立 profile', '只读', '登录状态', '未核验', '不会自动发布']) {
+  for (const copy of ['API', '真实浏览器', '独立 profile', '公开搜索无需登录', '只读', '未核验', '不会自动发布']) {
     assert.ok(html.includes(copy), `缺少边界说明：${copy}`);
   }
   const schema = html.indexOf('src="/prototype/social-research-schema.js"');
@@ -32,6 +32,37 @@ test('结果筛选覆盖平台、查询、日期、证据和保存状态', () =>
   ];
   assert.deepEqual(ui.filterResearchResults(results, { platform: 'reddit', query: '账本', from: '2026-10-02', saved: 'unsaved' }, ['b']).map(item => item.id), ['c']);
   assert.deepEqual(ui.filterResearchResults(results, { evidence: 'source-reviewed', saved: 'saved' }, ['b']).map(item => item.id), ['b']);
+});
+
+test('新建研究只提供国内平台，历史结果保留查看且旧国际任务不能重新运行', () => {
+  const platforms = [
+    { platform: 'xiaohongshu', market: 'domestic' },
+    { platform: 'bilibili', market: 'domestic' },
+    { platform: 'weibo', market: 'domestic' },
+    { platform: 'zhihu', market: 'domestic' },
+    { platform: 'reddit', market: 'international' },
+    { platform: 'youtube', market: 'international' }
+  ];
+  assert.deepEqual(ui.listSelectableResearchPlatforms(platforms).map(item => item.platform), ['xiaohongshu', 'bilibili', 'weibo', 'zhihu']);
+  assert.deepEqual(ui.listVisiblePlatformCards(platforms).map(item => item.platform), ['xiaohongshu', 'bilibili', 'weibo', 'zhihu']);
+  assert.equal(ui.usesOnlyDomesticPlatforms({ platforms: ['xiaohongshu', 'bilibili', 'weibo', 'zhihu'] }, platforms), true);
+  assert.equal(ui.usesOnlyDomesticPlatforms({ platforms: ['reddit', 'youtube'] }, platforms), false);
+
+  const html = fs.readFileSync(path.join(root, 'prototype/index.html'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'prototype/social-research-ui.js'), 'utf8');
+  assert.match(html, /id="social-research-history"/);
+  assert.match(source, /function renderResearchHistory\(\)/);
+  assert.match(source, /activeTaskId = event\.target\.value/);
+  assert.match(source, /该历史任务仅保留查看/);
+});
+
+test('未做真实站点验收的平台不会显示为搜索可用', () => {
+  assert.equal(ui.getPlatformSearchLabel({ supportsSearch: true, searchVerified: false }), '已接入，真实站点待实测');
+  assert.equal(ui.getPlatformSearchLabel({ supportsSearch: true }), '可用');
+  assert.equal(ui.getPlatformBrowserStatusLabel({ platform: 'bilibili', searchVerified: false }, 'ready'), '页面已打开，搜索待实测');
+  assert.equal(ui.getPlatformBrowserStatusLabel({ platform: 'weibo', searchVerified: false }, 'ready'), '页面已打开，搜索待实测');
+  assert.equal(ui.getPlatformBrowserStatusLabel({ platform: 'zhihu', searchVerified: false }, 'ready'), '页面已打开，搜索待实测');
+  assert.equal(ui.getPlatformBrowserStatusLabel({ platform: 'xiaohongshu' }, 'ready'), '已检查，可搜索');
 });
 
 test('UI 调用与 preload 一致的平台 API 签名，并把计划生命周期交给 coordinator', () => {

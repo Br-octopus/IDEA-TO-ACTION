@@ -1,0 +1,52 @@
+{
+  "repository": "https://github.com/NanmiCoder/MediaCrawler",
+  "commit": "8f583999006d5b692272c608440e193ca282e73b",
+  "purpose": "阶段二裁剪前的原始源码摘要；不是已导入清单",
+  "imported": false,
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "9a2eed2fd5410cc59cfceae5d965c2a13d36907caa8bc6316d71e67391bbd5aa"
+    },
+    {
+      "path": "media_platform/xhs/client.py",
+      "sha256": "1ea596c268322571fc97ab552344646610938818063ab04bd598b4e8e3c1f0c4"
+    },
+    {
+      "path": "media_platform/xhs/extractor.py",
+      "sha256": "2de59daf333a4584a8537bba0a23db0874ec63cb3b5f27114b0a39e284ec3944"
+    },
+    {
+      "path": "media_platform/xhs/playwright_sign.py",
+      "sha256": "17c1a6b03c44bbb6f1002905e56ea5c00bc0c4eb193d847db5c5e2fbe78d9dc5"
+    },
+    {
+      "path": "media_platform/xhs/xhs_sign.py",
+      "sha256": "7168a8a4272ae27c4c54a2d44f69aeefcee79aa3c0ff2ad749cc457b57581aba"
+    },
+    {
+      "path": "media_platform/xhs/field.py",
+      "sha256": "ddb9bd52962508c66c6a841ea9887cccd215d635cac7a798c65ef6c08219e0ff"
+    },
+    {
+      "path": "media_platform/xhs/exception.py",
+      "sha256": "863850ee593abfd9df2e69e0d83cf791b91e693f92683b8dcf2bc64a2ed1fd71"
+    },
+    {
+      "path": "media_platform/bilibili/client.py",
+      "sha256": "ecb6589d5e24429166ce7f225dbc2836782abf9f67f8d77ccdab923739c8d8c8"
+    },
+    {
+      "path": "media_platform/bilibili/help.py",
+      "sha256": "ca9d99d07226c60da720f5c2e52ab9b578c4ca1312530463226401bd186c68ad"
+    },
+    {
+      "path": "media_platform/bilibili/field.py",
+      "sha256": "62a433ab26cde6c256371cf8244f1a0ea03bec6290edce61717c2fa73b1178ec"
+    },
+    {
+      "path": "media_platform/bilibili/exception.py",
+      "sha256": "9cae1fe8fa08f5577e6400b5ef4f793b1bc5b89945647708261627c6d5793ba2"
+    }
+  ]
+}

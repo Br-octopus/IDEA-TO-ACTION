@@ -1,19 +1,41 @@
 const PLATFORM_DEFINITIONS = Object.freeze([
   Object.freeze({
-    platform: 'xiaohongshu', displayName: '小红书', apiAvailable: false,
-    requiredConfig: [], maxResults: 0,
-    supportedFields: [],
-    supportsSearch: false, supportsDetail: false, supportsComments: false
+    platform: 'xiaohongshu', displayName: '小红书', market: 'domestic', apiAvailable: false,
+    requiresLogin: 'conditional', searchVerified: false,
+    requiredConfig: [], maxResults: 20,
+    supportedFields: ['url', 'title', 'author', 'publishedAt', 'summary'],
+    supportsSearch: true, supportsDetail: false, supportsComments: false
   }),
   Object.freeze({
-    platform: 'reddit', displayName: 'Reddit', apiAvailable: true,
+    platform: 'bilibili', displayName: '哔哩哔哩', market: 'domestic', apiAvailable: false,
+    requiresLogin: 'conditional', searchVerified: false,
+    requiredConfig: [], maxResults: 20,
+    supportedFields: ['url', 'title', 'author', 'publishedAt', 'summary'],
+    supportsSearch: true, supportsDetail: false, supportsComments: false
+  }),
+  Object.freeze({
+    platform: 'weibo', displayName: '微博', market: 'domestic', apiAvailable: false,
+    requiresLogin: 'conditional', searchVerified: false,
+    requiredConfig: [], maxResults: 20,
+    supportedFields: ['url', 'title', 'author', 'publishedAt', 'summary'],
+    supportsSearch: true, supportsDetail: false, supportsComments: false
+  }),
+  Object.freeze({
+    platform: 'zhihu', displayName: '知乎', market: 'domestic', apiAvailable: false,
+    requiresLogin: 'conditional', searchVerified: false,
+    requiredConfig: [], maxResults: 20,
+    supportedFields: ['url', 'title', 'author', 'publishedAt', 'summary'],
+    supportsSearch: true, supportsDetail: false, supportsComments: false
+  }),
+  Object.freeze({
+    platform: 'reddit', displayName: 'Reddit', market: 'international', apiAvailable: true,
     requiredConfig: ['accessToken', 'userAgent'], maxResults: 5,
     supportedFields: ['url', 'title', 'author', 'publishedAt', 'summary', 'publicMetrics.likes', 'publicMetrics.comments'],
     supportsSearch: true, supportsDetail: false, supportsComments: false,
     endpoint: 'https://oauth.reddit.com/search.json'
   }),
   Object.freeze({
-    platform: 'youtube', displayName: 'YouTube', apiAvailable: true,
+    platform: 'youtube', displayName: 'YouTube', market: 'international', apiAvailable: true,
     requiredConfig: ['apiKey'], maxResults: 5,
     supportedFields: ['url', 'title', 'author', 'publishedAt', 'summary'],
     supportsSearch: true, supportsDetail: false, supportsComments: false,

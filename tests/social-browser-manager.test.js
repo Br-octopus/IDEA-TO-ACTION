@@ -50,6 +50,49 @@ test('按平台和 profile 隔离 persistent 分区，重复打开复用同一�
   assert.equal(JSON.stringify(first).includes('must-not-leak'), false);
 });
 
+test('B 站导航白名单允许搜索页和首页，拒绝伪造及其他子域', async () => {
+  const { manager, windows } = createHarness();
+  const opened = await manager.openPlatformSession({
+    platform: 'bilibili', profileId: 'search', startUrl: 'https://search.bilibili.com/all?keyword=test'
+  });
+  assert.equal(opened.status, 'ready');
+  assert.equal(windows[0].url, 'https://search.bilibili.com/all?keyword=test');
+  for (const startUrl of [
+    'https://bilibili.com.attacker.invalid/',
+    'https://evil.bilibili.com/',
+    'http://search.bilibili.com/'
+  ]) {
+    await assert.rejects(
+      manager.openPlatformSession({ platform: 'bilibili', profileId: `bad-${windows.length}`, startUrl }),
+      /白名单/
+    );
+  }
+  await assert.rejects(
+    manager.navigateSession(opened.sessionId, 'https://search.bilibili.com.attacker.invalid/all'),
+    /白名单/
+  );
+});
+
+test('微博和知乎导航只允许各自公开搜索站点及站内主站', async () => {
+  const { manager, windows } = createHarness();
+  const weibo = await manager.openPlatformSession({ platform: 'weibo', profileId: 'search', startUrl: 'https://weibo.com/' });
+  assert.equal(weibo.status, 'ready');
+  const weiboSearch = await manager.navigateSession(weibo.sessionId, 'https://s.weibo.com/weibo?q=%E6%B5%8B%E8%AF%95');
+  assert.equal(new URL(weiboSearch.currentUrl).hostname, 's.weibo.com');
+  for (const url of ['https://weibo.cn/', 'https://s.weibo.com.attacker.invalid/', 'http://s.weibo.com/']) {
+    await assert.rejects(manager.navigateSession(weibo.sessionId, url), /白名单/);
+  }
+
+  const zhihu = await manager.openPlatformSession({ platform: 'zhihu', profileId: 'search', startUrl: 'https://www.zhihu.com/' });
+  assert.equal(zhihu.status, 'ready');
+  const zhihuSearch = await manager.navigateSession(zhihu.sessionId, 'https://www.zhihu.com/search?type=content&q=test');
+  assert.equal(new URL(zhihuSearch.currentUrl).hostname, 'www.zhihu.com');
+  for (const url of ['https://zhuanlan.zhihu.com/', 'https://evil.zhihu.com/', 'http://www.zhihu.com/']) {
+    await assert.rejects(manager.navigateSession(zhihu.sessionId, url), /白名单/);
+  }
+  assert.equal(windows.length, 2);
+});
+
 test('状态、导航和关闭反映明确状态', async () => {
   const { manager, windows } = createHarness();
   const opened = await manager.openPlatformSession({ platform: 'youtube', profileId: 'work', startUrl: 'https://youtube.com/' });

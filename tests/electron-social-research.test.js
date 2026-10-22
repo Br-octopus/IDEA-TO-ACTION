@@ -32,10 +32,11 @@ function loadPreload() {
   return { ...exposed, invocations };
 }
 
-function loadMain() {
+function loadMain({ socialApiConfigs = {} } = {}) {
   const handlers = new Map();
   const windows = [];
   const executedScripts = [];
+  const socialConfigReads = [];
   const appEvents = new Map();
   const userData = tempDirectory();
   const app = {
@@ -73,10 +74,21 @@ function loadMain() {
   const context = {
     console: { error() {} }, __dirname: path.join(root, 'electron'), Buffer, Date, Promise, URL,
     setTimeout, clearTimeout, process: { env: {}, platform: 'win32', pid: 17 },
-    require: request => request === 'electron' ? electron : localRequire(request)
+    require: request => {
+      if (request === 'electron') return electron;
+      if (String(request).endsWith('settings-store.js')) {
+        return { createSettingsStore: () => ({
+          getSocialApiConfig: platform => {
+            socialConfigReads.push(platform);
+            return socialApiConfigs[platform] || null;
+          }
+        }) };
+      }
+      return localRequire(request);
+    }
   };
   vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), context, { filename: mainPath });
-  return new Promise(resolve => setImmediate(() => resolve({ handlers, windows, executedScripts, userData, appEvents })));
+  return new Promise(resolve => setImmediate(() => resolve({ handlers, windows, executedScripts, userData, appEvents, socialConfigReads })));
 }
 
 test('preload 只导出固定 social/research API，调用映射到命名 IPC 通道', async () => {
@@ -96,7 +108,7 @@ test('preload 只导出固定 social/research API，调用映射到命名 IPC �
 });
 
 test('IPC 注册完整白名单，校验平台和 shape，凭证不接收也不返回', async t => {
-  const harness = await loadMain();
+  const harness = await loadMain({ socialApiConfigs: { youtube: { apiKey: 'youtube-test-secret' } } });
   t.after(() => fs.rmSync(harness.userData, { recursive: true, force: true }));
   const expected = [
     'social:list-platforms', 'social:get-status', 'social:open-login', 'social:check', 'social:search',
@@ -107,6 +119,30 @@ test('IPC 注册完整白名单，校验平台和 shape，凭证不接收也不�
 
   const invoke = (channel, ...args) => harness.handlers.get(channel)({}, ...args);
   assert.equal((await invoke('social:get-status', 'not-real')).code, 'UNSUPPORTED_PLATFORM');
+  const definitions = await invoke('social:list-platforms');
+  const definitionById = Object.fromEntries(definitions.map(item => [item.platform, item]));
+  assert.equal(definitionById.bilibili.market, 'domestic');
+  assert.equal(definitionById.bilibili.supportsSearch, true);
+  assert.equal(definitionById.bilibili.supportsDetail, false);
+  assert.equal(definitionById.bilibili.supportsComments, false);
+  for (const platform of ['weibo', 'zhihu']) {
+    assert.equal(definitionById[platform].market, 'domestic');
+    assert.equal(definitionById[platform].searchVerified, false);
+    assert.equal(definitionById[platform].supportsSearch, true);
+    assert.equal(definitionById[platform].supportsDetail, false);
+    assert.equal(definitionById[platform].supportsComments, false);
+    assert.equal((await invoke('social:get-status', platform)).apiConfigured, false);
+  }
+  assert.equal(definitionById.reddit.market, 'international');
+  const configuredStatus = await invoke('social:get-status', 'youtube');
+  assert.equal(configuredStatus.apiConfigured, true);
+  assert.doesNotMatch(JSON.stringify(configuredStatus), /youtube-test-secret/);
+  const xiaohongshuStatus = await invoke('social:get-status', 'xiaohongshu');
+  assert.equal(xiaohongshuStatus.apiConfigured, false);
+  const bilibiliStatus = await invoke('social:get-status', 'bilibili');
+  assert.equal(bilibiliStatus.apiConfigured, false);
+  assert.ok(harness.socialConfigReads.includes('youtube'));
+  assert.ok(!harness.socialConfigReads.includes('bilibili'));
   assert.equal((await invoke('social:open-login', 'reddit', '../escape')).code, 'INVALID_REQUEST');
   for (const channel of ['social:fetch-detail', 'social:capture-evidence']) {
     const validPayload = { profileId: 'p', resultId: 'result-1', url: 'https://www.reddit.com/r/test/comments/123/example/' };
@@ -128,12 +164,48 @@ test('IPC 注册完整白名单，校验平台和 shape，凭证不接收也不�
     }
     assert.equal((await invoke(channel, 'reddit', validPayload)).status, 'unsupported');
     assert.equal((await invoke(channel, 'reddit', { ...validPayload, url: 'https://reddit.com/r/test/' })).status, 'unsupported');
+    assert.equal((await invoke(channel, 'reddit', { ...validPayload, url: 'http://www.reddit.com/r/test/' })).status, 'unsupported');
+    const bilibiliPayload = { profileId: 'p', resultId: 'result-bili', url: 'https://www.bilibili.com/video/BV1xx411c7mD' };
+    for (const url of [
+      'https://bilibili.com.attacker.invalid/video/BV1xx411c7mD',
+      'https://evil.bilibili.com/video/BV1xx411c7mD',
+      'https://search.bilibili.com/all?keyword=test',
+      'http://www.bilibili.com/video/BV1xx411c7mD'
+    ]) {
+      assert.equal((await invoke(channel, 'bilibili', { ...bilibiliPayload, url })).code, 'INVALID_REQUEST', `${channel}: ${url}`);
+    }
+    assert.equal((await invoke(channel, 'bilibili', bilibiliPayload)).status, 'unsupported');
+    const weiboPayload = { profileId: 'p', resultId: 'result-weibo', url: 'https://weibo.com/123456/AbCdEf' };
+    for (const url of [
+      'http://weibo.com/123456/AbCdEf',
+      'https://s.weibo.com/weibo?q=test',
+      'https://weibo.com.attacker.invalid/123456/AbCdEf'
+    ]) {
+      assert.equal((await invoke(channel, 'weibo', { ...weiboPayload, url })).code, 'INVALID_REQUEST', `${channel}: ${url}`);
+    }
+    assert.equal((await invoke(channel, 'weibo', weiboPayload)).status, 'unsupported');
+    const zhihuPayload = { profileId: 'p', resultId: 'result-zhihu', url: 'https://www.zhihu.com/question/123456' };
+    for (const url of [
+      'http://www.zhihu.com/question/123456',
+      'https://zhuanlan.zhihu.com/p/123456',
+      'https://www.zhihu.com/topic/123456',
+      'https://evil.zhihu.com/question/123456'
+    ]) {
+      assert.equal((await invoke(channel, 'zhihu', { ...zhihuPayload, url })).code, 'INVALID_REQUEST', `${channel}: ${url}`);
+    }
+    assert.equal((await invoke(channel, 'zhihu', zhihuPayload)).status, 'unsupported');
   }
   assert.equal((await invoke('social:search', 'reddit', { query: 'x', profileId: 'p', endpoint: 'https://attacker.invalid' })).code, 'INVALID_REQUEST');
   assert.equal((await invoke('social:search', 'reddit', { query: 'x', profileId: 'p', apiKey: 'secret' })).code, 'INVALID_REQUEST');
   const forcedApi = await invoke('social:search', 'reddit', { query: 'coffee', profileId: 'p', mode: 'api' });
   assert.deepEqual(JSON.parse(JSON.stringify(forcedApi)), { status: 'error', code: 'NOT_CONFIGURED', message: '该平台 API 尚未安全配置。' });
   assert.doesNotMatch(JSON.stringify(forcedApi), /secret|key|header|endpoint/i);
+  const unsupportedBilibiliApi = await invoke('social:search', 'bilibili', { query: 'coffee', profileId: 'p', mode: 'api' });
+  assert.equal(unsupportedBilibiliApi.code, 'UNSUPPORTED_CAPABILITY');
+  for (const platform of ['weibo', 'zhihu']) {
+    const unsupportedApi = await invoke('social:search', platform, { query: '关键词', profileId: 'p', mode: 'api' });
+    assert.equal(unsupportedApi.code, 'UNSUPPORTED_CAPABILITY', platform);
+  }
   const login = await invoke('social:open-login', 'reddit', 'p');
   assert.equal(login.status, 'ready');
   assert.equal(harness.windows.length, 2); // 一个主窗口和一个由主进程管理的可视平台窗口。
@@ -155,6 +227,25 @@ test('IPC 注册完整白名单，校验平台和 shape，凭证不接收也不�
   assert.equal(secondCheck.platform, 'reddit');
   assert.equal(secondCheck.ready, true);
   assert.match(secondCheck.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const bilibiliLogin = await invoke('social:open-login', 'bilibili', 'p');
+  assert.equal(bilibiliLogin.status, 'ready');
+  assert.equal(harness.windows.at(-1).url, 'https://www.bilibili.com/');
+  const bilibiliSearch = await invoke('social:search', 'bilibili', { query: '测试主题', profileId: 'p', mode: 'browser' });
+  assert.equal(bilibiliSearch.status, 'ok');
+  assert.equal(bilibiliSearch.platform, 'bilibili');
+  assert.equal(bilibiliSearch.retrievalMethod, undefined);
+  assert.equal(new URL(harness.windows.at(-1).url).hostname, 'search.bilibili.com');
+  for (const [platform, searchHost, searchPath] of [
+    ['weibo', 's.weibo.com', '/weibo'],
+    ['zhihu', 'www.zhihu.com', '/search']
+  ]) {
+    const opened = await invoke('social:open-login', platform, 'p');
+    assert.equal(opened.status, 'ready');
+    const result = await invoke('social:search', platform, { query: '测试主题', profileId: 'p', mode: 'browser' });
+    assert.equal(result.status, 'ok', platform);
+    assert.equal(new URL(harness.windows.at(-1).url).hostname, searchHost);
+    assert.equal(new URL(harness.windows.at(-1).url).pathname, searchPath);
+  }
   const blocked = await invoke('social:search', 'youtube', { query: 'coffee', profileId: 'p', mode: 'browser', script: 'alert(1)' });
   assert.equal(blocked.code, 'INVALID_REQUEST');
 });

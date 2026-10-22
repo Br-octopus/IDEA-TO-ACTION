@@ -245,8 +245,9 @@ test('连接偏好尊重能力和明确选择，并在 auto 下检查 API 结果
 
 test('提示词覆盖四种模板并要求结构化输出、证据边界和来源链接', () => {
   const templates = ['trends', 'pain-points', 'content-competitors', 'fact-check'];
+  const domesticPlatforms = ['xiaohongshu', 'bilibili', 'weibo', 'zhihu'];
   for (const template of templates) {
-    const input = { topic: '独立开发工具', template, platforms };
+    const input = { topic: '独立开发工具', template, platforms: domesticPlatforms };
     const planPrompt = prompts.buildResearchPlanPrompt(input);
     const reportPrompt = prompts.buildResearchReportPrompt({ ...makePlan({ template }), plan: { researchType: template } }, []);
     assert.match(planPrompt, /JSON|可解析/);
@@ -256,6 +257,21 @@ test('提示词覆盖四种模板并要求结构化输出、证据边界和来�
     assert.match(reportPrompt, /链接/);
     assert.match(prompts.buildSupplementarySearchPrompt(makePlan({ template }), '缺少反例'), /JSON|可解析/);
   }
+});
+
+test('国内社媒计划提示按平台给查询建议并约束模型遵循已选平台和能力边界', () => {
+  const prompt = prompts.buildResearchPlanPrompt({
+    topic: '独立开发工具用户体验',
+    template: 'pain-points',
+    platforms: ['xiaohongshu', 'bilibili', 'weibo', 'zhihu']
+  });
+  assert.match(prompt, /小红书.*真实体验|小红书.*避雷/);
+  assert.match(prompt, /哔哩哔哩.*测评|哔哩哔哩.*实测/);
+  assert.match(prompt, /微博.*体验.*吐槽|微博.*投诉/);
+  assert.match(prompt, /知乎.*怎么样.*值得买吗|知乎.*使用体验/);
+  assert.match(prompt, /platformRoles\.platform 只能使用输入中已选的平台/);
+  assert.match(prompt, /maxQueriesPerPlatform/);
+  assert.match(prompt, /未采集到的评论、字幕、弹幕和正文不得当作证据/);
 });
 
 test('工作流和提示词同时支持浏览器全局导出', () => {

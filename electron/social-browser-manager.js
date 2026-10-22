@@ -1,7 +1,10 @@
 const PLATFORM_HOSTS = Object.freeze({
   xiaohongshu: new Set(['www.xiaohongshu.com', 'xiaohongshu.com']),
   reddit: new Set(['www.reddit.com', 'reddit.com']),
-  youtube: new Set(['www.youtube.com', 'youtube.com'])
+  youtube: new Set(['www.youtube.com', 'youtube.com']),
+  bilibili: new Set(['www.bilibili.com', 'search.bilibili.com', 'bilibili.com']),
+  weibo: new Set(['s.weibo.com', 'www.weibo.com', 'weibo.com']),
+  zhihu: new Set(['www.zhihu.com', 'zhihu.com', 'zhuanlan.zhihu.com'])
 });
 const NAVIGATION_TIMEOUT_MS = 15000;
 const PROFILE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
@@ -22,7 +25,8 @@ function validatePlatformUrl(platform, value) {
   } catch {
     throw new TypeError('平台 URL 无效');
   }
-  if (url.protocol !== 'https:' || url.username || url.password || !PLATFORM_HOSTS[platform]?.has(url.hostname.toLowerCase())) {
+  if (url.protocol !== 'https:' || url.username || url.password || url.port
+    || !PLATFORM_HOSTS[platform]?.has(url.hostname.toLowerCase())) {
     throw new TypeError('URL 不在该平台的 HTTPS 白名单中');
   }
   return url.href;
@@ -31,6 +35,7 @@ function validatePlatformUrl(platform, value) {
 function createSocialBrowserManager({ BrowserWindow, session, app, now = () => new Date().toISOString(), navigationTimeoutMs = NAVIGATION_TIMEOUT_MS }) {
   if (!BrowserWindow || !session || !app) throw new TypeError('BrowserWindow、session 和 app 为必需依赖');
   const sessions = new Map();
+  const activeActions = new Set();
 
   function getRecord(sessionId) {
     const record = sessions.get(sessionId);
@@ -43,7 +48,12 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
     const safeUrl = validatePlatformUrl(platform, startUrl);
     const existing = [...sessions.values()].find(item => item.platform === platform && item.profileId === profileId && item.status !== 'closed');
     if (existing) {
-      if (existing.status !== 'ready') await navigateSession(existing.sessionId, safeUrl);
+      if (activeActions.has(existing.sessionId)) {
+        throw Object.assign(new Error('该平台浏览器正在执行其他操作'), { code: 'SESSION_BUSY' });
+      }
+      if (existing.status !== 'ready') {
+        await runSessionAction(existing.sessionId, () => navigateSession(existing.sessionId, safeUrl));
+      }
       return publicStatus(existing);
     }
 
@@ -105,9 +115,22 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
           timeout = setTimeout(() => reject(Object.assign(new Error('页面导航超时'), { code: 'NAVIGATION_TIMEOUT' })), navigationTimeoutMs);
         })
       ]);
-      record.currentUrl = url;
+      const currentUrl = record.window?.webContents?.getURL?.();
+      if (typeof currentUrl === 'string' && currentUrl) {
+        try {
+          record.currentUrl = validatePlatformUrl(record.platform, currentUrl);
+        } catch {
+          record.status = 'failed';
+          record.errorCode = 'UNSUPPORTED_PAGE';
+          record.updatedAt = now();
+          throw Object.assign(new Error('平台页面重定向到不受支持的地址'), { code: 'UNSUPPORTED_PAGE' });
+        }
+      } else {
+        record.currentUrl = url;
+      }
       record.status = 'ready';
     } catch (error) {
+      if (error.code === 'UNSUPPORTED_PAGE') throw error;
       const timedOut = error.code === 'NAVIGATION_TIMEOUT';
       const closed = !timedOut && (!record.window || record.window.isDestroyed?.() || error.code === 'SESSION_CLOSED');
       record.status = timedOut || closed ? 'closed' : 'failed';
@@ -134,10 +157,37 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
     const record = getRecord(sessionId);
     const script = READ_ONLY_SCRIPTS.get(scriptName);
     if (!script) throw Object.assign(new Error('未注册的只读脚本'), { code: 'SCRIPT_NOT_ALLOWED' });
+    const scriptPlatform = scriptName.slice(0, scriptName.lastIndexOf('.'));
+    if (scriptPlatform !== record.platform) {
+      throw Object.assign(new Error('只读脚本不属于当前平台'), { code: 'SCRIPT_NOT_ALLOWED' });
+    }
     if (!record.window || record.window.isDestroyed?.()) throw Object.assign(new Error('浏览器会话已关闭'), { code: 'SESSION_CLOSED' });
+    const currentUrl = record.window.webContents?.getURL?.();
+    if (typeof currentUrl !== 'string' || !currentUrl) {
+      throw Object.assign(new Error('无法确认平台页面地址'), { code: 'UNSUPPORTED_PAGE' });
+    }
+    try {
+      record.currentUrl = validatePlatformUrl(record.platform, currentUrl);
+    } catch {
+      throw Object.assign(new Error('当前页面不属于平台白名单'), { code: 'UNSUPPORTED_PAGE' });
+    }
     const safeArgs = JSON.stringify(args ?? {});
     const source = `(${script.toString()})(JSON.parse(${JSON.stringify(safeArgs)}))`;
     return record.window.webContents.executeJavaScript(source, true);
+  }
+
+  async function runSessionAction(sessionId, action) {
+    getRecord(sessionId);
+    if (activeActions.has(sessionId)) {
+      throw Object.assign(new Error('该平台浏览器正在执行其他操作'), { code: 'SESSION_BUSY' });
+    }
+    if (typeof action !== 'function') throw new TypeError('会话操作必须是函数');
+    activeActions.add(sessionId);
+    try {
+      return await action();
+    } finally {
+      activeActions.delete(sessionId);
+    }
   }
 
   async function closeSession(sessionId) {
@@ -163,7 +213,7 @@ function createSocialBrowserManager({ BrowserWindow, session, app, now = () => n
   }
 
   return Object.freeze({
-    openPlatformSession, navigateSession, getSessionStatus, executeReadOnlyScript,
+    openPlatformSession, navigateSession, getSessionStatus, executeReadOnlyScript, runSessionAction,
     closeSession, clearPlatformProfile
   });
 }
