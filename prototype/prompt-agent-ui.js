@@ -16,6 +16,7 @@
     let reviewFeedbackDraft = "";
     let researchStatusText = "";
     let currentRawInput = "";
+    let incomingContext = null;
 
     function state() { return getState() || {}; }
     function currentTask() { return (state().promptAgentTasks || []).find(item => item.id === taskId) || null; }
@@ -90,7 +91,7 @@
     }
     function taskFromForm(existing) {
       const type = mount.querySelector("#prompt-agent-type").value;
-      const goal = mount.querySelector("#prompt-agent-goal").value.trim();
+      const goal = mount.querySelector("#prompt-agent-goal").value.trim() || String(incomingContext?.topic || "").slice(0, 300);
       if (!goal) throw new Error("先写下你想解决的问题");
       const currentState = mount.querySelector("#prompt-agent-current").value.trim();
       if (type !== "advance-idea" && !currentState) throw new Error("请粘贴要检查的提示词或 AI 结果");
@@ -153,7 +154,7 @@
         objective,
         queries: [objective],
         sourceTypes: sourceType === "mixed" ? ["web", "social"] : [sourceType],
-        platforms: sourceType === "social" || sourceType === "mixed" ? ["reddit", "youtube"] : [],
+        platforms: sourceType === "social" || sourceType === "mixed" ? ["xiaohongshu", "bilibili", "weibo", "zhihu"] : [],
         budget: { maxQueries: 3, maxSources: 5 }
       };
       const request = coordinator.previewExternalResearch(scope);
@@ -316,7 +317,18 @@
       persistState({ ...state(), promptAgentSources: sources });
       render();
     }).catch(error => setStatus(`本地授权目录读取失败：${error.message}`));
-    return { render, openTask(id) { taskId = id; render(); } };
+    return { render, openTask(id) { taskId = id; render(); },
+      applyIncomingContext(context) {
+        if (!context || typeof context !== "object") return;
+        incomingContext = context;
+        taskId = "";
+        currentRawInput = String(context.summary || "").slice(0, 8000);
+        reviewResultDraft = "";
+        reviewFeedbackDraft = "";
+        researchStatusText = "";
+        render();
+        setStatus(context.summary ? "已带入研究结果摘要；请补充你想解决的问题后开始梳理。" : "已按独立任务打开；未找到可带入的研究结论。");
+      } };
   }
   function createPromptAgentScenes({ document, onSceneChange } = {}) {
     const roots = { task: 'prompt-agent-root', writing: 'writing-workbench-root', ppt: 'ppt-scene-root' };

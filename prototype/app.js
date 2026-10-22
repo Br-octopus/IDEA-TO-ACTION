@@ -1674,7 +1674,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     });
     socialResearchUI = window.ForwardStepSocialResearchUI.createSocialResearchUI({
       document, desktopApi, coordinator, getState: () => state,
-      persistState: persistWorkbenchState
+      persistState: persistWorkbenchState,
+      navigate: go
     });
   }
   if (window.ForwardStepPromptAgentCoordinator && window.ForwardStepPromptAgentUI) {
@@ -2009,6 +2010,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     toast("本次梳理已保存，目标指令已更新");
   });
   document.getElementById("copy-master").addEventListener("click", () => { const p = getActiveProject(); if (p) copyText(withSelectedReferences(p.masterPrompt)); });
+  document.getElementById("to-social-research").addEventListener("click", () => {
+    const p = getActiveProject(); if (!p) return;
+    const topic = document.getElementById("social-research-topic");
+    topic.value = (p.goalSummary || p.idea).slice(0, 120);
+    go("social-research");
+    toast("已带入计划目标；请检查研究模板和平台后生成计划");
+  });
   async function requestModel(prompt, onSuccess, onFailure) {
     const result = document.getElementById("model-result");
     const output = document.getElementById("model-result-text");
