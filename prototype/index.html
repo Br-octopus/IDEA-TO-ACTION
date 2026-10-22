@@ -11,7 +11,7 @@
       --paper: #f7f8f5;
       --surface: #fff;
       --ink: #182b2c;
-      --muted: #687675;
+      --muted: #54645e;
       --line: #e2e8e3;
       --green: #195b48;
       --green-dark: #124634;
@@ -21,7 +21,7 @@
       --orange-soft: #fbefe6;
       --blue-soft: #edf3f7;
       --shadow: 0 18px 55px rgba(25, 53, 43, .07);
-      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-family: system-ui, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
     }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--paper); color: var(--ink); font-size: 14px; line-height: 1.55; }
@@ -34,21 +34,22 @@
     .brand-mark:before, .brand-mark:after { content: ""; display: block; position: absolute; width: 4px; border-radius: 6px; background: var(--lime); bottom: 8px; }
     .brand-mark:before { height: 10px; left: 9px; box-shadow: 7px -5px 0 var(--lime), 14px -10px 0 var(--lime); }
     .brand-name { font-weight: 720; letter-spacing: -.03em; font-size: 17px; }
-    .brand-sub { color: #81908a; font-size: 10px; letter-spacing: .11em; text-transform: uppercase; margin-top: -1px; }
-    .side-label { color: #8a9690; font-size: 11px; letter-spacing: .08em; padding: 0 11px; text-transform: uppercase; margin-bottom: 7px; }
+    .brand-sub { color: #5f6f69; font-size: 12px; letter-spacing: .11em; text-transform: uppercase; margin-top: -1px; }
+    .side-label { color: #5f6f69; font-size: 12px; letter-spacing: .08em; padding: 0 11px; text-transform: uppercase; margin-bottom: 7px; }
     .nav { display: grid; gap: 4px; }
+    .nav-group { color: #5f6f69; font-size: 12px; font-weight: 650; letter-spacing: .04em; padding: 10px 11px 2px; }
     .nav button { appearance: none; background: transparent; border: 0; color: #52615e; border-radius: 9px; display: flex; align-items: center; gap: 11px; text-align: left; padding: 10px 11px; font-size: 13px; transition: background .16s, color .16s; }
     .nav button:hover { background: #f4f7f4; color: var(--ink); }
     .nav button.active { color: var(--green-dark); background: var(--green-soft); font-weight: 650; }
     .nav-icon { width: 17px; height: 17px; flex: none; display: grid; place-items: center; }
     .nav-icon svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-    .sidebar-foot { margin-top: auto; padding: 15px 12px 4px; border-top: 1px solid var(--line); color: #7d8984; font-size: 11px; }
+    .sidebar-foot { margin-top: auto; padding: 15px 12px 4px; border-top: 1px solid var(--line); color: #5f6f69; font-size: 12px; }
     .local-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #5d9a6c; margin-right: 6px; }
     .main { min-width: 0; }
     .topbar { height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.64); }
-    .breadcrumb { color: #71807b; font-size: 12px; }
-    .top-right { display: flex; align-items: center; gap: 15px; color: #7a8983; font-size: 12px; }
-    .service-status { color: #82908a; font-size: 11px; }
+    .breadcrumb { color: #5f6f69; font-size: 12px; }
+    .top-right { display: flex; align-items: center; gap: 15px; color: #5f6f69; font-size: 12px; }
+    .service-status { color: #5f6f69; font-size: 12px; }
     .service-status.ready { color: #287253; }
     .service-status.offline { color: #9b6c3c; }
     .privacy { display: flex; align-items: center; gap: 7px; }
@@ -62,16 +63,16 @@
     h2 { font-size: 20px; line-height: 1.3; letter-spacing: -.025em; font-weight: 660; margin-bottom: 7px; }
     h3 { font-size: 15px; margin-bottom: 6px; font-weight: 650; }
     .lede { color: var(--muted); font-size: 15px; max-width: 650px; margin-bottom: 27px; }
-    .eyebrow { color: var(--green); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; margin-bottom: 9px; }
+    .plan-domain-context { color: var(--green); font-size: 12px; font-weight: 620; margin-bottom: 0; }
     .form-panel { max-width: 880px; background: var(--surface); border: 1px solid #e7ebe6; border-radius: 16px; box-shadow: var(--shadow); padding: 25px; }
     .field-label { display: flex; align-items: center; justify-content: space-between; color: #30423e; font-size: 13px; font-weight: 650; margin-bottom: 9px; }
-    .optional { color: #89948e; font-weight: 450; font-size: 11px; }
+    .optional { color: #5f6f69; font-weight: 450; font-size: 12px; }
     textarea, input[type="text"], input[type="number"], select { width: 100%; color: var(--ink); background: #fff; border: 1px solid #dce4de; border-radius: 9px; outline: 0; transition: border .15s, box-shadow .15s; }
     textarea:focus, input:focus, select:focus { border-color: #6e9f84; box-shadow: 0 0 0 3px rgba(75, 133, 98, .12); }
     textarea { min-height: 135px; resize: vertical; padding: 14px 15px; line-height: 1.6; }
-    textarea::placeholder, input::placeholder { color: #a0aaa5; }
-    .examples { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 11px 0 23px; color: #87928c; font-size: 11px; }
-    .example-chip { color: #56645f; background: #f6f8f6; border: 1px solid #e5eae5; border-radius: 99px; padding: 5px 10px; font-size: 11px; }
+    textarea::placeholder, input::placeholder { color: #6b7a74; }
+    .examples { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 11px 0 23px; color: #5f6f69; font-size: 12px; }
+    .example-chip { color: #56645f; background: #f6f8f6; border: 1px solid #e5eae5; border-radius: 99px; padding: 5px 10px; font-size: 12px; }
     .example-chip:hover { border-color: #a9c4b0; color: var(--green); }
     .domain-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 23px; }
     .domain { border: 1px solid #dfe6e1; border-radius: 8px; background: #fff; padding: 8px 12px; color: #576560; font-size: 12px; transition: all .14s; }
@@ -80,7 +81,7 @@
     .details { border-top: 1px solid #edf0ed; padding-top: 17px; margin-top: 3px; }
     .details summary { list-style: none; cursor: pointer; color: #576560; font-size: 12px; display: flex; align-items: center; justify-content: space-between; padding: 2px 0 13px; }
     .details summary::-webkit-details-marker { display: none; }
-    .summary-right { color: #81908a; display: inline-flex; gap: 7px; align-items: center; }
+    .summary-right { color: #5f6f69; display: inline-flex; gap: 7px; align-items: center; }
     .summary-right svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.8; transition: transform .15s; }
     .details[open] .summary-right svg { transform: rotate(180deg); }
     .extra-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 4px 0 8px; }
@@ -89,9 +90,9 @@
     .search-toggle { display: flex; align-items: flex-start; gap: 10px; border-top: 1px solid #edf0ed; padding-top: 16px; margin-top: 15px; }
     .search-toggle input { accent-color: var(--green); margin: 3px 0 0; width: 15px; height: 15px; }
     .toggle-copy { color: #485954; font-size: 12px; }
-    .toggle-copy small { display: block; color: #84908b; font-size: 11px; margin-top: 2px; }
+    .toggle-copy small { display: block; color: #5f6f69; font-size: 12px; margin-top: 2px; }
     .form-footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 22px; }
-    .privacy-note { display: flex; align-items: center; gap: 7px; color: #83908a; font-size: 11px; }
+    .privacy-note { display: flex; align-items: center; gap: 7px; color: #5f6f69; font-size: 12px; }
     .button-primary, .button-secondary, .button-quiet { display: inline-flex; justify-content: center; align-items: center; gap: 9px; border-radius: 9px; padding: 11px 16px; font-size: 12px; font-weight: 650; text-decoration: none; transition: transform .14s, background .14s, border .14s; }
     .button-primary { color: white; background: var(--green); border: 1px solid var(--green); box-shadow: 0 3px 9px rgba(25, 91, 72, .13); }
     .button-primary:hover { background: var(--green-dark); transform: translateY(-1px); }
@@ -102,15 +103,15 @@
     .button-primary svg, .button-secondary svg, .button-quiet svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin: 39px 0 13px; }
     .section-heading h2 { margin-bottom: 2px; font-size: 16px; }
-    .section-heading p { color: #87928d; font-size: 11px; margin: 0; }
+    .section-heading p { color: #5f6f69; font-size: 12px; margin: 0; }
     .recent-list { max-width: 880px; border-top: 1px solid var(--line); }
     .recent-item { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent; display: flex; align-items: center; justify-content: space-between; padding: 14px 7px; text-align: left; color: var(--ink); }
     .recent-item:hover .recent-title { color: var(--green); }
     .recent-title { display: block; font-size: 13px; font-weight: 600; }
-    .recent-meta { display: block; color: #8b9690; font-size: 11px; margin-top: 3px; }
+    .recent-meta { display: block; color: #8b9690; font-size: 12px; margin-top: 3px; }
     .arrow { color: #93a099; font-size: 18px; }
     .empty-recent { padding: 20px 7px; color: #89948f; font-size: 12px; }
-    .notice { border: 1px solid #e4ebe3; border-radius: 10px; background: #f2f6f1; padding: 12px 14px; color: #53645d; display: flex; gap: 10px; align-items: flex-start; font-size: 11px; margin: 18px 0 25px; }
+    .notice { border: 1px solid #e4ebe3; border-radius: 10px; background: #f2f6f1; padding: 12px 14px; color: #53645d; display: flex; gap: 10px; align-items: flex-start; font-size: 12px; margin: 18px 0 25px; }
     .notice svg { width: 16px; height: 16px; flex: none; stroke: #67856e; fill: none; stroke-width: 1.8; }
     .social-layout { display: grid; gap: 18px; }
     #view-prompt-agent [hidden] { display: none !important; }
@@ -118,11 +119,90 @@
     #writing-workbench-root { overflow-wrap: anywhere; }
     #writing-workbench-root input, #writing-workbench-root select, #writing-workbench-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
     #writing-workbench-root textarea { width: 100%; min-height: 100px; }
+    .academic-literature-manager { max-width: 1000px; margin: 18px 0; }
+    .academic-literature-manager label { display: grid; gap: 6px; min-width: 0; color: #53645d; font-size: 12px; }
+    .academic-literature-manager label.check-row { display: flex; align-items: center; gap: 8px; }
+    .academic-literature-manager label.check-row input[type="checkbox"] { width: auto; padding: 0; margin: 0; }
+    .academic-literature-manager input, .academic-literature-manager select, .academic-literature-manager textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px 10px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; color: #253832; }
+    .academic-literature-manager textarea { min-height: 80px; }
+    .academic-literature-card { min-width: 0; overflow-wrap: anywhere; }
+    .academic-literature-card .extra-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #academic-review-root { max-width: 1000px; min-width: 0; margin: 18px 0; overflow-wrap: anywhere; }
+    #academic-review-root input, #academic-review-root select, #academic-review-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+    #academic-review-root label { display: grid; gap: 6px; min-width: 0; color: #53645d; font-size: 12px; }
+    #academic-review-root label.check-row { display: flex; align-items: flex-start; gap: 8px; }
+    #academic-review-root label.check-row input[type="checkbox"] { width: auto; flex: 0 0 auto; margin: 3px 0 0; }
+    #academic-review-root input:not([type="checkbox"]), #academic-review-root select, #academic-review-root textarea { width: 100%; padding: 9px 10px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; color: #253832; }
+    #academic-review-root textarea { min-height: 76px; resize: vertical; }
+    #academic-publishing-root { max-width: 1000px; min-width: 0; margin: 18px 0; overflow-wrap: anywhere; }
+    #academic-publishing-root input, #academic-publishing-root select, #academic-publishing-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+    #academic-publishing-root label { display: grid; gap: 6px; min-width: 0; color: #53645d; font-size: 12px; }
+    #academic-publishing-root label.check-row { display: flex; align-items: flex-start; gap: 8px; }
+    #academic-publishing-root label.check-row input[type="checkbox"] { width: auto; flex: 0 0 auto; margin: 3px 0 0; }
+    #academic-publishing-root input:not([type="checkbox"]), #academic-publishing-root select, #academic-publishing-root textarea { width: 100%; padding: 9px 10px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; color: #253832; }
+    #academic-publishing-root textarea { min-height: 76px; resize: vertical; }
+    .academic-publishing-card, .academic-publishing-item { min-width: 0; margin-top: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow-wrap: anywhere; }
+    .academic-publishing-manager .extra-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 10px 0; }
+    .academic-publishing-manager .extra-grid > .wide { grid-column: 1 / -1; }
+    .academic-publishing-projects, .academic-publishing-list { display: grid; gap: 8px; margin-top: 12px; }
+    .academic-publishing-projects button { display: grid; min-width: 0; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; overflow-wrap: anywhere; }
+    .academic-publishing-projects button.active { border-color: var(--green); background: var(--green-soft); }
+    .academic-publishing-projects span, .academic-publishing-card .library-meta { color: var(--muted); font-size: 12px; }
+    .academic-publishing-status, .academic-publishing-confidentiality { padding: 8px 10px; border-radius: 7px; background: var(--green-soft); color: var(--green-dark); }
+    .academic-publishing-source { min-width: 0; margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; }
+    .academic-publishing-result { padding: 10px; border-left: 3px solid var(--orange); background: var(--orange-soft); overflow-wrap: anywhere; }
+    @media (max-width: 760px) { #academic-publishing-root .extra-grid, .academic-publishing-manager .extra-grid { grid-template-columns: minmax(0, 1fr); } #academic-publishing-root .extra-grid > .wide { grid-column: 1; } #academic-publishing-root .academic-publishing-card { padding: 11px; } #academic-publishing-root button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; } }
+    .academic-review-create, .academic-review-sources, .academic-review-workspace, .academic-review-coverage, .academic-review-record, .academic-review-batches { min-width: 0; margin-top: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+    .academic-review-manager .extra-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .academic-review-manager .extra-grid > .wide { grid-column: 1 / -1; }
+    .academic-review-project-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+    .academic-review-project-list button { display: grid; min-width: 0; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; overflow-wrap: anywhere; }
+    .academic-review-project-list button.active { border-color: var(--green); background: var(--green-soft); }
+    .academic-review-project-list span, .academic-review-sources small { color: var(--muted); font-size: 12px; }
+    .academic-review-coverage dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 8px 0; }
+    .academic-review-coverage dl > div { min-width: 0; padding: 8px; border-radius: 7px; background: #f5f8f5; }
+    .academic-review-coverage dt { color: var(--muted); font-size: 12px; }
+    .academic-review-coverage dd { margin: 2px 0 0; font-weight: 650; }
+    .academic-review-sources ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .academic-review-literature, .academic-review-metadata, .academic-review-fields, .academic-review-records, .academic-review-batches, .academic-review-screening, .academic-review-fulltext { min-width: 0; margin-top: 14px; }
+    .academic-review-literature-list, .academic-review-records { display: grid; gap: 8px; }
+    .academic-review-record { overflow: hidden; }
+    .academic-review-record blockquote { margin: 8px 0; padding: 9px 12px; border-left: 3px solid #d5e2d8; background: #f8faf8; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .academic-review-field-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto auto auto auto; align-items: end; gap: 7px; margin: 8px 0; }
+    .academic-review-extraction { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .academic-review-extraction > strong, .academic-review-extraction > label:nth-of-type(2) { grid-column: 1 / -1; }
+    .academic-review-candidates article, .academic-review-round { min-width: 0; margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+    .academic-review-status { padding: 8px 10px; border-radius: 7px; background: var(--green-soft); color: var(--green-dark); }
     #writing-workbench-root .social-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .writing-dimensions { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); margin: 14px 0; padding: 12px; }
     .writing-material, .writing-memory { border-top: 1px solid var(--line); padding: 14px 0; }
     #writing-error { color: #a32929; white-space: pre-wrap; }
-    @media (max-width: 760px) { #writing-workbench-root .social-form-grid { grid-template-columns: 1fr; } #writing-workbench-root .social-panel { padding: 14px; } #writing-workbench-root button { max-width: 100%; white-space: normal; } }
+    .writing-pack-manager { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .writing-pack-manager > h2 { margin-bottom: 12px; }
+    .pack-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+    .pack-editor h3, .pack-editor label, .pack-editor textarea { grid-column: 1 / -1; }
+    .pack-editor input, .pack-editor textarea { width: 100%; min-width: 0; padding: 10px 11px; font-size: 12px; }
+    .pack-editor textarea { min-height: 92px; }
+    .pack-import { min-width: 0; display: grid; gap: 9px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .pack-import textarea { width: 100%; min-height: 150px; min-width: 0; padding: 10px 11px; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .pack-import-preview { display: grid; gap: 10px; min-width: 0; }
+    .pack-import-item { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); overflow-wrap: anywhere; }
+    .pack-import-item h4 { margin: 0 0 8px; }
+    .pack-import-item p, .pack-import-item li { font-size: 12px; }
+    .pack-import-item small { color: var(--muted); font-weight: 400; }
+    .pack-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 14px; align-items: start; padding: 13px 0; border-top: 1px solid var(--line); }
+    .pack-row > strong { min-width: 0; overflow-wrap: anywhere; }
+    .pack-row > span { grid-column: 1; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .pack-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .pack-actions button, .pack-editor button { padding: 6px 9px; border: 1px solid #d8e3dc; border-radius: 7px; color: var(--green-dark); background: #fff; font-size: 12px; }
+    .pack-actions button:hover, .pack-editor button:hover { background: #f4f8f4; border-color: #a8c3b0; }
+    .pack-detail { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid #e8ede8; border-radius: 8px; background: #f8faf8; font-size: 12px; overflow-wrap: anywhere; }
+    .pack-detail p { margin-bottom: 7px; color: var(--muted); }
+    .pack-detail ul { margin-bottom: 0; padding-left: 19px; }
+    .writing-pack-selection { min-width: 0; margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+    .writing-pack-selection legend { padding: 0 5px; color: #30423e; font-size: 12px; font-weight: 650; }
+    @media (max-width: 760px) { #writing-workbench-root .social-form-grid { grid-template-columns: 1fr; } #writing-workbench-root .social-panel { padding: 14px; } #writing-workbench-root button { max-width: 100%; white-space: normal; } .writing-pack-manager { padding: 14px; } .pack-editor { grid-template-columns: minmax(0, 1fr); } .pack-row { grid-template-columns: minmax(0, 1fr); } .pack-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
+    @media (max-width: 760px) { #academic-review-root .extra-grid, .academic-review-project-list, .academic-review-extraction { grid-template-columns: minmax(0, 1fr); } #academic-review-root .extra-grid > .wide, .academic-review-extraction > strong, .academic-review-extraction > label:nth-of-type(2) { grid-column: 1; } .academic-review-coverage dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } .academic-review-field-row { grid-template-columns: minmax(0, 1fr) auto auto; } .academic-review-field-row button { min-height: 36px; } #academic-review-root .academic-review-workspace { padding: 11px; } #academic-review-root button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; } }
     .social-panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
     .social-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
     .social-platform { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
@@ -140,6 +220,20 @@
     .social-progress { height: 5px; background: #e8eee9; border-radius: 4px; overflow: hidden; }
     .social-progress span { display: block; height: 100%; width: 0; background: var(--green); }
     .social-inline-check { display: inline-flex; align-items: center; gap: 6px; }
+    .social-result-actions, .social-material { margin-top: 10px; }
+    .social-material { border-left: 2px solid var(--line); padding: 8px 10px; }
+    .social-material-content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; background: #f7f9f7; padding: 10px; }
+    .social-source-manager { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .social-source-config { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 10px 0; }
+    .social-source-config label { display: grid; gap: 5px; min-width: 150px; color: var(--muted); font-size: 12px; }
+    .social-source-phase { margin-top: 10px; }
+    .social-source-unavailable { display: grid; gap: 5px; margin-top: 12px; color: var(--muted); font-size: 12px; }
+    .social-source-diagnostics { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .writing-material-coverage { min-width: 0; }
+    .writing-material-coverage ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .writing-material-coverage li { margin: 8px 0; overflow-wrap: anywhere; }
+    .writing-coverage-batch { min-width: 0; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+    .writing-coverage-batch textarea, .writing-material-coverage textarea, .writing-material-coverage input { box-sizing: border-box; max-width: 100%; }
     @media (max-width: 760px) { .social-grid { grid-template-columns: 1fr; } .social-form-grid { grid-template-columns: 1fr; } }
     .notice strong { color: #304c3a; }
     .plan-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -151,36 +245,36 @@
     .plan-main, .plan-aside { min-width: 0; }
     .content-block { background: #fff; border: 1px solid #e6ebe6; border-radius: 13px; padding: 20px; margin-bottom: 14px; }
     .block-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-    .step-tag { display: inline-flex; align-items: center; gap: 7px; color: #6b7b72; font-size: 10px; letter-spacing: .04em; margin-bottom: 7px; }
-    .step-number { width: 19px; height: 19px; display: inline-grid; place-items: center; border-radius: 50%; background: var(--green-soft); color: var(--green-dark); font-size: 10px; font-weight: 700; }
+    .step-tag { display: inline-flex; align-items: center; gap: 7px; color: #54645e; font-size: 12px; letter-spacing: .04em; margin-bottom: 7px; }
+    .step-number { width: 19px; height: 19px; display: inline-grid; place-items: center; border-radius: 50%; background: var(--green-soft); color: var(--green-dark); font-size: 12px; font-weight: 700; }
     .content-block h2 { font-size: 17px; }
-    .block-desc { color: #77847e; font-size: 12px; margin-bottom: 14px; }
-    .prompt-box { position: relative; border: 1px solid #e5eae5; background: #f8faf8; border-radius: 9px; padding: 14px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #40514b; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.7; }
+    .block-desc { color: #5f6f69; font-size: 12px; margin-bottom: 14px; }
+    .prompt-box { position: relative; border: 1px solid #e5eae5; background: #f8faf8; border-radius: 9px; padding: 14px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #40514b; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.7; }
     .prompt-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 11px; }
     .button-row { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .model-result { margin-top: 16px; padding-top: 15px; border-top: 1px solid #edf0ed; }
-    .prompt-bottom small { color: #88938e; font-size: 10px; }
+    .prompt-bottom small { color: #5f6f69; font-size: 12px; }
     .timeline { display: grid; gap: 0; margin-top: 13px; }
     .timeline-item { position: relative; padding: 0 0 17px 34px; border-left: 1px solid #dce7de; margin-left: 10px; }
     .timeline-item:last-child { border-color: transparent; padding-bottom: 0; }
-    .timeline-mark { position: absolute; left: -10px; top: 0; width: 19px; height: 19px; border-radius: 50%; border: 1px solid #b9ccbd; background: white; display: grid; place-items: center; color: #75907c; font-size: 9px; }
+    .timeline-mark { position: absolute; left: -10px; top: 0; width: 19px; height: 19px; border-radius: 50%; border: 1px solid #b9ccbd; background: white; display: grid; place-items: center; color: #75907c; font-size: 12px; }
     .timeline-item.done .timeline-mark { color: white; border-color: var(--green); background: var(--green); }
     .timeline-item h3 { font-size: 12px; margin: 0 0 3px; }
-    .timeline-item p { color: #77847e; font-size: 11px; margin: 0; }
-    .timeline-item .deliverable { color: #6c8373; font-size: 10px; margin-top: 4px; }
+    .timeline-item p { color: #5f6f69; font-size: 12px; margin: 0; }
+    .timeline-item .deliverable { color: #6c8373; font-size: 12px; margin-top: 4px; }
     .stage-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
-    .stage-actions button { border: 1px solid #dce7de; border-radius: 7px; padding: 5px 8px; color: #456252; background: #fff; font-size: 10px; }
+    .stage-actions button { border: 1px solid #dce7de; border-radius: 7px; padding: 5px 8px; color: #456252; background: #fff; font-size: 12px; }
     .stage-actions button:hover { border-color: #9cb9a3; background: #f5f8f5; }
-    .check-row { display: flex; gap: 8px; align-items: center; margin-top: 7px; color: #68756f; font-size: 10px; }
+    .check-row { display: flex; gap: 8px; align-items: center; margin-top: 7px; color: #68756f; font-size: 12px; }
     .check-row input { accent-color: var(--green); margin: 0; }
     .aside-card { background: #fff; border: 1px solid #e6ebe6; border-radius: 13px; padding: 17px; margin-bottom: 13px; }
     .aside-card h3 { font-size: 13px; }
-    .aside-card p { color: #77847e; font-size: 11px; margin-bottom: 12px; }
+    .aside-card p { color: #5f6f69; font-size: 12px; margin-bottom: 12px; }
     .how-list { display: grid; gap: 11px; }
-    .how-item { display: grid; grid-template-columns: 21px 1fr; gap: 8px; color: #596862; font-size: 11px; }
-    .how-item span:first-child { width: 20px; height: 20px; border-radius: 7px; display: grid; place-items: center; color: var(--green); background: var(--green-soft); font-size: 10px; font-weight: 700; }
+    .how-item { display: grid; grid-template-columns: 21px 1fr; gap: 8px; color: #596862; font-size: 12px; }
+    .how-item span:first-child { width: 20px; height: 20px; border-radius: 7px; display: grid; place-items: center; color: var(--green); background: var(--green-soft); font-size: 12px; font-weight: 700; }
     .search-links { display: grid; gap: 7px; }
-    .search-link { display: flex; justify-content: space-between; gap: 10px; padding: 8px 9px; border: 1px solid #e8ede8; border-radius: 8px; color: #4b6157; text-decoration: none; font-size: 10px; }
+    .search-link { display: flex; justify-content: space-between; gap: 10px; padding: 8px 9px; border: 1px solid #e8ede8; border-radius: 8px; color: #4b6157; text-decoration: none; font-size: 12px; }
     .search-link:hover { background: #f6f9f6; border-color: #bad0bf; }
     .search-link span:last-child { color: #87958d; }
     .send-overlay { position: fixed; z-index: 30; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(24,43,44,.28); }
@@ -190,7 +284,7 @@
     .send-reference { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.5; }
     .send-reference strong { display: inline-block; color: var(--ink); margin-right: 7px; }
     .send-reference p { margin: 4px 0 0; color: var(--muted); }
-    .send-reference-type { color: var(--green); font-size: 11px; }
+    .send-reference-type { color: var(--green); font-size: 12px; }
     .send-reference button { border: 0; background: transparent; color: var(--orange); cursor: pointer; white-space: nowrap; }
     .settings-note { padding: 11px 13px; background: var(--green-soft); border-radius: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .reply-area { min-height: 115px; font-size: 12px; padding: 12px; }
@@ -207,7 +301,7 @@
     #article-form .extra-grid textarea.reply-area { min-height: 92px; }
     .field input { height: 43px; padding: 0 12px; font-size: 12px; }
     .audit-chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0 18px; }
-    .audit-chips span { border-radius: 99px; background: #f0f4f0; color: #5d7065; padding: 6px 9px; font-size: 10px; }
+    .audit-chips span { border-radius: 99px; background: #f0f4f0; color: #5d7065; padding: 6px 9px; font-size: 12px; }
     .check-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; padding: 5px 0 13px; }
     .check-option { display: flex; align-items: flex-start; gap: 8px; color: #596862; font-size: 12px; }
     .check-option input { accent-color: var(--green); margin: 3px 0 0; }
@@ -216,16 +310,16 @@
     .library-item { background: white; border: 1px solid #e6ebe6; border-radius: 12px; padding: 15px 17px; }
     .library-item-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .library-item h3 { margin: 0; }
-    .library-meta { color: #84918b; font-size: 10px; margin-top: 4px; }
-    .status { border-radius: 99px; padding: 4px 8px; color: #766b54; background: #f5f2e9; font-size: 10px; flex: none; }
+    .library-meta { color: #54645e; font-size: 12px; margin-top: 4px; }
+    .status { border-radius: 99px; padding: 4px 8px; color: #766b54; background: #f5f2e9; font-size: 12px; flex: none; }
     .status.verified { color: #286049; background: #e7f2eb; }
     .library-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
     .reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 900px; }
     .reference { background: white; border: 1px solid #e5ebe5; border-radius: 12px; padding: 17px; display: flex; flex-direction: column; min-height: 168px; }
     .reference h3 { margin: 0 0 4px; }
-    .reference p { color: #75817b; font-size: 11px; margin: 9px 0 14px; }
-    .reference .borrow { color: #41594d; font-size: 11px; padding-top: 10px; border-top: 1px solid #edf0ed; margin-top: auto; }
-    .reference a { color: var(--green); text-decoration: none; font-size: 11px; font-weight: 650; align-self: flex-start; margin-top: 11px; }
+    .reference p { color: #54645e; font-size: 12px; margin: 9px 0 14px; }
+    .reference .borrow { color: #41594d; font-size: 12px; padding-top: 10px; border-top: 1px solid #edf0ed; margin-top: auto; }
+    .reference a { color: var(--green); text-decoration: none; font-size: 12px; font-weight: 650; align-self: flex-start; margin-top: 11px; }
     .reference a:hover { text-decoration: underline; }
     .knowledge-toolbar { display: grid; grid-template-columns: minmax(220px, 1.7fr) repeat(4, minmax(120px, 1fr)) auto; gap: 8px; align-items: center; }
     .knowledge-toolbar input, .knowledge-toolbar select { height: 41px; padding: 0 11px; font-size: 12px; }
@@ -233,7 +327,7 @@
     .knowledge-entry-form { display: grid; gap: 13px; margin-top: 16px; padding-top: 17px; border-top: 1px solid #edf0ed; }
     .knowledge-entry-form[hidden] { display: none; }
     .knowledge-entry-form textarea { min-height: 82px; }
-    .knowledge-entry-note { color: #7c8982; font-size: 11px; margin: -3px 0 0; }
+    .knowledge-entry-note { color: #7c8982; font-size: 12px; margin: -3px 0 0; }
     .knowledge-card { min-height: 220px; }
     .knowledge-card .reference-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
     .knowledge-card .reference-actions .check-row { margin-top: 0; }
@@ -244,7 +338,7 @@
     .knowledge-detail-body strong { color: #30423e; }
     .compare-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
     .compare-card { min-width: 0; border: 1px solid #e5eae5; border-radius: 9px; background: #fbfcfb; padding: 12px; }
-    .compare-card h3 { color: #52635a; font-size: 11px; margin: 0 0 8px; }
+    .compare-card h3 { color: #52635a; font-size: 12px; margin: 0 0 8px; }
     .compare-card pre { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #42534a; font: 11px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
     .toast { position: fixed; left: 50%; bottom: 25px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; background: #1e3b31; color: white; padding: 10px 15px; border-radius: 9px; box-shadow: 0 8px 28px #1b332633; font-size: 12px; transition: all .2s; z-index: 20; }
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
@@ -275,7 +369,7 @@
       .compare-grid { grid-template-columns: 1fr; }
       .check-grid { grid-template-columns: 1fr; }
       .mobile-nav { display: flex; position: fixed; z-index: 10; inset: auto 0 0; background: rgba(255,255,255,.96); border-top: 1px solid var(--line); justify-content: space-around; padding: 7px 7px calc(7px + env(safe-area-inset-bottom)); backdrop-filter: blur(12px); }
-      .mobile-nav button { display: grid; gap: 2px; justify-items: center; border: 0; background: transparent; color: #74817a; font-size: 9px; padding: 3px 12px; }
+      .mobile-nav button { display: grid; gap: 2px; justify-items: center; border: 0; background: transparent; color: #54645e; font-size: 12px; padding: 3px 12px; }
       .mobile-nav button.active { color: var(--green); font-weight: 700; }
       .mobile-nav svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.7; }
       .notice { line-height: 1.55; }
@@ -293,13 +387,16 @@
       <div>
         <div class="side-label">工作台</div>
         <nav class="nav" aria-label="主导航">
+          <div class="nav-group">开始一件事</div>
           <button class="active" data-view="home"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>新建规划</button>
-          <button data-view="plans"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg></span>我的计划</button>
-          <button data-view="article"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span>文章改写</button>
-          <button data-view="library"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17M10 7h6M10 11h6"/></svg></span>提示词库</button>
-          <button data-view="references"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span>资料库</button>
+          <div class="nav-group">已有素材直接进来</div>
           <button data-view="social-research"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg></span>社媒研究</button>
           <button data-view="prompt-agent"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg></span>提示词 Agent</button>
+          <button data-view="article"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span>文章改写</button>
+          <div class="nav-group">资产与配置</div>
+          <button data-view="plans"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg></span>我的计划</button>
+          <button data-view="library"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17M10 7h6M10 11h6"/></svg></span>提示词库</button>
+          <button data-view="references"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span>资料库</button>
           <button data-view="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.5"/></svg></span>设置</button>
         </nav>
       </div>
@@ -355,7 +452,7 @@
 
         <section class="view" id="view-project">
           <div class="plan-header">
-            <div class="plan-title"><div class="eyebrow" id="project-domain">计划工作台</div><h1 id="project-title">你的计划</h1><p id="project-subtitle">从第一步开始，边做边调整。</p></div>
+            <div class="plan-title"><h1 id="project-title">你的计划</h1><p id="project-subtitle">从第一步开始，边做边调整。</p><p class="plan-domain-context" id="project-domain">计划工作台</p></div>
             <div class="plan-actions"><button class="button-secondary" id="back-home"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>返回</button></div>
           </div>
           <div class="notice"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span><strong>这份指令已根据你的想法定制。</strong>你可以复制后交给任意 AI；如果本地服务已配置模型，也可以先预览发送内容，再让内置模型只负责分析与生成建议。本工具不会直接替你完成文章、PPT、代码或现实任务。</span></div>
@@ -437,12 +534,12 @@
         </section>
 
         <section class="view" id="view-plans">
-          <div class="eyebrow">继续你已经开始的事</div><h1>我的计划</h1><p class="lede">所有内容保存在当前浏览器。打开一项计划，继续执行或更新 AI 指令。</p>
+          <h1>我的计划</h1><p class="lede">所有内容保存在当前浏览器。打开一项计划，继续执行或更新 AI 指令。</p>
           <div class="recent-list" id="all-plans"></div>
         </section>
 
         <section class="view" id="view-social-research">
-          <div class="eyebrow">只读研究工作台</div><h1>社媒研究</h1>
+          <h1>社媒研究</h1><p class="lede">只读研究工作台；确认研究计划后才会开始搜索。</p>
           <p class="lede">连接平台、确认研究计划，再查看可追溯结果。研究只读，不会自动发布内容。</p>
           <div class="social-layout">
             <section class="social-panel" aria-labelledby="social-research-entry-title">
@@ -454,15 +551,15 @@
                 <div class="button-row"><button class="button-primary" id="social-research-create-plan" type="submit">生成研究计划</button></div>
               </form>
             </section>
-            <section class="social-panel" id="social-platform-preparation"><div class="block-top"><div><h2>平台准备</h2><p class="block-desc">自动回退模式会优先使用已配置 API；API 失败或结果不足时切换到真实浏览器。浏览器使用独立 profile。</p></div><button class="button-secondary" id="social-platform-refresh" type="button">刷新平台状态</button></div><div id="social-platform-cards" class="social-grid"></div><p class="social-muted">仅只读搜索；不会点赞、评论或发布。登录状态由本机独立 profile 管理。</p></section>
-            <section class="social-panel" id="social-research-plan"><div class="block-top"><div><h2>研究计划</h2><div class="social-muted" id="social-research-status" role="status">填写目标后生成计划，确认前不会开始搜索。</div></div><div class="button-row"><button class="button-secondary" id="social-research-plan-confirm" type="button" disabled>确认并运行</button><button class="button-secondary" id="social-research-pause" type="button" disabled>暂停</button><button class="button-quiet" id="social-research-cancel" type="button" disabled>取消</button></div></div><div id="social-research-plan-detail" class="social-plan-detail">等待生成计划</div><div class="social-progress" aria-label="研究进度"><span id="social-research-progress"></span></div><div class="social-muted" id="social-research-progress-detail" role="status" aria-live="polite"></div></section>
-            <section class="social-panel" id="social-research-results"><div class="block-top"><div><h2>结果集</h2><p class="block-desc">结果默认未核验；保存前请检查来源和内容。</p></div><button class="button-primary" id="social-research-save-selection" type="button" disabled>保存勾选结果</button></div><div class="social-filters"><label>平台 <select id="social-filter-platform"><option value="">全部平台</option></select></label><label>查询词 <select id="social-filter-query"><option value="">全部查询</option></select></label><label>证据 <select id="social-filter-evidence"><option value="">全部状态</option><option value="unverified">未核验</option><option value="source-reviewed">已核对来源</option><option value="user-confirmed">用户确认</option><option value="multiple-sources">多个来源</option><option value="conflicting">存在冲突</option></select></label><label>保存状态 <select id="social-filter-saved"><option value="">全部</option><option value="saved">已保存</option><option value="unsaved">未保存</option></select></label><label>发布时间 <input id="social-filter-from" type="date" aria-label="发布时间起始"></label><label>至 <input id="social-filter-to" type="date" aria-label="发布时间结束"></label></div><div id="social-research-results-list"></div></section>
-            <section class="social-panel" id="social-research-report"><h2>研究报告</h2><div id="social-research-report-content" class="social-muted">报告结论会关联到对应原始结果。</div></section>
+            <section class="social-panel" id="social-platform-preparation"><div class="block-top"><div><h2>平台准备</h2><p class="block-desc">自动回退模式会优先使用已配置 API；API 失败或结果不足时切换到真实浏览器。浏览器使用独立 profile。</p></div><button class="button-secondary" id="social-platform-refresh" type="button">刷新平台状态</button></div><div id="social-platform-cards" class="social-grid"></div><div class="social-source-manager"><h3>固定来源生命周期</h3><div id="social-source-manager-content"></div><h3>B 站字幕来源</h3><div id="social-source-candidate"></div></div><p class="social-muted">仅只读搜索；不会点赞、评论或发布。登录状态由本机独立 profile 管理。</p></section>
+            <section class="social-panel" id="social-research-plan"><div class="block-top"><div><h2>研究计划</h2><div class="social-muted" id="social-research-status" role="status">填写目标后生成计划，确认前不会开始搜索。</div></div><div class="button-row"><button class="button-secondary" id="social-research-plan-confirm" type="button" disabled>确认并运行</button><button class="button-secondary" id="social-research-pause" type="button" disabled>暂停</button><button class="button-quiet" id="social-research-cancel" type="button" disabled>取消</button></div></div><div id="social-research-plan-detail" class="social-plan-detail">等待生成计划</div><div id="social-research-operations" class="social-plan-detail" aria-live="polite"></div><div class="social-progress" aria-label="研究进度"><span id="social-research-progress"></span></div><div class="social-muted" id="social-research-progress-detail" role="status" aria-live="polite"></div></section>
+            <section class="social-panel" id="social-research-results"><div class="block-top"><div><h2>结果集</h2><p class="block-desc">深读选择与摘要保存相互独立。先勾选“选择深读”，再明确选择读取详情或一级评论；每条评论最多 20 条，不读取二级回复。</p></div><div class="button-row"><button class="button-secondary" id="social-research-read-details" type="button" disabled>读取所选详情</button><button class="button-secondary" id="social-research-read-comments" type="button" disabled>读取所选一级评论</button><button class="button-primary" id="social-research-save-selection" type="button" disabled>保存勾选摘要</button><button class="button-secondary" id="social-research-save-materials" type="button" disabled>保存所选全文附件</button><button class="button-quiet" id="social-research-read-transcript" type="button" disabled title="字幕来源尚未登记">读取 B 站字幕（不可用）</button></div></div><div class="social-filters"><label>平台 <select id="social-filter-platform"><option value="">全部平台</option></select></label><label>查询词 <select id="social-filter-query"><option value="">全部查询</option></select></label><label>证据 <select id="social-filter-evidence"><option value="">全部状态</option><option value="unverified">未核验</option><option value="source-reviewed">已核对来源</option><option value="user-confirmed">用户确认</option><option value="multiple-sources">多个来源</option><option value="conflicting">存在冲突</option></select></label><label>保存状态 <select id="social-filter-saved"><option value="">全部</option><option value="saved">已保存</option><option value="unsaved">未保存</option></select></label><label>发布时间 <input id="social-filter-from" type="date" aria-label="发布时间起始"></label><label>至 <input id="social-filter-to" type="date" aria-label="发布时间结束"></label></div><div id="social-research-results-list"></div></section>
+            <section class="social-panel" id="social-research-report"><div class="block-top"><h2>研究报告</h2><button class="button-secondary" id="social-research-regenerate-report" type="button" disabled>基于已完成材料重新生成报告</button></div><div id="social-research-report-content" class="social-muted">报告结论会关联到对应原始结果与材料。</div></section>
           </div>
         </section>
 
         <section class="view" id="view-prompt-agent">
-          <div class="eyebrow">提示词 Agent</div><h1>把想法变成下一步</h1>
+          <h1>提示词 Agent：把想法变成下一步</h1>
           <p class="lede">梳理目标、检查遗漏、规划步骤，并生成可交给其他 AI 的提示词。</p>
           <div class="social-tools" role="group" aria-label="Agent 场景"><button type="button" class="button-secondary" data-agent-scene="task">任务梳理</button><button type="button" class="button-secondary" data-agent-scene="writing">写作工作台</button><button type="button" class="button-secondary" data-agent-scene="ppt">PPT 规划</button></div>
           <div id="prompt-agent-root" class="social-layout"></div>
@@ -471,7 +568,7 @@
         </section>
 
         <section class="view" id="view-prompt-optimize">
-          <div class="eyebrow">提示词工作台</div><h1>让现有提示词更清楚、更可靠</h1><p class="lede">粘贴你正在用的提示词，告诉 AI 检查遗漏、矛盾、多余要求和可能的错误，并用例子验证改动。</p>
+          <h1>提示词优化工作台：让现有提示词更清楚、更可靠</h1><p class="lede">粘贴你正在用的提示词，告诉 AI 检查遗漏、矛盾、多余要求和可能的错误，并用例子验证改动。</p>
           <form class="form-panel prompt-form" id="optimize-form">
             <div class="field"><label class="field-label" for="old-prompt">你现在的提示词</label><textarea id="old-prompt" required placeholder="把你正在使用的提示词粘贴到这里……"></textarea></div>
             <div class="field"><label class="field-label" for="prompt-purpose">它原本想解决什么问题？<span class="optional">选填；有助于避免优化时偏离目标</span></label><input id="prompt-purpose" type="text" placeholder="例如：根据访谈记录整理用户痛点"></div>
@@ -486,7 +583,7 @@
         </section>
 
         <section class="view" id="view-library">
-          <div class="eyebrow">个人收藏</div><h1>提示词库</h1><p class="lede">保存不同版本，记下实际测试结果。只有你用过真实案例后手动标记的提示词，才会显示为“已验证”。</p>
+          <h1>我的提示词库</h1><p class="lede">保存不同版本，记下实际测试结果。只有你用过真实案例后手动标记的提示词，才会显示为“已验证”。</p>
           <article class="content-block" style="max-width:880px">
             <h2>从社区提示词找灵感</h2>
             <p class="block-desc">热门提示词适合作为起点。先按你的任务找案例，再用“优化提示词”检查是否适用，最后用真实例子验证。</p>
@@ -502,21 +599,21 @@
         </section>
 
         <section class="view" id="view-references">
-          <div class="eyebrow">本地知识管理</div><h1>本地资料库</h1><p class="lede">把公开资料、提示词、方法卡和已确认案例放在一起搜索。这里只保存摘要和来源，热门或被收录不代表已验证。</p>
+          <h1>本地资料库</h1><p class="lede">把公开资料、提示词、方法卡和已确认案例放在一起搜索。这里只保存摘要和来源，热门或被收录不代表已验证。</p>
           <div class="notice" style="max-width:900px"><span><strong>未完成研究：</strong>当前没有实时搜索 API。目录是待评估资料，不代表已经检索、核验或验证；工具不会抓取整库，也不会直接执行任务。</span></div>
           <section class="content-block" style="max-width:900px;margin-top:14px">
             <h2>搜索和筛选本地资料</h2>
             <p class="block-desc">搜索在本机完成，不消耗模型 token。选择的资料只会以摘要、可借鉴方法和来源进入当前提示词。</p>
             <div class="knowledge-toolbar">
-              <input id="knowledge-query" type="search" placeholder="搜索提示词、案例、方法、句式或关键词">
-              <select id="knowledge-type"><option value="">全部类型</option></select>
-              <select id="knowledge-domain"><option value="">全部领域</option></select>
-              <select id="knowledge-stage"><option value="">全部阶段</option></select>
-              <select id="knowledge-verification"><option value="">全部验证状态</option></select>
-              <button class="button-primary" id="knowledge-search" type="button">搜索本地资料</button>
+              <input id="legacy-knowledge-query" type="search" aria-label="搜索提示词、案例、方法、句式或关键词" placeholder="搜索提示词、案例、方法、句式或关键词">
+              <select id="legacy-knowledge-type" aria-label="按类型筛选"><option value="">全部类型</option></select>
+              <select id="legacy-knowledge-domain" aria-label="按领域筛选"><option value="">全部领域</option></select>
+              <select id="legacy-knowledge-stage" aria-label="按阶段筛选"><option value="">全部阶段</option></select>
+              <select id="legacy-knowledge-verification" aria-label="按验证状态筛选"><option value="">全部验证状态</option></select>
+              <button class="button-primary" id="legacy-knowledge-search" type="button">搜索本地资料</button>
             </div>
-            <p class="library-meta" id="knowledge-search-status">正在加载本地资料索引……</p>
-            <div id="knowledge-results" class="reference-grid"></div>
+            <p class="library-meta" id="legacy-knowledge-search-status">正在加载本地资料索引……</p>
+            <div id="legacy-knowledge-results" class="reference-grid"></div>
             <button class="button-secondary" id="open-knowledge-entry" type="button">添加资料摘要</button>
             <form id="knowledge-entry-form" class="knowledge-entry-form" aria-label="添加资料摘要" hidden>
               <div class="block-top"><h3>添加资料摘要</h3><button class="button-quiet" id="knowledge-entry-cancel" type="button">取消</button></div>
@@ -536,6 +633,9 @@
               <div class="button-row"><button class="button-secondary" id="cancel-knowledge-entry" type="button">取消</button><button class="button-primary" id="knowledge-entry-save" type="submit">保存到本地资料库</button></div>
             </form>
           </section>
+          <div id="academic-literature-root"></div>
+          <div id="academic-review-root"></div>
+          <div id="academic-publishing-root"></div>
           <section class="content-block knowledge-detail" id="knowledge-detail" hidden>
             <div class="block-top"><h2>资料详情</h2><button class="button-quiet" id="close-knowledge-detail" type="button">关闭</button></div>
             <div class="knowledge-detail-body" id="knowledge-detail-content"></div>
@@ -572,7 +672,7 @@
               <div class="field"><label class="field-label" for="case-project">案例项目</label><select id="case-project"><option value="">全部项目</option><option value="__current__">当前项目</option></select></div>
             </div>
             <label class="field" for="knowledge-export-scope"><span class="field-label">备份范围</span><select id="knowledge-export-scope"><option value="workspace" selected>完整工作区（含已保存文章和写作记忆）</option><option value="knowledge-base">仅资料库（不含文章和写作记忆）</option></select></label>
-            <div class="button-row" style="margin-top:10px"><button class="button-primary" id="knowledge-search" type="button">搜索资料</button><button class="button-secondary" id="knowledge-add-open" type="button">添加资料摘要</button><button class="button-secondary" id="knowledge-export-open" type="button">导出备份</button><button class="button-secondary" id="knowledge-import-open" type="button">导入备份</button><input id="knowledge-import-file" type="file" accept="application/json,.json" hidden></div>
+            <div class="button-row" style="margin-top:10px"><button class="button-primary" id="knowledge-search" type="button">搜索资料</button><button class="button-secondary" id="knowledge-add-open" type="button">添加资料摘要</button><button class="button-secondary" id="knowledge-export-open" type="button">导出备份</button><button class="button-secondary" id="knowledge-import-open" type="button">导入备份</button><input id="knowledge-import-file" type="file" accept="application/zip,.zip,application/json,.json" hidden></div>
             <p class="library-meta" id="knowledge-search-status">输入搜索词或直接浏览资料；只有勾选的摘要会进入模型上下文。</p><div class="button-row" id="knowledge-bulk-actions" hidden><span class="library-meta" id="knowledge-selection-status">已选 0 条</span><button class="button-secondary" id="knowledge-bulk-hide" type="button">从资料库移除</button><button class="button-secondary" id="knowledge-bulk-delete" type="button">删除手动资料</button></div><p class="library-meta" id="knowledge-stats">资料统计加载中…</p><p class="library-meta" id="knowledge-backup-status">最近备份：尚未备份</p>
             <div class="reference-grid" id="knowledge-results" style="margin-top:14px"></div>
           </div>
@@ -610,7 +710,7 @@
           <div class="notice" style="max-width:900px;margin-top:18px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>热门或高星提示词不等于适合你的任务。真正的“已验证”需要结合目标、模型、真实案例和评价标准。</span></div>
         </section>
         <section class="view" id="view-settings">
-          <div class="eyebrow">Windows 桌面设置</div><h1>模型与搜索服务</h1>
+          <h1>Windows 桌面端模型与搜索设置</h1>
           <p class="lede">模型和搜索是可选能力；未配置、超时或失败时，工具保留复制提示词和手动搜索模式。本工具不会直接改文章、PPT、代码或执行计划。</p>
           <form class="form-panel prompt-form" id="settings-form" style="max-width:880px">
             <h2>模型</h2>
@@ -635,9 +735,9 @@
     <button class="active" data-view="home"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新建</span></button>
     <button data-view="plans"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg><span>计划</span></button>
     <button data-view="article"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span>文章</span></button>
-    <button data-view="library"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17"/></svg><span>提示词</span></button>
-    <button data-view="references"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5"/></svg><span>参考</span></button>
+    <button data-view="social-research"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg><span>研究</span></button>
     <button data-view="prompt-agent"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg><span>Agent</span></button>
+    <button data-mobile-more><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg><span>更多</span></button>
   </nav>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="send-overlay" id="send-preview" hidden>
@@ -652,6 +752,7 @@
     </section>
   </div>
   <script src="/prototype/knowledge-schema.js"></script>
+  <script src="/prototype/academic-literature.js"></script>
   <script src="/prototype/method-cards.js"></script>
   <script src="/prototype/research-catalog.js"></script>
   <script src="/prototype/search-dictionary.js"></script>
@@ -662,7 +763,13 @@
   <script src="/prototype/social-research-prompts.js"></script>
   <script src="/prototype/prompt-agent-schema.js"></script>
   <script src="/prototype/ppt-scene-schema.js"></script>
+    <script src="/prototype/writing-material-coverage.js"></script>
   <script src="/prototype/writing-workbench-schema.js"></script>
+  <script src="/prototype/writing-pack-schema.js"></script>
+  <script src="/prototype/academic-review.js"></script>
+  <script src="/prototype/academic-review-coordinator.js"></script>
+  <script src="/prototype/academic-publishing.js"></script>
+  <script src="/prototype/writing-pack-catalog.js"></script>
   <script src="/prototype/writing-workbench-prompts.js"></script>
   <script src="/prototype/storage.js"></script>
   <script src="/prototype/social-research-ui.js"></script>
@@ -678,8 +785,14 @@
   <script src="/prototype/ppt-scene-prompts.js"></script>
   <script src="/prototype/ppt-scene-coordinator.js"></script>
   <script src="/prototype/ppt-scene-ui.js"></script>
+  <script src="/prototype/writing-pack-coordinator.js"></script>
+  <script src="/prototype/writing-pack-ui.js"></script>
   <script src="/prototype/writing-workbench-coordinator.js"></script>
   <script src="/prototype/writing-workbench-ui.js"></script>
+  <script src="/prototype/academic-literature-ui.js"></script>
+  <script src="/prototype/academic-review-ui.js"></script>
+  <script src="/prototype/academic-publishing-coordinator.js"></script>
+  <script src="/prototype/academic-publishing-ui.js"></script>
   <script src="/prototype/app.js"></script>
 </body>
 </html>
