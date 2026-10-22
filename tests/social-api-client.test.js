@@ -22,12 +22,12 @@ function response(body, status = 200, contentType = 'application/json') {
 
 test('平台白名单说明 API 可用性、配置要求、上限与实际能力', () => {
   const definitions = listSocialPlatformDefinitions();
-  assert.deepEqual(definitions.map(item => item.platform), ['xiaohongshu', 'reddit', 'youtube']);
+  assert.deepEqual(definitions.map(item => item.platform), ['xiaohongshu', 'bilibili', 'weibo', 'zhihu', 'reddit', 'youtube']);
   assert.equal(definitions.find(item => item.platform === 'xiaohongshu').apiAvailable, false);
   assert.deepEqual(definitions.find(item => item.platform === 'reddit').requiredConfig, ['accessToken', 'userAgent']);
   assert.deepEqual(definitions.find(item => item.platform === 'youtube').requiredConfig, ['apiKey']);
   assert.ok(definitions.filter(item => item.apiAvailable).every(item => Number.isInteger(item.maxResults) && item.maxResults > 0));
-  assert.equal(definitions.find(item => item.platform === 'xiaohongshu').maxResults, 0);
+  assert.equal(definitions.find(item => item.platform === 'xiaohongshu').maxResults, 20);
   assert.ok(definitions.filter(item => item.apiAvailable).every(item => item.supportsSearch && !item.supportsDetail && !item.supportsComments));
   assert.ok(definitions.every(item => Array.isArray(item.supportedFields)));
   assert.equal(createSocialApiClient({ platform: 'xiaohongshu', config: { baseUrl: 'https://search.example', apiKey: 'secret' } }).configured, false);
@@ -51,10 +51,10 @@ test('Reddit 搜索成功后统一结果字段并限制返回数量', async () =
   assert.equal(results.length, 2);
   assert.doesNotMatch(JSON.stringify(results), /reddit-secret|authorization/i);
   assert.deepEqual(results[0], {
-    id: results[0].id, platform: 'reddit', url: 'https://www.reddit.com/r/test/comments/0', title: '帖子 0', author: '作者',
+    id: results[0].id, platform: 'reddit', contentId: '', url: 'https://www.reddit.com/r/test/comments/0', title: '帖子 0', author: '作者',
     publishedAt: new Date(1792000000 * 1000).toISOString(), capturedAt: results[0].capturedAt, searchQueries: ['主题'],
     summary: '摘要', discussionSummary: '', publicMetrics: { likes: 3, comments: 2 }, contentType: 'post',
-    retrievalMethod: 'api', evidenceStatus: 'unverified', marketingRisk: 'unknown', needsManualReview: false, attachmentIds: []
+    retrievalMethod: 'api', evidenceStatus: 'unverified', marketingRisk: 'unknown', needsManualReview: false, attachmentIds: [], materials: []
   });
 });
 
@@ -94,6 +94,17 @@ test('未配置、非 JSON、认证、限流、上游、超时和空结果均返
     options.signal.addEventListener('abort', () => reject(Object.assign(new Error('private body'), { name: 'AbortError' })), { once: true });
   }) });
   assert.equal((await timeout.search('test')).code, SOCIAL_API_CODES.TIMEOUT);
+});
+
+test('单次搜索可按剩余预算缩短 timeout 并中止 fetch', async () => {
+  const client = createSocialApiClient({
+    platform: 'reddit', config: redditConfig,
+    fetchImpl: (_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(Object.assign(new Error('late'), { name: 'AbortError' })), { once: true });
+    })
+  });
+
+  assert.equal((await client.search('test', { timeoutMs: 5 })).code, SOCIAL_API_CODES.TIMEOUT);
 });
 
 test('Reddit User-Agent 必须由配置提供且拒绝原始值中的首尾和中间换行', async () => {

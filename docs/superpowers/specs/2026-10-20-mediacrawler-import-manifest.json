@@ -1,0 +1,326 @@
+{
+  "schemaVersion": 1,
+  "runtimeSupport": {
+    "python": ">=3.11",
+    "reason": "该裁剪依赖锁按 Python 3.11 验证，并匹配后续来源管理器的专用 Python 3.11 运行环境；Python <3.11 还需要额外依赖 exceptiongroup，因此不属于本清单支持范围。"
+  },
+  "upstream": {
+    "repository": "https://github.com/NanmiCoder/MediaCrawler",
+    "commit": "8f583999006d5b692272c608440e193ca282e73b",
+    "license": "NON-COMMERCIAL LEARNING LICENSE 1.1",
+    "authorization": "用户已在本任务上下文确认授权",
+    "note": "完整上游 LICENSE 原样保留；外部授权文件与个人信息不在本清单披露。"
+  },
+  "hashMethod": {
+    "algorithm": "SHA-256",
+    "rawInput": "source SHA 对固定 commit 的 GitHub Git blob 原始源码字节直接计算：UTF-8、无 BOM、LF；不经过 Windows 工作树 CRLF 转换。",
+    "byteVerification": "每个暂存原文的原始字节长度与 GitHub API size 相等，按 Git blob 格式计算的 SHA-1 与 GitHub API 的 blob SHA 相等，因此 source SHA 对应固定提交的原始 UTF-8 LF 字节。",
+    "localHash": "localSha256 对最终 vendor 文件按 UTF-8 源码字节计算；与原文不同的文件按 changes 记录裁剪/改写。"
+  },
+  "files": [
+    {
+      "upstreamPath": "LICENSE",
+      "localPath": "vendor/mediacrawler/LICENSE",
+      "sha256": "aeff21de8609bec9d6e939bbbba7c2914ae0a6e7c9470ea7945c03f7d17a2a33",
+      "localSha256": "aeff21de8609bec9d6e939bbbba7c2914ae0a6e7c9470ea7945c03f7d17a2a33",
+      "originalBytes": 4775,
+      "gitBlobSha1": "78408f6201d46f746850c039ae5754b8fcc4b6c1",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "逐字节保留，未修改。"
+    },
+    {
+      "upstreamPath": "media_platform/xhs/client.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/xhs/client.py",
+      "sha256": "82410c281dfcdd9761b22e10af04a0a085bb48f14da668a1d8c6f02eec88d4e6",
+      "localSha256": "66a1d41846c481b8b3081b16e47533843b7efa096c8741baa7c12bbb508706a1",
+      "originalBytes": 25936,
+      "gitBlobSha1": "f9d5193718990af65b5f705cdf845944d13d77c4",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "保留签名、单次请求、笔记详情、单页一级评论、HTML 字段解析调用和 pong；每个 AsyncClient HTTP send 前必须经过 request_budget 回调，超出请求/时间预算或取消后不会发起下一次请求；Cookie header 在未显式提供时由 cookie_dict 构造，显式 Cookie 优先；签名头按请求副本生成以隔离并发请求；空 GET 参数也传给签名器。登录状态检查仅把 data.result.success 为布尔值的业务响应作为登录状态；HTTP、网络及服务端错误继续抛出；401/403/429 与 461/471 访问异常均在 status_code 属性保留结构化 HTTP 状态供桥接层分类。移除 tenacity 重试、代理池、config、全局工具、Playwright 参数、搜索/作者/二级评论/全量循环。"
+    },
+    {
+      "upstreamPath": "media_platform/xhs/exception.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/xhs/exception.py",
+      "sha256": "3ddf556b9ac309887678c4a55a629d909bc4c2fde9fd9785725a264dd8e85ad8",
+      "localSha256": "3ddf556b9ac309887678c4a55a629d909bc4c2fde9fd9785725a264dd8e85ad8",
+      "originalBytes": 1258,
+      "gitBlobSha1": "8d9bfd353948f0dc890b7476a71aa5cc75a14a86",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "原样保留；仅被裁剪客户端引用。"
+    },
+    {
+      "upstreamPath": "media_platform/xhs/extractor.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/xhs/extractor.py",
+      "sha256": "2960458bc56844248af91aba164d704ed05c205ba6d8a3bf25345792d54ae0ee",
+      "localSha256": "0b95ccd7ae39c9c28829a48da2574ddf13802e36ebf516d45e703c4e4461b2e0",
+      "originalBytes": 2294,
+      "gitBlobSha1": "044baf5ecee5a73812a74dbbc93ff9f5351c6cb8",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "保留笔记详情 HTML 提取；HTML 标记、JSON 或字段结构不匹配，以及 JSON 解码/字段转换递归过深时返回 None；只规范化 JSON 字符串外的裸 undefined；删除创作者信息解析。"
+    },
+    {
+      "upstreamPath": "media_platform/xhs/playwright_sign.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/xhs/playwright_sign.py",
+      "sha256": "e78cf5eaa98a65f0e46aba3eedf7669bf0aa60ee467e50e016900d9f8a4cadc4",
+      "localSha256": "e78cf5eaa98a65f0e46aba3eedf7669bf0aa60ee467e50e016900d9f8a4cadc4",
+      "originalBytes": 2495,
+      "gitBlobSha1": "0815d3e40183c6966aa795517b9243f81c8ce3b0",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "原样保留 xhshow 调用签名封装。"
+    },
+    {
+      "upstreamPath": "media_platform/xhs/xhs_sign.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/xhs/xhs_sign.py",
+      "sha256": "83bae86c4b9d637f9c0e01c52dfda1ccd04ec5169d039807e667e07800721280",
+      "localSha256": "83bae86c4b9d637f9c0e01c52dfda1ccd04ec5169d039807e667e07800721280",
+      "originalBytes": 6760,
+      "gitBlobSha1": "0ec107727d7aa6f473cb34256c58275f71987880",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "原样保留签名辅助函数；只供小红书签名封装使用。"
+    },
+    {
+      "upstreamPath": "media_platform/bilibili/client.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/bilibili/client.py",
+      "sha256": "c0c0c63f351abc5b94d6e401c0e6341ab2bf95496ce685b41100e5f8bc214975",
+      "localSha256": "f7dda27462804eebacd8d22b4c284c1e0d478e5ccf77de255dba1bfe03b9db66",
+      "originalBytes": 22695,
+      "gitBlobSha1": "4ff7948c6b6f37f66da4016d384a05007582075f",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "保留视频详情、单页一级评论、WBI 键读取和 pong；每个 AsyncClient HTTP send 前必须经过 request_budget 回调，WBI 键请求和后续数据请求分别计费，超出请求/时间预算或取消后不会发起下一次请求；校验 WBI 导航 data、wbi_img mapping 与 32 位十六进制签名图片键 URL，不合规时抛出 DataFetchError；Cookie header 在未显式提供时由 cookie_dict 构造，显式 Cookie 优先；登录状态检查只接受布尔 isLogin；HTTP、网络及服务端错误继续抛出；请求改为单次 httpx 调用；移除 config、代理池、全局工具、Playwright、媒体下载、搜索、创作者、关注与二级回复/全量循环。"
+    },
+    {
+      "upstreamPath": "media_platform/bilibili/exception.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/bilibili/exception.py",
+      "sha256": "c385a6fab0df49c845dfeeb0f4ca6f62d64b351e79730035c35e9cf20d3d9ae5",
+      "localSha256": "c385a6fab0df49c845dfeeb0f4ca6f62d64b351e79730035c35e9cf20d3d9ae5",
+      "originalBytes": 1163,
+      "gitBlobSha1": "b4b706584d2568898736629c45a6ea5cf5370e7a",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "原样保留；仅被裁剪客户端引用。"
+    },
+    {
+      "upstreamPath": "media_platform/bilibili/field.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/bilibili/field.py",
+      "sha256": "a08a56084ff7ddcf861ac05a3bde5f53c1aae20ea399de7e0b93de85bff31268",
+      "localSha256": "a08a56084ff7ddcf861ac05a3bde5f53c1aae20ea399de7e0b93de85bff31268",
+      "originalBytes": 1399,
+      "gitBlobSha1": "4a4ec751b86678fba5e9e7479405bb37c0027681",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "原样保留评论排序枚举；裁剪客户端不导入搜索排序能力。"
+    },
+    {
+      "upstreamPath": "media_platform/bilibili/help.py",
+      "localPath": "vendor/mediacrawler/mediacrawler_lite/platforms/bilibili/help.py",
+      "sha256": "b73c69753d9004a268a913e43598fe36c48d5017c37dcc9ee114569f244e3fd1",
+      "localSha256": "91200e6ec58708d2802fc3d72429264f43986d3d3a8ea070ab25df6163638191",
+      "originalBytes": 5438,
+      "gitBlobSha1": "74fdfa24d43c086a62c4aceb2d3688a1c9f16949",
+      "sourceCommit": "8f583999006d5b692272c608440e193ca282e73b",
+      "imported": true,
+      "changes": "只保留 BilibiliSign WBI 签名类；移除 URL/Pydantic 模型解析与 tools.utils，时间戳改用标准库 time。"
+    }
+  ],
+  "localSupportFiles": [
+    {
+      "path": "vendor/mediacrawler-bridge/windows_job_supervisor.py",
+      "purpose": "本项目新增的 Windows x64 Job Object 生命周期与恢复 helper，不来自上游 MediaCrawler；按 manager nonce 创建命名 Job，绑定失败时阻止 bridge worker 放行；支持独立 cleanup 模式通过 OpenJobObject 终止并等待活动进程归零，确认帧与 bridge stdout 隔离。"
+    },
+    {
+      "path": "vendor/mediacrawler-bridge/bridge.py",
+      "purpose": "本项目新增的来源桥接运行入口；接收并校验单次 JSONL 只读动作，调用裁剪客户端并在每次 HTTP send 前执行请求/时间/取消预算回调。微博/知乎是此桥接中的有限 HTTP/HTML 适配，不属于导入的上游客户端源码。"
+    },
+    {
+      "path": "vendor/mediacrawler/mediacrawler_lite/__init__.py",
+      "purpose": "轻量包初始化，不导入客户端。"
+    },
+    {
+      "path": "vendor/mediacrawler/mediacrawler_lite/platforms/__init__.py",
+      "purpose": "轻量命名空间初始化。"
+    },
+    {
+      "path": "vendor/mediacrawler/mediacrawler_lite/platforms/xhs/__init__.py",
+      "purpose": "不 eager import core/client。"
+    },
+    {
+      "path": "vendor/mediacrawler/mediacrawler_lite/platforms/bilibili/__init__.py",
+      "purpose": "不 eager import core/client。"
+    },
+    {
+      "path": "vendor/mediacrawler/requirements.lock",
+      "purpose": "仅锁定裁剪闭包依赖，不复制上游全量 requirements/uv.lock。"
+    }
+  ],
+  "importGraph": [
+    "mediacrawler_lite.platforms.xhs.client -> httpx, .exception, .extractor, .playwright_sign",
+    "mediacrawler_lite.platforms.xhs.extractor -> humps (distribution: pyhumps)",
+    "mediacrawler_lite.platforms.xhs.playwright_sign -> .xhs_sign, xhshow",
+    "xhshow -> pycryptodome (Crypto namespace)",
+    "mediacrawler_lite.platforms.xhs.exception -> httpx",
+    "mediacrawler_lite.platforms.bilibili.client -> httpx, .exception, .field, .help",
+    "mediacrawler_lite.platforms.bilibili.exception -> httpx",
+    "mediacrawler_lite.platforms.bilibili.help and .field -> Python standard library only",
+    "httpx -> anyio, certifi, httpcore, idna; httpcore -> certifi, h11; anyio -> idna, sniffio, typing-extensions (Python <3.13)"
+  ],
+  "dependencies": [
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "license": "BSD-3-Clause",
+      "reason": "两个裁剪客户端的单次异步 HTTP 请求。",
+      "licenseSource": "https://pypi.org/project/httpx/0.28.1/"
+    },
+    {
+      "name": "pyhumps",
+      "version": "3.8.0",
+      "license": "The Unlicense (PyPI also carries an MIT License classifier)",
+      "reason": "保留的小红书 HTML 字段提取器将驼峰字段转换为 snake_case。",
+      "licenseSource": "https://pypi.org/project/pyhumps/3.8.0/"
+    },
+    {
+      "name": "xhshow",
+      "version": "0.2.0",
+      "license": "MIT",
+      "reason": "上游小红书签名封装明确依赖；固定版本修复其 GET 请求签名实现。",
+      "licenseSource": "https://pypi.org/project/xhshow/0.2.0/"
+    },
+    {
+      "name": "pycryptodome",
+      "version": "3.23.0",
+      "license": "BSD License (PyPI release metadata)",
+      "reason": "xhshow 的运行时加密依赖。",
+      "licenseSource": "https://pypi.org/project/pycryptodome/3.23.0/"
+    },
+    {
+      "name": "anyio",
+      "version": "4.9.0",
+      "license": "MIT",
+      "reason": "httpx 异步运行时传递依赖。",
+      "licenseSource": "https://pypi.org/project/anyio/4.9.0/"
+    },
+    {
+      "name": "certifi",
+      "version": "2025.6.15",
+      "license": "MPL-2.0",
+      "reason": "httpx/httpcore TLS CA 证书传递依赖。",
+      "licenseSource": "https://pypi.org/project/certifi/2025.6.15/"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "license": "MIT",
+      "reason": "httpcore HTTP/1.1 传递依赖。",
+      "licenseSource": "https://pypi.org/project/h11/0.16.0/"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "license": "BSD-3-Clause",
+      "reason": "httpx 传输层传递依赖。",
+      "licenseSource": "https://pypi.org/project/httpcore/1.0.9/"
+    },
+    {
+      "name": "idna",
+      "version": "3.10",
+      "license": "BSD-3-Clause",
+      "reason": "httpx/anyio 域名处理传递依赖。",
+      "licenseSource": "https://pypi.org/project/idna/3.10/"
+    },
+    {
+      "name": "sniffio",
+      "version": "1.3.1",
+      "license": "MIT",
+      "reason": "anyio 异步运行时识别传递依赖。",
+      "licenseSource": "https://pypi.org/project/sniffio/1.3.1/"
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.15.0",
+      "license": "PSF-2.0",
+      "reason": "anyio 在 Python 3.11/3.12 的类型兼容传递依赖。",
+      "licenseSource": "https://pypi.org/project/typing-extensions/4.15.0/"
+    }
+  ],
+  "excluded": [
+    {
+      "path": "media_platform/xhs/__init__.py and media_platform/bilibili/__init__.py",
+      "reason": "会 eager import core.py；由本地空初始化替代。"
+    },
+    {
+      "path": "media_platform/xhs/login.py and media_platform/bilibili/login.py",
+      "reason": "含二维码/短信/浏览器登录编排；本任务只用客户端 pong 做登录状态检查。"
+    },
+    {
+      "path": "proxy/, config.py, base/, tools/",
+      "reason": "客户端经裁剪后不再依赖代理池、全局配置、上游抽象基类和通用爬虫工具。"
+    },
+    {
+      "path": "media_platform/bilibili/media.py",
+      "reason": "视频播放/下载辅助不属于详情与评论能力。"
+    },
+    {
+      "path": "client search/creator/sub-comment/all-comments methods",
+      "reason": "超出本任务范围；避免作者/关注能力、二级回复与未计量全量循环。"
+    },
+    {
+      "path": "requirements.txt and uv.lock",
+      "reason": "仅用于核对实际锁定版本，不复制上游全量依赖清单。"
+    }
+  ],
+  "capabilities": [
+    {
+      "platform": "xhs",
+      "items": [
+        "单次笔记详情 API",
+        "单次笔记 HTML 字段提取",
+        "单页一级评论",
+        "API 登录状态检查（pong）"
+      ],
+      "networkTested": false
+    },
+    {
+      "platform": "bilibili",
+      "items": [
+        "单次视频详情",
+        "单页一级评论（每页最多 20 条）",
+        "WBI 签名",
+        "API 登录状态检查（pong）"
+      ],
+      "networkTested": false
+    },
+    {
+      "platform": "weibo",
+      "items": [
+        "单次帖子详情页面读取",
+        "单页热门一级评论（按任务 maxItems 截断）",
+        "评论来源顺序、可见总数和分页截断标记"
+      ],
+      "implementation": "本项目桥接层有限 HTTP/HTML 适配，不是 MediaCrawler 上游客户端导入",
+      "networkTested": false
+    },
+    {
+      "platform": "zhihu",
+      "items": [
+        "指定问题下单个回答正文",
+        "专栏文章正文",
+        "作者、创建/修改时间和来源链接"
+      ],
+      "implementation": "本项目桥接层有限 HTTP/HTML 适配，不是 MediaCrawler 上游客户端导入",
+      "networkTested": false
+    }
+  ],
+  "limits": [
+    "客户端方法每次最多发起其自身明确需要的单次 API 请求；B 站首次评论请求还会读取一次 WBI 导航键。桥接层对每次 HTTP send 执行请求预算；自动翻页和跨页任务调度未实现。",
+    "没有实现自动翻页、重试、二级回复、搜索、作者/关注、媒体下载、数据库、代理池或 WebUI。",
+    "微博评论只读取单页热门一级评论；知乎只读取选中的单个回答或文章，不覆盖问题下所有回答；微博/知乎尚未进行真实网络验收。",
+    "此裁剪已接入 Electron Task 5 来源管理器和本地 JSONL 桥接；平台真实登录或采集仍未验证。"
+  ]
+}

@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createSocialBrowserManager } = require('../electron/social-browser-manager');
+const { createSocialBrowserManager, validatePlatformUrl } = require('../electron/social-browser-manager');
 
-function createHarness({ loadURL, navigationTimeoutMs } = {}) {
+function createHarness({ loadURL, navigationTimeoutMs, executeJavaScript, scriptTimeoutMs } = {}) {
   const partitions = [];
   const windows = [];
   const cleared = [];
@@ -15,7 +15,10 @@ function createHarness({ loadURL, navigationTimeoutMs } = {}) {
       this.options = options;
       this.destroyed = false;
       this.listeners = {};
-      this.webContents = { executeJavaScript: async source => source };
+      this.webContents = {
+        getURL: () => this.url || '',
+        executeJavaScript: source => executeJavaScript ? executeJavaScript(source, this) : Promise.resolve(source)
+      };
       windows.push(this);
     }
     on(name, listener) { this.listeners[name] = listener; }
@@ -29,7 +32,8 @@ function createHarness({ loadURL, navigationTimeoutMs } = {}) {
     session: { fromPartition: partition => { partitions.push(partition); return fakeSession; } },
     app: { getPath: () => 'must-not-leak' },
     now: () => '2026-10-19T00:00:00.000Z',
-    ...(navigationTimeoutMs ? { navigationTimeoutMs } : {})
+    ...(navigationTimeoutMs ? { navigationTimeoutMs } : {}),
+    ...(scriptTimeoutMs ? { scriptTimeoutMs } : {})
   });
   return { manager, partitions, windows, cleared };
 }
@@ -82,6 +86,33 @@ test('导航超时会标记 timeout 并对调用方返回稳定错误', async ()
   await assert.rejects(pending, error => error.code === 'NAVIGATION_TIMEOUT');
   assert.equal(manager.getSessionStatus('reddit:slow').status, 'closed');
   assert.equal(manager.getSessionStatus('reddit:slow').errorCode, 'NAVIGATION_TIMEOUT');
+});
+
+test('单次导航 timeoutMs 生效，导航超时会销毁浏览器窗口', async () => {
+  const { manager, windows } = createHarness({
+    loadURL: (url, window) => url.includes('/slow') ? new Promise(() => {}) : (window.url = url),
+    navigationTimeoutMs: 1000
+  });
+  const opened = await manager.openPlatformSession({ platform: 'reddit', profileId: 'per-call-timeout', startUrl: 'https://reddit.com/' });
+  await assert.rejects(
+    manager.navigateSession(opened.sessionId, 'https://reddit.com/slow', { timeoutMs: 5 }),
+    error => error.code === 'NAVIGATION_TIMEOUT'
+  );
+  assert.equal(windows[0].destroyed, true);
+  assert.equal(manager.getSessionStatus(opened.sessionId).errorCode, 'NAVIGATION_TIMEOUT');
+});
+
+test('executeJavaScript 超时会销毁管理器创建的窗口并要求重新检查', async () => {
+  const { manager, windows } = createHarness({
+    executeJavaScript: () => new Promise(() => {}), scriptTimeoutMs: 1000
+  });
+  const opened = await manager.openPlatformSession({ platform: 'reddit', profileId: 'script-timeout', startUrl: 'https://reddit.com/' });
+  await assert.rejects(
+    manager.executeReadOnlyScript(opened.sessionId, 'reddit.login', {}, { timeoutMs: 5 }),
+    error => error.code === 'SCRIPT_TIMEOUT' && /重新检查连接/.test(error.message)
+  );
+  assert.equal(windows[0].destroyed, true);
+  assert.equal(manager.getSessionStatus(opened.sessionId).errorCode, 'SCRIPT_TIMEOUT');
 });
 
 test('导航超时销毁旧窗口，迟到的 loadURL 不影响后续同 profile 会话', async () => {
@@ -138,6 +169,54 @@ test('拒绝非白名单 URL、路径型 profile 与非固定脚本名', async (
   assert.equal(manager.registerReadOnlyScript, undefined);
   await assert.rejects(manager.executeReadOnlyScript(opened.sessionId, 'alert(1)', {}), error => error.code === 'SCRIPT_NOT_ALLOWED');
   await assert.rejects(manager.executeReadOnlyScript(opened.sessionId, 'reddit.search.extra', {}), error => error.code === 'SCRIPT_NOT_ALLOWED');
+});
+
+test('四个国内平台仅接受精确 HTTPS 主机和默认端口', () => {
+  const accepted = [
+    ['xiaohongshu', 'https://www.xiaohongshu.com/'],
+    ['bilibili', 'https://www.bilibili.com/'],
+    ['weibo', 'https://s.weibo.com/weibo?q=x'],
+    ['zhihu', 'https://zhuanlan.zhihu.com/p/123']
+  ];
+  for (const [platform, url] of accepted) assert.equal(validatePlatformUrl(platform, url), url);
+  for (const [platform, url] of [
+    ['bilibili', 'https://bilibili.com.attacker.invalid/'],
+    ['weibo', 'https://evil.weibo.com/'],
+    ['zhihu', 'https://zhuanlan.zhihu.com:444/p/123'],
+    ['xiaohongshu', 'https://user@xiaohongshu.com/'],
+    ['bilibili', 'http://www.bilibili.com/']
+  ]) assert.throws(() => validatePlatformUrl(platform, url));
+  assert.equal(validatePlatformUrl('zhihu', 'https://zhuanlan.zhihu.com:443/p/123'), 'https://zhuanlan.zhihu.com/p/123');
+});
+
+test('只读脚本必须属于当前平台且实际页面 URL 仍在主机白名单中', async () => {
+  const { manager, windows } = createHarness();
+  const opened = await manager.openPlatformSession({ platform: 'bilibili', profileId: 'url-check', startUrl: 'https://www.bilibili.com/' });
+  await assert.rejects(manager.executeReadOnlyScript(opened.sessionId, 'youtube.search'), error => error.code === 'SCRIPT_NOT_ALLOWED');
+  windows[0].url = 'https://bilibili.com.attacker.invalid/';
+  await assert.rejects(manager.executeReadOnlyScript(opened.sessionId, 'bilibili.search'), error => error.code === 'UNSUPPORTED_PAGE');
+});
+
+test('同 profile 的导航和读取共用非排队会话锁，其他 profile 可独立操作', async () => {
+  const { manager, cleared } = createHarness();
+  const first = await manager.openPlatformSession({ platform: 'reddit', profileId: 'locked', startUrl: 'https://reddit.com/' });
+  const other = await manager.openPlatformSession({ platform: 'reddit', profileId: 'free', startUrl: 'https://reddit.com/' });
+  let release;
+  const action = manager.runSessionAction(first.sessionId, async scoped => {
+    await scoped.executeReadOnlyScript('reddit.login');
+    await new Promise(resolve => { release = resolve; });
+    await scoped.navigateSession('https://reddit.com/search/?q=inside');
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(() => manager.navigateSession(first.sessionId, 'https://reddit.com/search/?q=outside'), error => error.code === 'SESSION_BUSY');
+  await assert.rejects(() => manager.executeReadOnlyScript(first.sessionId, 'reddit.login'), error => error.code === 'SESSION_BUSY');
+  await assert.rejects(() => manager.closeSession(first.sessionId), error => error.code === 'SESSION_BUSY');
+  await assert.rejects(() => manager.clearPlatformProfile('reddit', 'locked'), error => error.code === 'SESSION_BUSY');
+  assert.deepEqual(cleared, [], '会话忙碌时不得开始清理 storage 或 cache');
+  assert.equal((await manager.navigateSession(other.sessionId, 'https://reddit.com/search/?q=other')).status, 'ready');
+  release();
+  await action;
+  assert.equal(manager.getSessionStatus(first.sessionId).currentUrl, 'https://reddit.com/search/?q=inside');
 });
 
 test('固定只读脚本使用 JSON 参数；任意函数不能加入执行白名单', async () => {

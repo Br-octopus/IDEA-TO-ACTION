@@ -129,8 +129,11 @@ function createSocialApiClient({ platform, config = {}, fetchImpl = globalThis.f
     const headers = platform === 'reddit'
       ? { authorization: `Bearer ${config.accessToken}`, 'user-agent': config.userAgent.trim() }
       : { 'x-goog-api-key': config.apiKey };
+    const requestedTimeout = Number(options.timeoutMs);
+    const configuredTimeout = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+      ? requestedTimeout : timeoutMs;
     const controller = new AbortController();
-    const duration = Math.min(MAX_TIMEOUT_MS, Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+    const duration = Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.floor(Number(configuredTimeout) || DEFAULT_TIMEOUT_MS)));
     const timer = setTimeout(() => controller.abort(), duration);
     try {
       const response = await fetchImpl(endpoint.toString(), { method: 'GET', headers, signal: controller.signal });

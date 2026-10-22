@@ -1,6 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
+const { Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const TASK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
@@ -97,6 +99,61 @@ function createSocialAttachmentStore({ userDataPath, fsModule = fs, pathModule =
     return fsModule.readFileSync(filePath);
   }
 
+  function createReadStream(id) {
+    const { filePath } = fileForId(id);
+    return fsModule.createReadStream(filePath);
+  }
+
+  function has(id) {
+    try {
+      fileForId(id);
+      return true;
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+
+  async function importFile({ id, type, size, sha256, sourcePath } = {}) {
+    if (typeof id !== 'string' || typeof type !== 'string' || !Number.isSafeInteger(size)
+      || size <= 0 || size > MAX_ATTACHMENT_BYTES || !/^[a-f0-9]{64}$/.test(sha256 || '')
+      || typeof sourcePath !== 'string') throw new TypeError('导入附件描述无效');
+    const match = ID_PATTERN.exec(id);
+    if (!match || MIME_TYPES[type] !== match[3]) throw new TypeError('导入附件 ID 与类型不匹配');
+    const sourceStats = fsModule.lstatSync(sourcePath);
+    if (sourceStats.isSymbolicLink() || !sourceStats.isFile() || sourceStats.size !== size) {
+      throw new TypeError('导入附件暂存文件无效');
+    }
+    const directory = pathModule.resolve(root, match[1]);
+    assertSafeDirectory(directory);
+    const destination = pathModule.resolve(directory, id);
+    if (!withinRoot(destination)) throw new TypeError('附件路径无效');
+    if (fsModule.existsSync(destination)) throw Object.assign(new Error('目标附件 ID 已存在'), { code: 'ATTACHMENT_CONFLICT' });
+    const temporary = `${destination}.import-${randomUUID()}`;
+    const hash = createHash('sha256');
+    let bytes = 0;
+    try {
+      await pipeline(
+        fsModule.createReadStream(sourcePath),
+        new Transform({
+          transform(chunk, encoding, callback) {
+            bytes += chunk.length;
+            if (bytes > size || bytes > MAX_ATTACHMENT_BYTES) return callback(new RangeError('附件实际大小超过限制'));
+            hash.update(chunk);
+            callback(null, chunk);
+          }
+        }),
+        fsModule.createWriteStream(temporary, { flags: 'wx', mode: 0o600 })
+      );
+      if (bytes !== size || hash.digest('hex') !== sha256) throw new TypeError('导入附件校验失败');
+      fsModule.renameSync(temporary, destination);
+      return { id, imported: true };
+    } catch (error) {
+      try { fsModule.unlinkSync(temporary); } catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
+      throw error;
+    }
+  }
+
   function remove(id) {
     const { filePath } = fileForId(id);
     if (!withinRoot(pathModule.resolve(filePath))) throw new TypeError('附件路径无效');
@@ -104,7 +161,7 @@ function createSocialAttachmentStore({ userDataPath, fsModule = fs, pathModule =
     return { id, deleted: true };
   }
 
-  return Object.freeze({ save, read, delete: remove });
+  return Object.freeze({ save, read, createReadStream, has, importFile, delete: remove });
 }
 
 module.exports = { MAX_ATTACHMENT_BYTES, MIME_TYPES, createSocialAttachmentStore };

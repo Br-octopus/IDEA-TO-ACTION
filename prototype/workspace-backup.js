@@ -542,6 +542,16 @@
         continue;
       }
       if (importedIds.has(id)) {
+    result.researchTasks = (result.researchTasks || []).map(task => ({
+      ...task,
+      operations: (task.operations || []).map(operation => operation.state === "running" ? {
+        ...operation,
+        state: "unknown",
+        updatedAt: new Date().toISOString(),
+        errorCode: "INTERRUPTED",
+        errorMessage: "导入的备份中该操作仍在运行，结果未知；请选择重试或跳过。"
+      } : operation)
+    }));
         addReport(report, "skipped", collection, `duplicate:${id}`, {
           collection, index, id, reason: "duplicate-id"
         });
@@ -612,6 +622,80 @@
     validateBackup,
     getBackupSummary,
     replaceState,
-    mergeState
+    mergeState,
+    remapResearchAttachmentIds,
+    retainResearchAttachments
   };
+  function remapResearchAttachmentIds(data, attachments, unavailableIds, createId) {
+    if (!isObject(data) || !Array.isArray(data.researchAttachments) || !Array.isArray(attachments)
+      || !Array.isArray(unavailableIds) || typeof createId !== "function") {
+      throw new TypeError("附件 ID 映射参数无效");
+    }
+    const result = clone(data);
+    const originalIds = new Set(result.researchAttachments.map(item => item.id));
+    const usedIds = new Set([...unavailableIds, ...originalIds]);
+    const idMap = new Map();
+
+    for (const item of result.researchAttachments) {
+      if (!unavailableIds.includes(item.id)) continue;
+      const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_[a-f0-9]{32}\.(txt|pdf|png|jpg|webp)$/.exec(item.id);
+      if (!match) throw new TypeError("冲突附件 ID 无法安全重映射");
+      let nextId;
+      do {
+        const randomId = createId();
+        if (typeof randomId !== "string" || !/^[a-f0-9]{32}$/.test(randomId)) {
+          throw new TypeError("附件 ID 生成失败");
+        }
+        nextId = `${match[1]}_${randomId}.${match[2]}`;
+      } while (usedIds.has(nextId));
+      idMap.set(item.id, nextId);
+      usedIds.add(nextId);
+    }
+
+    const rewriteReferences = value => {
+      if (Array.isArray(value)) return value.map(rewriteReferences);
+      if (!isObject(value)) return value;
+      const rewritten = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (key === "attachmentId" && typeof item === "string") rewritten[key] = idMap.get(item) || item;
+        else if (key === "attachmentIds" && Array.isArray(item)) rewritten[key] = item.map(id => idMap.get(id) || id);
+        else rewritten[key] = rewriteReferences(item);
+      }
+      return rewritten;
+    };
+
+    result.researchTasks = rewriteReferences(result.researchTasks || []);
+    result.researchAttachments = result.researchAttachments.map(item => {
+      const id = idMap.get(item.id);
+      if (!id) return item;
+      const taskId = id.slice(0, id.lastIndexOf("_"));
+      return { ...item, id, relativePath: `${taskId}/${id}` };
+    });
+    const mappedAttachments = attachments.map(item => ({ ...item, sourceId: item.id, id: idMap.get(item.id) || item.id }));
+    return { data: result, attachments: mappedAttachments, remapped: [...idMap].map(([from, to]) => ({ from, to })) };
+  }
+
+  function retainResearchAttachments(data, availableIds) {
+    if (!isObject(data) || !Array.isArray(availableIds)) throw new TypeError("附件引用过滤参数无效");
+    const result = clone(data);
+    const available = new Set(availableIds);
+    const indexed = new Set((result.researchAttachments || []).map(item => item.id));
+    result.researchAttachments = (result.researchAttachments || []).filter(item => available.has(item.id));
+    const rewriteReferences = value => {
+      if (Array.isArray(value)) return value.map(rewriteReferences);
+      if (!isObject(value)) return value;
+      const rewritten = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (key === "attachmentId" && typeof item === "string") {
+          if (available.has(item)) rewritten[key] = item;
+        } else if (key === "attachmentIds" && Array.isArray(item)) {
+          rewritten[key] = item.filter(id => available.has(id));
+        } else rewritten[key] = rewriteReferences(item);
+      }
+      return rewritten;
+    };
+    result.researchTasks = rewriteReferences(result.researchTasks || []);
+    return { data: result, removed: [...indexed].filter(id => !available.has(id)).length };
+  }
+
 });
