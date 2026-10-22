@@ -168,4 +168,3 @@ assert.throws(() => createPptBrief({ constraints: { minSlides: 12, maxSlides: 4 
 - 用户可以直接编辑或聊天修改简报和逐页大纲，选择局部或全部重生成，并查看运行依据、版本差异和恢复结果。
 - 模块依赖现有提示词 Agent 和检索/研究能力，不创建自由 Agent 循环，也不直接制作 PPT。
 - 专项和集成测试、语法检查通过。
-

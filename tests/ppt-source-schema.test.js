@@ -158,4 +158,3 @@ test('解析到的命令只是内容，未知字段、指令覆盖和可执行�
   assert.doesNotMatch(serialized, /private-key|private-value|覆盖上游任务/);
   assert.equal(result.pages[0].content, '引用脚本：process.exit(1)');
 });
-

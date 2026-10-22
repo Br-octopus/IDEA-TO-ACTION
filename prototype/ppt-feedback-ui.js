@@ -115,4 +115,3 @@ window.ForwardStepPptFeedbackUI = (function () {
   }
   return { createPptFeedbackUI };
 })();
-
