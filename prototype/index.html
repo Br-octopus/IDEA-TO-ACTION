@@ -38,6 +38,15 @@
     .side-label { color: #5f6f69; font-size: 12px; letter-spacing: .08em; padding: 0 11px; text-transform: uppercase; margin-bottom: 7px; }
     .nav { display: grid; gap: 4px; }
     .nav-group { color: #5f6f69; font-size: 12px; font-weight: 650; letter-spacing: .04em; padding: 10px 11px 2px; }
+    .flow-strip { display: flex; align-items: center; gap: 6px; margin: 14px 0 4px; flex-wrap: wrap; }
+    .flow-node { appearance: none; border: 1px solid var(--line); background: var(--surface); color: #54645e; border-radius: 999px; padding: 5px 13px; font-size: 12px; cursor: pointer; }
+    .flow-node.active { color: var(--green-dark); border-color: var(--green); background: var(--green-soft); font-weight: 650; }
+    .flow-arrow { color: #8a9994; font-size: 12px; }
+    .quick-start-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0 20px; }
+    .quick-card { appearance: none; display: grid; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); text-align: left; cursor: pointer; transition: border-color .16s, background .16s; }
+    .quick-card:hover { border-color: var(--green); background: var(--green-soft); }
+    .quick-card strong { font-size: 13px; color: var(--ink); }
+    .quick-card span { font-size: 12px; color: #54645e; }
     .nav button { appearance: none; background: transparent; border: 0; color: #52615e; border-radius: 9px; display: flex; align-items: center; gap: 11px; text-align: left; padding: 10px 11px; font-size: 13px; transition: background .16s, color .16s; }
     .nav button:hover { background: #f4f7f4; color: var(--ink); }
     .nav button.active { color: var(--green-dark); background: var(--green-soft); font-weight: 650; }
@@ -411,6 +420,23 @@
         <section class="view active" id="view-home">
           <h1>有个想法，不知道从哪开始？</h1>
           <p class="lede">用平常的话说出来。我会帮你准备一份完整的 AI 协作指令：先把目标想清楚，再查步骤、排计划，一步一步推进。</p>
+          <div class="flow-strip" id="flow-strip" aria-label="创作流程">
+            <button type="button" class="flow-node active" data-flow-step="idea">想法</button>
+            <span class="flow-arrow">→</span>
+            <button type="button" class="flow-node" data-flow-step="plan">计划</button>
+            <span class="flow-arrow">→</span>
+            <button type="button" class="flow-node" data-flow-step="research">研究</button>
+            <span class="flow-arrow">→</span>
+            <button type="button" class="flow-node" data-flow-step="prompt">提示词</button>
+            <span class="flow-arrow">→</span>
+            <button type="button" class="flow-node" data-flow-step="review">复盘</button>
+          </div>
+          <div class="quick-start-cards" id="quick-start-cards" aria-label="已有素材，直接开始">
+            <button type="button" class="quick-card" data-view="social-research"><strong>社媒研究</strong><span>只有一个研究方向或问题</span></button>
+            <button type="button" class="quick-card" data-view="prompt-agent"><strong>提示词 Agent</strong><span>知道要做什么任务，想让 AI 帮忙生成提示词</span></button>
+            <button type="button" class="quick-card" data-view="article"><strong>文章改写</strong><span>已经有现成文字想改好</span></button>
+            <button type="button" class="quick-card" data-view="plans"><strong>打开最近计划</strong><span>继续之前的进度</span></button>
+          </div>
           <form class="form-panel" id="idea-form">
             <label class="field-label" for="idea">你想做成什么？<span class="optional">不需要先想清楚，想到什么写什么</span></label>
             <textarea id="idea" required placeholder="比如：我想做一个记账 App，但我不会编程，也不知道从哪里开始。希望先做出一个自己能用的版本。"></textarea>
@@ -796,3 +822,5 @@
   <script src="/prototype/app.js"></script>
 </body>
 </html>
+    .flow-node.done { color: var(--green-dark); border-color: var(--green); background: var(--green-soft); }
+    .flow-node.done::after { content: " ✓"; }
