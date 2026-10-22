@@ -113,6 +113,95 @@
     .notice { border: 1px solid #e4ebe3; border-radius: 10px; background: #f2f6f1; padding: 12px 14px; color: #53645d; display: flex; gap: 10px; align-items: flex-start; font-size: 11px; margin: 18px 0 25px; }
     .notice svg { width: 16px; height: 16px; flex: none; stroke: #67856e; fill: none; stroke-width: 1.8; }
     .social-layout { display: grid; gap: 18px; }
+    #view-prompt-agent [hidden] { display: none !important; }
+    #writing-workbench-root, #writing-workbench-root .field { min-width: 0; }
+    #writing-workbench-root { overflow-wrap: anywhere; }
+    #writing-workbench-root input, #writing-workbench-root select, #writing-workbench-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+    #writing-workbench-root textarea { width: 100%; min-height: 100px; }
+    #writing-workbench-root .social-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .academic-literature-manager { max-width: 1000px; margin: 18px 0; }
+    .academic-literature-manager label { display: grid; gap: 6px; min-width: 0; color: #53645d; font-size: 12px; }
+    .academic-literature-manager label.check-row { display: flex; align-items: center; gap: 8px; }
+    .academic-literature-manager label.check-row input[type="checkbox"] { width: auto; padding: 0; margin: 0; }
+    .academic-literature-manager input, .academic-literature-manager select, .academic-literature-manager textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px 10px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; color: #253832; }
+    .academic-literature-manager textarea { min-height: 80px; }
+    .academic-literature-card { min-width: 0; overflow-wrap: anywhere; }
+    .academic-literature-card .extra-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #academic-review-root, #academic-publishing-root { max-width: 1000px; min-width: 0; margin: 18px 0; overflow-wrap: anywhere; }
+    #academic-review-root input, #academic-review-root select, #academic-review-root textarea, #academic-publishing-root input, #academic-publishing-root select, #academic-publishing-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+    #academic-review-root label, #academic-publishing-root label { display: grid; gap: 6px; min-width: 0; color: #53645d; font-size: 12px; }
+    #academic-review-root label.check-row, #academic-publishing-root label.check-row { display: flex; align-items: flex-start; gap: 8px; }
+    #academic-review-root label.check-row input[type="checkbox"], #academic-publishing-root label.check-row input[type="checkbox"] { width: auto; flex: 0 0 auto; margin: 3px 0 0; }
+    #academic-review-root input:not([type="checkbox"]), #academic-review-root select, #academic-review-root textarea, #academic-publishing-root input:not([type="checkbox"]), #academic-publishing-root select, #academic-publishing-root textarea { width: 100%; padding: 9px 10px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; color: #253832; }
+    #academic-review-root textarea, #academic-publishing-root textarea { min-height: 76px; resize: vertical; }
+    .academic-publishing-card, .academic-publishing-item, .academic-review-create, .academic-review-sources, .academic-review-workspace, .academic-review-coverage, .academic-review-record, .academic-review-batches { min-width: 0; margin-top: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow-wrap: anywhere; }
+    .academic-publishing-manager .extra-grid, .academic-review-manager .extra-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .academic-publishing-manager .extra-grid > .wide, .academic-review-manager .extra-grid > .wide { grid-column: 1 / -1; }
+    .academic-review-project-list, .academic-review-literature-list, .academic-review-records, .academic-publishing-projects, .academic-publishing-list { display: grid; gap: 8px; margin-top: 12px; }
+    .academic-review-project-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .academic-review-project-list button, .academic-publishing-projects button { display: grid; min-width: 0; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; overflow-wrap: anywhere; }
+    .academic-review-project-list button.active, .academic-publishing-projects button.active { border-color: var(--green); background: var(--green-soft); }
+    .academic-publishing-projects span, .academic-publishing-card .library-meta, .academic-review-project-list span, .academic-review-sources small { color: var(--muted); font-size: 11px; }
+    .academic-review-coverage dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 8px 0; }
+    .academic-review-coverage dl > div { min-width: 0; padding: 8px; border-radius: 7px; background: #f5f8f5; }
+    .academic-review-coverage dt { color: var(--muted); font-size: 11px; }
+    .academic-review-coverage dd { margin: 2px 0 0; font-weight: 650; }
+    .academic-review-sources ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .academic-review-field-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto auto auto auto; align-items: end; gap: 7px; margin: 8px 0; }
+    .academic-review-extraction { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .academic-review-extraction > strong, .academic-review-extraction > label:nth-of-type(2) { grid-column: 1 / -1; }
+    .academic-review-candidates article, .academic-review-round { min-width: 0; margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+    .academic-review-record { overflow: hidden; }
+    .academic-review-record blockquote { margin: 8px 0; padding: 9px 12px; border-left: 3px solid #d5e2d8; background: #f8faf8; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .academic-review-status, .academic-publishing-status, .academic-publishing-confidentiality { padding: 8px 10px; border-radius: 7px; background: var(--green-soft); color: var(--green-dark); }
+    .academic-publishing-source { min-width: 0; margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; }
+    .academic-publishing-result { padding: 10px; border-left: 3px solid var(--orange); background: var(--orange-soft); overflow-wrap: anywhere; }
+    .writing-pack-manager { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .writing-pack-manager > h2 { margin-bottom: 12px; }
+    .pack-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+    .pack-editor h3, .pack-editor label, .pack-editor textarea { grid-column: 1 / -1; }
+    .pack-editor input, .pack-editor textarea { width: 100%; min-width: 0; padding: 10px 11px; font-size: 12px; }
+    .pack-editor textarea { min-height: 92px; }
+    .pack-import { min-width: 0; display: grid; gap: 9px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .pack-import textarea { width: 100%; min-height: 150px; min-width: 0; padding: 10px 11px; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .pack-import-preview { display: grid; gap: 10px; min-width: 0; }
+    .pack-import-item { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); overflow-wrap: anywhere; }
+    .pack-import-item h4 { margin: 0 0 8px; }
+    .pack-import-item p, .pack-import-item li { font-size: 12px; }
+    .pack-import-item small { color: var(--muted); font-weight: 400; }
+    .pack-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 14px; align-items: start; padding: 13px 0; border-top: 1px solid var(--line); }
+    .pack-row > strong { min-width: 0; overflow-wrap: anywhere; }
+    .pack-row > span { grid-column: 1; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .pack-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .pack-actions button, .pack-editor button { padding: 6px 9px; border: 1px solid #d8e3dc; border-radius: 7px; color: var(--green-dark); background: #fff; font-size: 11px; }
+    .pack-actions button:hover, .pack-editor button:hover { background: #f4f8f4; border-color: #a8c3b0; }
+    .pack-detail { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid #e8ede8; border-radius: 8px; background: #f8faf8; font-size: 11px; overflow-wrap: anywhere; }
+    .pack-detail p { margin-bottom: 7px; color: var(--muted); }
+    .pack-detail ul { margin-bottom: 0; padding-left: 19px; }
+    .writing-pack-selection { min-width: 0; margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+    .writing-pack-selection legend { padding: 0 5px; color: #30423e; font-size: 12px; font-weight: 650; }
+    .writing-material-coverage { min-width: 0; }
+    .writing-material-coverage ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .writing-material-coverage li { margin: 8px 0; overflow-wrap: anywhere; }
+    .writing-coverage-batch { min-width: 0; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+    .writing-coverage-batch textarea, .writing-material-coverage textarea, .writing-material-coverage input { box-sizing: border-box; max-width: 100%; }
+    @media (max-width: 760px) {
+      #writing-workbench-root .social-form-grid { grid-template-columns: 1fr; }
+      #writing-workbench-root .social-panel { padding: 14px; }
+      #writing-workbench-root button, #academic-review-root button, #academic-publishing-root button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+      .writing-pack-manager { padding: 14px; }
+      .pack-editor, .academic-publishing-manager .extra-grid, .academic-review-manager .extra-grid, .academic-review-project-list, .academic-review-extraction { grid-template-columns: minmax(0, 1fr); }
+      .pack-row { grid-template-columns: minmax(0, 1fr); }
+      .pack-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; }
+      .academic-review-coverage dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .academic-review-field-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+      .academic-review-field-row button { min-height: 36px; }
+      #academic-review-root .academic-review-workspace, #academic-publishing-root .academic-publishing-card { padding: 11px; }
+    }
+    .writing-dimensions { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); margin: 14px 0; padding: 12px; }
+    .writing-material, .writing-memory { border-top: 1px solid var(--line); padding: 14px 0; }
+    #writing-error { color: #a32929; white-space: pre-wrap; }
+    @media (max-width: 760px) { #writing-workbench-root .social-form-grid { grid-template-columns: 1fr; } #writing-workbench-root .social-panel { padding: 14px; } #writing-workbench-root button { max-width: 100%; white-space: normal; } }
     .social-panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
     .social-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
     .social-platform { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
@@ -130,6 +219,7 @@
     .social-progress { height: 5px; background: #e8eee9; border-radius: 4px; overflow: hidden; }
     .social-progress span { display: block; height: 100%; width: 0; background: var(--green); }
     .social-inline-check { display: inline-flex; align-items: center; gap: 6px; }
+    .writing-material-coverage ul { padding-left: 20px; overflow-wrap: anywhere; }
     @media (max-width: 760px) { .social-grid { grid-template-columns: 1fr; } .social-form-grid { grid-template-columns: 1fr; } }
     .notice strong { color: #304c3a; }
     .plan-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -235,6 +325,7 @@
     .knowledge-toolbar input, .knowledge-toolbar select { height: 41px; padding: 0 11px; font-size: 12px; }
     .knowledge-toolbar button { white-space: nowrap; }
     .knowledge-entry-form { display: grid; gap: 13px; margin-top: 16px; padding-top: 17px; border-top: 1px solid #edf0ed; }
+    .knowledge-entry-form[hidden] { display: none; }
     .knowledge-entry-form textarea { min-height: 82px; }
     .knowledge-entry-note { color: #7c8982; font-size: 11px; margin: -3px 0 0; }
     .knowledge-card { min-height: 220px; }
@@ -444,79 +535,6 @@
           <div class="recent-list" id="all-plans"></div>
         </section>
 
-        <section class="view" id="view-article">
-          <div class="eyebrow">文章诊断</div><h1>觉得文章有 AI 味，但不知道怎么说？</h1>
-          <p class="lede">贴上文章或片段，工具会帮你找出具体问题、提取参考文章中值得借鉴的写法，并生成一条可交给其他 AI 的修改指令。本工具不直接改文章。</p>
-          <div class="notice" style="max-width:880px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span><strong>这不是“AI 文本检测器”。</strong>它把常见写作问题当作待核对的编辑线索，不判定文章是不是 AI 写的；是否采用外部 AI 的修改由你决定。本工具只生成诊断和提示词，不代写或改稿。</span></div>
-          <form class="form-panel prompt-form" id="article-form">
-            <div class="field"><label class="field-label" for="article-original">把 AI 生成的文章贴在这里</label><textarea id="article-original" required placeholder="粘贴文章或其中一段。可以只写“读起来有点假”，不必先解释清楚问题。"></textarea></div>
-            <div class="extra-grid">
-              <div><label class="field-label" for="article-goal">读者看完后，你希望他们知道或做什么？<span class="optional">可选</span></label><input id="article-goal" type="text" placeholder="例如：理解这个做法的利弊，或尝试一个具体步骤"></div>
-              <div><label class="field-label" for="article-platform">准备发到哪里？<span class="optional">可选</span></label><select id="article-platform"><option value="">还没确定</option><option>小红书</option><option>公众号</option><option>博客 / 网站</option><option>工作汇报</option><option>学术 / 专业文章</option><option>其他</option></select></div>
-              <div><label class="field-label" for="article-audience">写给谁看？<span class="optional">可选</span></label><input id="article-audience" type="text" placeholder="例如：第一次接触这个主题的普通读者"></div>
-              <div><label class="field-label" for="article-tone">你希望读起来是什么感觉？<span class="optional">可选</span></label><input id="article-tone" type="text" placeholder="例如：像我平时说话，直接、真诚，不要过分活泼"></div>
-            </div>
-            <details class="details">
-              <summary><span>参考文章和需要保留的内容</span><span class="summary-right">可选，但能更贴近你的意图<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span></summary>
-              <div class="field"><label class="field-label" for="article-references">有想参考的文章吗？贴链接或一小段正文<span class="optional">没有也可以</span></label><textarea id="article-references" class="reply-area" placeholder="可以贴你喜欢的文章链接，或 1–3 段代表性摘录。AI 会提取用词、句式、节奏、逻辑、上下文和修辞，不复制原句、观点或事实。"></textarea></div>
-              <label class="search-toggle"><input id="article-find-examples" type="checkbox"><span class="toggle-copy">我没有参考文章，请 AI 搜索相似且适合的公开案例<small>建议只找 2–3 篇来源清楚、内容可访问的样例；不把高热度直接当成高质量。</small></span></label>
-              <div class="field-label" style="margin-top:17px">从参考中提取哪些写法？</div>
-              <div class="check-grid">
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="用词选择和语气" checked><span>用词选择和语气</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="句式变化、长短节奏和段落衔接" checked><span>句式变化、长短节奏和段落衔接</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="逻辑结构和论证推进" checked><span>逻辑结构和论证推进</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="上下文铺垫和信息密度" checked><span>上下文铺垫和信息密度</span></label>
-                <label class="check-option"><input class="article-style-feature" type="checkbox" value="修辞、例子和表达手法" checked><span>修辞、例子和表达手法</span></label>
-              </div>
-              <div class="field-label">优先保留原文中哪些有用内容？</div>
-              <div class="check-grid">
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="观点、立场和结论" checked><span>观点、立场和结论</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="论证逻辑和因果关系" checked><span>论证逻辑和因果关系</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="任务、步骤和行动要求" checked><span>任务、步骤和行动要求</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="做事方法、经验和技巧" checked><span>做事方法、经验和技巧</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="事实、数据、专名和引用来源" checked><span>事实、数据、专名和引用来源</span></label>
-                <label class="check-option"><input class="article-preserve-item" type="checkbox" value="作者已有的个人经历和判断" checked><span>作者已有的个人经历和判断</span></label>
-              </div>
-              <p class="library-meta">不确定怎么描述个人声音时可以留空：AI 会先给出适合的方向和推荐；以上选项是保留重点，不代表可以补造原文没有的内容。</p>
-            </details>
-            <label class="search-toggle"><input id="article-web-search" type="checkbox"><span class="toggle-copy">需要时联网核实事实<small>只核对文章中可查证、可能过时的事实；要求列来源和日期，不允许悄悄改掉原意。</small></span></label>
-            <div class="form-footer"><span class="privacy-note">草稿只进入你复制给 AI 的指令；本页不会上传</span><button class="button-primary" type="submit">生成诊断与修改指令<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
-          </form>
-          <article class="content-block result-box" id="article-result" style="max-width:880px">
-            <div class="step-tag"><span class="step-number">1</span>把诊断与修改指令交给外部 AI</div>
-            <h2>可直接复制给 AI 的指令</h2><p class="block-desc">让外部 AI 先说明诊断依据，再按指令尝试修改。之后把原稿和外部结果带回来，对照目标与保留项复盘。</p>
-            <div class="prompt-box" id="article-instruction"></div>
-            <div class="prompt-bottom"><small>只发送这篇文章和少量相关规则，不加载整个提示词仓库</small><button class="button-primary" id="copy-article-instruction">复制指令</button></div>
-            <div class="prompt-bottom"><small>保存会把包含文章正文的整条提示词存入本机提示词库；不会上传</small><button class="button-secondary" id="save-article-instruction">保存这条指令</button></div>
-            <div class="step-tag" style="margin-top:25px"><span class="step-number">2</span>把外部 AI 的结果带回来</div>
-            <div class="field"><label class="field-label" for="article-revised">粘贴外部 AI 修改后的结果</label><textarea id="article-revised" class="reply-area" placeholder="粘贴外部 AI 返回的文章或片段。两栏对照只留在本机，方便检查事实、逻辑和保留项有没有被改偏。"></textarea></div>
-            <div class="compare-grid" id="article-comparison" hidden><div class="compare-card"><h3>原稿</h3><pre id="article-original-preview"></pre></div><div class="compare-card"><h3>外部 AI 结果</h3><pre id="article-revised-preview"></pre></div></div>
-            <div class="field" style="margin-top:14px"><label class="field-label" for="article-review-feedback">你觉得改得怎么样？哪里成功或偏了？<span class="optional">选填</span></label><textarea id="article-review-feedback" class="reply-area" placeholder="例如：读起来更自然，但原文中的第二个步骤被删掉了"></textarea></div>
-             <div class="prompt-bottom"><small>复盘指令包含原稿、外部结果和你的评价；复制并发送给外部 AI 后，这些内容会离开本机</small><button class="button-secondary" id="build-article-review" type="button">生成复盘指令</button></div>
-             <div class="result-box" id="article-review-result">
-               <div class="field-label">交给 AI 的复盘指令</div>
-               <div class="prompt-box" id="article-review-prompt"></div>
-               <div class="notice" style="margin-top:14px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>复制前请确认：原稿和外部结果可能会离开本机发送给外部 AI；不要发送凭证、隐私或未公开资料。</span></div>
-               <div class="prompt-bottom"><small>复盘结论仍需你确认，不自动计入已验证案例</small><button class="button-secondary" id="copy-article-review" type="button">复制复盘指令</button></div>
-               <div class="extra-grid" style="margin-top:16px">
-                 <div class="wide"><div class="field-label">目标</div><div class="prompt-box" id="article-review-goal"></div></div>
-                 <div><div class="field-label">保留项</div><div class="prompt-box" id="article-review-preserve"></div></div>
-                 <div class="wide"><label class="field-label" for="article-review-evidence">证据（一行一项）</label><textarea id="article-review-evidence" class="reply-area" placeholder="逐项写出前后变化、具体句子、事实或行为证据"></textarea></div>
-                 <div><label class="field-label" for="article-review-label">建议标签</label><input id="article-review-label" type="text" placeholder="例如：待验证：缺少事实核对"></div>
-                 <div><label class="field-label" for="article-review-status">判断</label><select id="article-review-status"><option>待验证</option><option>成功</option><option>失败</option></select></div>
-                 <div class="wide"><label class="field-label" for="article-review-lessons">经验教训</label><textarea id="article-review-lessons" class="reply-area" placeholder="保留这次具体经验，不要泛化"></textarea></div>
-                 <div class="wide"><label class="field-label" for="article-review-next-prompt">下一条指令</label><textarea id="article-review-next-prompt" class="reply-area" placeholder="针对证据生成的下一条修正提示词"></textarea></div>
-               </div>
-               <div class="prompt-bottom"><small>只有点击“确认记录”才会写入本地 cases；“修改判断”不会自动确认</small><div class="button-row"><button class="button-secondary" id="edit-article-review" type="button">修改判断</button><button class="button-secondary" id="skip-article-review" type="button">暂不记录</button><button class="button-primary" id="confirm-article-review" type="button">确认记录</button></div></div>
-             </div>
-            <div class="prompt-bottom"><small>对照时重点核实：事实和数字是否保留、是否擅自补了经历、观点是否变了、是否改得太多。</small><button class="button-secondary" id="copy-article-revision">复制外部结果</button></div>
-          </article>
-          <details class="details" style="max-width:880px;margin-top:19px">
-            <summary><span>看看它会参考哪些写作规则</span><span class="summary-right">本地精简版<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span></summary>
-            <div class="notice" style="margin-top:0"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>先找“这句话具体哪里影响读者”，而不是机械删词。例如，“在快速发展的时代，AI 正发挥越来越重要的作用”可能缺少具体对象和信息；只有拿到文章主题、证据或作者经历后，才能补具体内容。保留原文的事实、数字、否定、条件和不确定性；清楚的句子不为追求“像人”而硬改。</span></div>
-          </details>
-        </section>
-
         <section class="view" id="view-social-research">
           <h1>社媒研究</h1><p class="lede">只读研究工作台；确认研究计划后才会开始搜索。</p>
           <p class="lede">连接平台、确认研究计划，再查看可追溯结果。研究只读，不会自动发布内容。</p>
@@ -540,8 +558,13 @@
         <section class="view" id="view-prompt-agent">
           <div class="eyebrow">提示词 Agent</div><h1>把想法变成下一步</h1>
           <p class="lede">梳理目标、检查遗漏、规划步骤，并生成可交给其他 AI 的提示词。</p>
+          <div class="social-tools" role="group" aria-label="Agent 场景"><button type="button" class="button-secondary" data-agent-scene="task">任务梳理</button><button type="button" class="button-secondary" data-agent-scene="writing">写作工作台</button><button type="button" class="button-secondary" data-agent-scene="ppt">PPT 规划</button></div>
           <div id="prompt-agent-root" class="social-layout"></div>
-          <section class="social-layout" id="ppt-scene-root" aria-label="PPT 规划工作台"></section>
+          <section id="writing-workbench-root" class="social-layout" aria-label="统一写作工作台" hidden></section>
+          <div id="academic-literature-root"></div>
+          <div id="academic-review-root"></div>
+          <div id="academic-publishing-root"></div>
+          <section class="social-layout" id="ppt-scene-root" aria-label="PPT 规划工作台" hidden></section>
         </section>
 
         <section class="view" id="view-prompt-optimize">
@@ -592,9 +615,10 @@
             <p class="library-meta" id="knowledge-search-status">正在加载本地资料索引……</p>
             <div id="knowledge-results" class="reference-grid"></div>
             <button class="button-secondary" id="open-knowledge-entry" type="button">添加资料摘要</button>
-            <form id="knowledge-entry-form" class="knowledge-entry-form" hidden>
+            <form id="knowledge-entry-form" class="knowledge-entry-form" aria-label="添加资料摘要" hidden>
+              <div class="block-top"><h3>添加资料摘要</h3><button class="button-quiet" id="knowledge-entry-cancel" type="button">取消</button></div>
               <div class="extra-grid">
-                <div class="field"><label class="field-label" for="knowledge-entry-type">资料类型</label><select id="knowledge-entry-type" required></select></div>
+                <div class="field"><label class="field-label" for="knowledge-entry-type">资料类型</label><select id="knowledge-entry-type" required><option value="manual-note">手动笔记</option><option value="github-summary">GitHub 摘要</option><option value="article-summary">文章摘要</option><option value="user-prompt">我的提示词</option><option value="prompt-example">提示词示例</option><option value="method-card">方法卡</option><option value="success-case">成功案例</option><option value="failure-case">失败案例</option><option value="review-insight">复盘洞察</option></select></div>
                 <div class="field"><label class="field-label" for="knowledge-entry-title">标题</label><input id="knowledge-entry-title" type="text" required placeholder="例如：文章复核清单"></div>
                 <div class="field wide"><label class="field-label" for="knowledge-entry-url">来源链接<span class="optional">可选</span></label><input id="knowledge-entry-url" type="url" placeholder="https://example.com/article"></div>
                 <div class="field"><label class="field-label" for="knowledge-entry-domains">领域<span class="optional">可选</span></label><input id="knowledge-entry-domains" type="text" placeholder="用逗号分隔"></div>
@@ -606,7 +630,7 @@
                 <div class="field"><label class="field-label" for="knowledge-entry-license">许可或来源说明<span class="optional">可选</span></label><textarea id="knowledge-entry-license" placeholder="例如：需核对原始许可"></textarea></div>
               </div>
               <p class="knowledge-entry-note">只保存摘要、可借鉴方法和必要摘录；不要粘贴完整仓库、私密资料、API 密钥或不具备保存权利的全文。新资料默认显示为“未验证”。</p>
-              <div class="button-row"><button class="button-secondary" id="cancel-knowledge-entry" type="button">取消</button><button class="button-primary" type="submit">保存到本地资料库</button></div>
+              <div class="button-row"><button class="button-secondary" id="cancel-knowledge-entry" type="button">取消</button><button class="button-primary" id="knowledge-entry-save" type="submit">保存到本地资料库</button></div>
             </form>
           </section>
           <section class="content-block knowledge-detail" id="knowledge-detail" hidden>
@@ -644,24 +668,9 @@
               <div class="field"><label class="field-label" for="case-domain">案例领域</label><select id="case-domain"><option value="">全部领域</option><option value="__current__">当前领域</option><option>通用计划</option><option>写作</option><option>软件开发</option><option>工作任务</option><option>学习目标</option></select></div>
               <div class="field"><label class="field-label" for="case-project">案例项目</label><select id="case-project"><option value="">全部项目</option><option value="__current__">当前项目</option></select></div>
             </div>
+            <label class="field" for="knowledge-export-scope"><span class="field-label">备份范围</span><select id="knowledge-export-scope"><option value="workspace" selected>完整工作区（含已保存文章和写作记忆）</option><option value="knowledge-base">仅资料库（不含文章和写作记忆）</option></select></label>
             <div class="button-row" style="margin-top:10px"><button class="button-primary" id="knowledge-search" type="button">搜索资料</button><button class="button-secondary" id="knowledge-add-open" type="button">添加资料摘要</button><button class="button-secondary" id="knowledge-export-open" type="button">导出备份</button><button class="button-secondary" id="knowledge-import-open" type="button">导入备份</button><input id="knowledge-import-file" type="file" accept="application/json,.json" hidden></div>
             <p class="library-meta" id="knowledge-search-status">输入搜索词或直接浏览资料；只有勾选的摘要会进入模型上下文。</p><div class="button-row" id="knowledge-bulk-actions" hidden><span class="library-meta" id="knowledge-selection-status">已选 0 条</span><button class="button-secondary" id="knowledge-bulk-hide" type="button">从资料库移除</button><button class="button-secondary" id="knowledge-bulk-delete" type="button">删除手动资料</button></div><p class="library-meta" id="knowledge-stats">资料统计加载中…</p><p class="library-meta" id="knowledge-backup-status">最近备份：尚未备份</p>
-<form id="knowledge-entry-form" hidden aria-label="添加资料摘要" style="margin-top:12px;padding:14px;border:1px solid #e5ebe5;border-radius:12px;background:#fbfcfb">
-              <div class="notice" style="margin-bottom:12px"><span><strong>只保存摘要、可借鉴方法和必要摘录。</strong>不要粘贴完整仓库、私密资料、API 密钥或不具备保存权利的全文。</span></div>
-              <div class="extra-grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
-                <div class="field"><label class="field-label" for="knowledge-entry-type">类型</label><select id="knowledge-entry-type"><option value="manual-note">手动笔记</option><option value="github-summary">GitHub 摘要</option><option value="article-summary">文章摘要</option><option value="user-prompt">我的提示词</option><option value="success-case">成功案例</option><option value="failure-case">失败案例</option><option value="review-insight">复盘洞察</option></select></div>
-<div class="field"><label class="field-label" for="knowledge-entry-title">标题（必填）</label><input id="knowledge-entry-title" type="text" required placeholder="例如：某开源项目README笔记"></div>
-                <div class="field"><label class="field-label" for="knowledge-entry-url">来源链接</label><input id="knowledge-entry-url" type="text" placeholder="https://…"></div>
-                <div class="field"><label class="field-label" for="knowledge-entry-license">许可说明</label><input id="knowledge-entry-license" type="text" placeholder="例如：MIT；或“仅个人学习使用”"></div>
-                <div class="field"><label class="field-label" for="knowledge-entry-domains">领域</label><input id="knowledge-entry-domains" type="text" placeholder="用逗号分隔，例如：写作，学习目标"></div>
-                <div class="field"><label class="field-label" for="knowledge-entry-stages">阶段</label><input id="knowledge-entry-stages" type="text" placeholder="用逗号分隔，例如：澄清目标，研究查证"></div>
-              </div>
-              <div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-keywords">关键词</label><input id="knowledge-entry-keywords" type="text" placeholder="用逗号分隔，例如：访谈，摘要，复盘"></div>
-<div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-summary">短摘要（必填）</label><textarea id="knowledge-entry-summary" rows="2" required placeholder="两三句话说清这条资料讲什么、什么时候用。"></textarea></div>
-              <div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-patterns">可借鉴方法</label><textarea id="knowledge-entry-patterns" rows="2" placeholder="只写可复用的做法，不粘贴整段原文。"></textarea></div>
-              <div class="field" style="margin-top:8px"><label class="field-label" for="knowledge-entry-limitations">局限</label><textarea id="knowledge-entry-limitations" rows="2" placeholder="适用范围、未验证之处或授权限制。"></textarea></div>
-              <div class="button-row" style="margin-top:10px"><button class="button-primary" id="knowledge-entry-save" type="submit">保存摘要</button><button class="button-secondary" id="knowledge-entry-cancel" type="button">取消</button></div>
-            </form>
             <div class="reference-grid" id="knowledge-results" style="margin-top:14px"></div>
           </div>
           <div class="section-heading" style="margin-top:0"><div><h2>提示词样例与写法教程</h2><p>可检索、学习和比较；用之前仍要结合自己的目标验证</p></div></div>
@@ -740,6 +749,7 @@
     </section>
   </div>
   <script src="/prototype/knowledge-schema.js"></script>
+  <script src="/prototype/academic-literature.js"></script>
   <script src="/prototype/method-cards.js"></script>
   <script src="/prototype/research-catalog.js"></script>
   <script src="/prototype/search-dictionary.js"></script>
@@ -750,6 +760,14 @@
   <script src="/prototype/social-research-prompts.js"></script>
   <script src="/prototype/prompt-agent-schema.js"></script>
   <script src="/prototype/ppt-scene-schema.js"></script>
+  <script src="/prototype/writing-material-coverage.js"></script>
+  <script src="/prototype/writing-workbench-schema.js"></script>
+  <script src="/prototype/writing-pack-schema.js"></script>
+  <script src="/prototype/academic-review.js"></script>
+  <script src="/prototype/academic-review-coordinator.js"></script>
+  <script src="/prototype/academic-publishing.js"></script>
+  <script src="/prototype/writing-pack-catalog.js"></script>
+  <script src="/prototype/writing-workbench-prompts.js"></script>
   <script src="/prototype/storage.js"></script>
   <script src="/prototype/social-research-ui.js"></script>
   <script src="/prototype/workspace-backup.js"></script>
@@ -757,7 +775,6 @@
   <script src="/prototype/send-safety.js"></script>
   <script src="/prototype/prompt-agent-workflow.js"></script>
   <script src="/prototype/prompt-agent-prompts.js"></script>
-  <script src="/prototype/local-source-index.js"></script>
   <script src="/prototype/prompt-agent-research-bridge.js"></script>
   <script src="/prototype/prompt-agent-coordinator.js"></script>
   <script src="/prototype/prompt-agent-ui.js"></script>
@@ -765,6 +782,15 @@
   <script src="/prototype/ppt-scene-prompts.js"></script>
   <script src="/prototype/ppt-scene-coordinator.js"></script>
   <script src="/prototype/ppt-scene-ui.js"></script>
+  <script src="/prototype/writing-pack-coordinator.js"></script>
+  <script src="/prototype/writing-pack-catalog.js"></script>
+  <script src="/prototype/writing-pack-ui.js"></script>
+  <script src="/prototype/writing-workbench-coordinator.js"></script>
+  <script src="/prototype/writing-workbench-ui.js"></script>
+  <script src="/prototype/academic-literature-ui.js"></script>
+  <script src="/prototype/academic-review-ui.js"></script>
+  <script src="/prototype/academic-publishing-coordinator.js"></script>
+  <script src="/prototype/academic-publishing-ui.js"></script>
   <script src="/prototype/app.js"></script>
 </body>
 </html>

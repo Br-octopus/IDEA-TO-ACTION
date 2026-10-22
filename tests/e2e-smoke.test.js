@@ -306,11 +306,11 @@ test('浏览器导入入口先确认安全备份，再打开文件选择并导�
   assert.ok(importBlock.includes('browserImportGate.confirmed = true;'), '确认成功后必须显式放行');
   assert.ok(importBlock.includes('document.getElementById("knowledge-import-file").click();'), '确认后才打开文件选择器');
   assert.ok(importBlock.indexOf('if (!desktopApi)') < importBlock.indexOf('await createSafetyBackup();'), '桌面模式不应走浏览器安全门禁');
-  assert.ok(app.includes('consumeBrowserImportGate(importGate);'), 'change 和导入函数必须保留令牌防御检查');
+  assert.ok(app.includes('consumeBrowserImportGate(importGate);'), '文件 change 入口必须保留令牌防御检查');
   assert.match(app, /下载已触发，请确认你已看到并保存安全备份文件/);
   assert.match(app, /未确认已保存安全备份/);
   assert.ok(app.includes('browserImportGate = null;'), '令牌必须在 change 前后清理，防止重复导入');
-  assert.ok(app.indexOf('consumeBrowserImportGate(importGate);') < app.indexOf('await importBackupContent(await file.text(), importGate);'), '未通过令牌检查不能调用导入');
+  assert.ok(app.indexOf('consumeBrowserImportGate(importGate);') < app.indexOf('await importBackupContent(await file.text());'), '未通过令牌检查不能读取文件或调用导入');
 });
 
 test('社媒研究入口加载 UI 并贯通计划、平台准备、结果和报告区域', () => {
@@ -396,4 +396,30 @@ test('PPT 规划工作台从提示词 Agent 入口加载并保持文件输出边
   assert.match(app, /createSocialResearchPlan/);
   assert.match(sceneUi, /normalizePptScene/);
   assert.doesNotMatch(app, /writeFile|saveAs\(|createPresentation|pptxgen/i, '规划工作台不能写入最终演示文稿或成品文件');
+});
+
+
+test('统一写作入口只加载一个root，旧文章DOM移除且脚本依赖有序', () => {
+  assert.equal((html.match(/id="writing-workbench-root"/g) || []).length, 1);
+  assert.doesNotMatch(html, /id="view-article"|id="article-form"/);
+  assert.doesNotMatch(app, /currentArticleReviewCase|resetArticleReviewResult|article-original|article-revised/);
+  const scripts = ['writing-workbench-schema', 'writing-workbench-prompts', 'writing-workbench-coordinator', 'writing-workbench-ui', 'app'];
+  const positions = scripts.map(name => html.indexOf('src="/prototype/' + name + '.js"'));
+  assert.ok(positions.every((pos, i) => pos >= 0 && (i === 0 || pos > positions[i - 1])));
+  for (const scene of ['task', 'writing', 'ppt']) assert.ok(html.includes('data-agent-scene="' + scene + '"'));
+  assert.match(html, /#view-prompt-agent \[hidden\]\s*\{\s*display:\s*none/);
+});
+
+test('写作、任务、PPT 场景切换使用真实控制器隔离root', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp();
+  await f.event('nav-article');
+  assert.equal(f.mount.hidden, false);
+  assert.match(f.element('breadcrumb').textContent, /写作工作台/);
+  await f.event('scene-ppt');
+  assert.equal(f.element('ppt-scene-root').hidden, false);
+  assert.equal(f.mount.hidden, true);
+  await f.event('scene-task');
+  assert.equal(f.element('prompt-agent-root').hidden, false);
+  assert.equal(f.element('ppt-scene-root').hidden, true);
 });

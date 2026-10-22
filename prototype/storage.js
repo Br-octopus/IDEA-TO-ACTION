@@ -24,6 +24,18 @@
       ? null
       : globalThis.ForwardStepPptSceneSchema;
   const STORAGE_KEY = "forward-step.workspace.v2";
+  const writingSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./writing-workbench-schema.js")
+    : typeof globalThis === "undefined" ? null : globalThis.WritingWorkbenchSchema;
+  const writingPackSchema = typeof module === "object" && typeof require === "function"
+    ? require("./writing-pack-schema.js")
+    : typeof globalThis === "undefined" ? null : globalThis.WritingPackSchema;
+  const academicReviewSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./academic-review.js")
+    : typeof globalThis === "undefined" ? null : globalThis.ForwardStepAcademicReview;
+  const academicPublishingSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./academic-publishing.js")
+    : typeof globalThis === "undefined" ? null : globalThis.ForwardStepAcademicPublishing;
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
     "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
@@ -39,7 +51,8 @@
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters",
     "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings",
-    "promptAgentTasks", "promptAgentSources"
+    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories",
+    "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects"
   ];
 
   function createEmptyState() {
@@ -56,7 +69,13 @@
       platformConnections: {},
       researchAttachments: [],
       promptAgentTasks: [],
-      promptAgentSources: []
+      promptAgentSources: [],
+      writingArticles: [],
+      writingMemories: [],
+      writingPacks: [],
+      writingPackSettings: [],
+      writingReviews: [],
+      academicResponseProjects: []
     };
   }
 
@@ -73,6 +92,14 @@
       super(message, { cause });
       this.name = "StorageReadError";
       this.code = code;
+    }
+  }
+
+  class WritingSchemaUnavailableError extends Error {
+    constructor() {
+      super("写作 schema 未加载，无法安全清洗已有写作数据");
+      this.name = "WritingSchemaUnavailableError";
+      this.code = "WRITING_SCHEMA_UNAVAILABLE";
     }
   }
 
@@ -359,6 +386,87 @@
     };
   }
 
+  function sanitizeWritingState(state) {
+    const articles = Array.isArray(state?.writingArticles) ? state.writingArticles : [];
+    const memories = Array.isArray(state?.writingMemories) ? state.writingMemories : [];
+    const packs = Array.isArray(state?.writingPacks) ? state.writingPacks : [];
+    const packSettings = Array.isArray(state?.writingPackSettings) ? state.writingPackSettings : [];
+    const reviews = Array.isArray(state?.writingReviews) ? state.writingReviews : [];
+    if (!articles.length && !memories.length && !packs.length && !packSettings.length && !reviews.length) {
+      return { writingArticles: [], writingMemories: [], writingPacks: [], writingPackSettings: [], writingReviews: [] };
+    }
+    const schema = writingSchema || (typeof globalThis === "undefined" ? null : globalThis.WritingWorkbenchSchema);
+    if ((articles.length || memories.length) && (!schema || typeof schema.normalizeWritingWorkspace !== "function"
+      || typeof schema.normalizeWritingMemory !== "function")) {
+      throw new WritingSchemaUnavailableError();
+    }
+    const packSchema = writingPackSchema || (typeof globalThis === "undefined" ? null : globalThis.WritingPackSchema);
+    if ((packs.length || packSettings.length) && (!packSchema
+      || typeof packSchema.normalizeWritingPackCollection !== "function"
+      || typeof packSchema.normalizeWritingPackSettings !== "function")) {
+      throw new WritingSchemaUnavailableError();
+    }
+    const reviewSchema = academicReviewSchema || (typeof globalThis === "undefined" ? null : globalThis.ForwardStepAcademicReview);
+    if (reviews.length && (!reviewSchema || typeof reviewSchema.normalizeReviewProject !== "function")) {
+      throw new WritingSchemaUnavailableError();
+    }
+    // 清洗与保存授权分开：迁移和导入必须保留关闭保存后的历史快照。
+    return {
+      writingArticles: articles.length ? stripModelKeys(articles).map(item => {
+        const snapshot = schema.normalizeWritingWorkspace(item);
+        if (!snapshot.id) snapshot.id = snapshot.article.id;
+        return snapshot;
+      }).filter(item => item.id && item.id === item.article.id) : [],
+      writingMemories: memories.length ? stripModelKeys(memories).map(schema.normalizeWritingMemory).filter(item => item.id) : [],
+      writingPacks: packs.length
+        ? packSchema.normalizeWritingPackCollection(stripModelKeys(packs))
+        : [],
+      writingPackSettings: packSettings.length
+        ? normalizeWritingPackSettings(packSchema, stripModelKeys(packSettings))
+        : [],
+      writingReviews: reviews.length
+        ? normalizeWritingReviewCollection(reviewSchema, stripModelKeys(reviews))
+        : []
+    };
+  }
+
+  function sanitizeAcademicPublishingState(state) {
+    const projects = Array.isArray(state?.academicResponseProjects) ? state.academicResponseProjects : [];
+    if (!projects.length) return { academicResponseProjects: [] };
+    const schema = academicPublishingSchema || (typeof globalThis === "undefined" ? null : globalThis.ForwardStepAcademicPublishing);
+    if (!schema || typeof schema.normalizeProject !== "function") {
+      throw new WritingSchemaUnavailableError();
+    }
+    const normalized = projects.map(item => schema.normalizeProject(stripModelKeys(item)));
+    const ids = new Set();
+    for (const project of normalized) {
+      if (!project.id) throw new TypeError("academicResponseProjects 存在空 ID");
+      if (ids.has(project.id)) throw new TypeError(`academicResponseProjects 存在重复 ID：${project.id}`);
+      ids.add(project.id);
+    }
+    return { academicResponseProjects: normalized };
+  }
+
+  function normalizeWritingReviewCollection(schema, reviews) {
+    const normalized = reviews.map(schema.normalizeReviewProject);
+    const ids = new Set();
+    for (const review of normalized) {
+      if (ids.has(review.id)) throw new TypeError(`writingReviews 存在重复 ID：${review.id}`);
+      ids.add(review.id);
+    }
+    return normalized;
+  }
+
+  function normalizeWritingPackSettings(schema, settings) {
+    const normalized = settings.map(schema.normalizeWritingPackSettings);
+    const ids = new Set();
+    for (const setting of normalized) {
+      if (ids.has(setting.id)) throw new TypeError(`writingPackSettings 存在重复 ID：${setting.id}`);
+      ids.add(setting.id);
+    }
+    return normalized;
+  }
+
   function migrateState(input) {
     const source = input && typeof input === "object" ? input : {};
     const knowledgeEntries = normalizeKnowledgeEntries(source.knowledgeEntries);
@@ -387,6 +495,8 @@
           .map(migrateConfirmedCase)
         : [],
       ...sanitizePromptAgentState(stripModelKeys(source)),
+      ...sanitizeWritingState(source),
+      ...sanitizeAcademicPublishingState(source),
       ...researchState
     };
     return state;
@@ -408,7 +518,7 @@
     try {
       migrated = migrateState(JSON.parse(raw));
     } catch (error) {
-      if (error && error.code === "KNOWLEDGE_SCHEMA_UNAVAILABLE") throw error;
+      if (error && ["KNOWLEDGE_SCHEMA_UNAVAILABLE", "WRITING_SCHEMA_UNAVAILABLE"].includes(error.code)) throw error;
       throw new StorageReadError("本地数据格式无效，未加载任何数据", error, "STORAGE_PARSE_FAILED");
     }
 
@@ -423,11 +533,39 @@
     }
   }
 
-  function saveState(storage, state) {
+  function saveState(storage, state, options = {}) {
     const store = resolveStorage(storage);
     if (!store) return createEmptyState();
     try {
       const sanitized = migrateState(state);
+      // 仅已校验的显式导入/恢复可写入关闭保存的历史；普通编辑不能携带此选项。
+      if (options.restoreWriting !== true && (sanitized.writingArticles.some(item => !item.article.saveEnabled)
+        || sanitized.writingReviews.some(item => !item.saveEnabled)
+        || sanitized.academicResponseProjects.some(item => !item.saveEnabled))) {
+        const raw = store.getItem(STORAGE_KEY) || store.getItem(LEGACY_STORAGE_KEY);
+        const previousData = raw ? JSON.parse(raw) : {};
+        const previous = sanitizeWritingState(previousData);
+        const previousAcademicPublishing = sanitizeAcademicPublishingState(previousData);
+        const previousById = new Map(previous.writingArticles.map(item => [item.id, item]));
+        // 只遍历本次数组，确保显式删除的 id 不会从旧存储被重新并回。
+        sanitized.writingArticles = sanitized.writingArticles.flatMap(item => {
+          if (item.article.saveEnabled) return [item];
+          const saved = previousById.get(item.id);
+          return saved ? [{ ...saved, article: { ...saved.article, saveEnabled: false } }] : [];
+        });
+        const previousReviewsById = new Map(previous.writingReviews.map(item => [item.id, item]));
+        sanitized.writingReviews = sanitized.writingReviews.flatMap(item => {
+          if (item.saveEnabled) return [item];
+          const saved = previousReviewsById.get(item.id);
+          return saved ? [{ ...saved, saveEnabled: false }] : [];
+        });
+        const previousAcademicProjectsById = new Map(previousAcademicPublishing.academicResponseProjects.map(item => [item.id, item]));
+        sanitized.academicResponseProjects = sanitized.academicResponseProjects.flatMap(item => {
+          if (item.saveEnabled) return [item];
+          const saved = previousAcademicProjectsById.get(item.id);
+          return saved ? [{ ...saved, saveEnabled: false }] : [];
+        });
+      }
       store.setItem(STORAGE_KEY, JSON.stringify(sanitized));
       return sanitized;
     } catch (error) {
@@ -629,5 +767,5 @@
   }
 
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, sanitizePromptAgentState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, sanitizePromptAgentState, sanitizeWritingState, sanitizeAcademicPublishingState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

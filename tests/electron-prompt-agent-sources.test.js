@@ -58,7 +58,7 @@ test('IPC 不接受 renderer 提交的根路径或绝对文件路径，并拒绝
   await assert.rejects(h.invoke('prompt-agent-sources:refresh-index', 'missing'));
 });
 
-test('preload 只暴露四个命名目录授权操作', async () => {
+test('preload 只暴露六个命名目录授权和索引操作', async () => {
   let exposed;
   const invocations = [];
   const preloadPath = path.join(__dirname, '..', 'electron', 'preload.js');
@@ -72,15 +72,18 @@ test('preload 只暴露四个命名目录授权操作', async () => {
       };
     }
   }, { filename: preloadPath });
-  assert.deepEqual(Object.keys(exposed.api.promptAgentSources), ['selectDirectory', 'listAuthorized', 'refreshIndex', 'setAuthorizationEnabled', 'removeAuthorization']);
+  assert.deepEqual(Object.keys(exposed.api.promptAgentSources), ['selectDirectory', 'listAuthorized', 'refreshIndex', 'searchIndex', 'setAuthorizationEnabled', 'removeAuthorization']);
   exposed.api.promptAgentSources.selectDirectory();
   exposed.api.promptAgentSources.listAuthorized();
   exposed.api.promptAgentSources.refreshIndex('source-1');
+  exposed.api.promptAgentSources.searchIndex('source-1', '写作', { type: 'document' });
   exposed.api.promptAgentSources.setAuthorizationEnabled('source-1', false);
   exposed.api.promptAgentSources.removeAuthorization('source-1');
   assert.deepEqual(JSON.parse(JSON.stringify(invocations)), [
     ['prompt-agent-sources:select-directory'], ['prompt-agent-sources:list-authorized'],
-    ['prompt-agent-sources:refresh-index', 'source-1'], ['prompt-agent-sources:set-authorization-enabled', 'source-1', false],
+    ['prompt-agent-sources:refresh-index', 'source-1'],
+    ['prompt-agent-sources:search-index', 'source-1', '写作', { type: 'document' }],
+    ['prompt-agent-sources:set-authorization-enabled', 'source-1', false],
     ['prompt-agent-sources:remove-authorization', 'source-1']
   ]);
   assert.equal(exposed.api.promptAgentSources.readFile, undefined);

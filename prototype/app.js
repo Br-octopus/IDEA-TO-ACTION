@@ -1524,11 +1524,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     buildGoalPrompt: project => `请帮助我梳理目标并只生成建议和可复制提示词，不执行最终任务。\n目标：${project.goalSummary || project.idea}`,
     buildStagePrompt: () => "请分析当前步骤并生成提示词，不执行最终任务。",
     buildFollowupPrompt: () => "请分析进展并生成下一步提示词，不执行最终任务。",
-    buildArticleDiagnosticPrompt: () => "请诊断文章并生成修改提示词，不直接改写文章。",
     buildPromptOptimizationPrompt: () => "请诊断提示词并给出优化建议，不执行最终任务。",
     buildCaseReviewPrompt: () => "请复盘结果并生成下一条修正提示词，不执行最终任务。"
   };
-  const { buildGoalPrompt, buildStagePrompt, buildFollowupPrompt, buildArticleDiagnosticPrompt, buildPromptOptimizationPrompt, buildCaseReviewPrompt, appendKnowledgeContext } = promptEngine;
+  const { buildGoalPrompt, buildStagePrompt, buildFollowupPrompt, buildPromptOptimizationPrompt, buildCaseReviewPrompt, appendKnowledgeContext } = promptEngine;
   function withSelectedReferences(prompt, references = selectedReferences()) {
     if (typeof promptEngine.appendKnowledgeContext !== "function") return String(prompt || "");
     return promptEngine.appendKnowledgeContext(prompt, references);
@@ -1596,6 +1595,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   let persistenceBlocked = false;
   let state;
   let socialResearchUI = null;
+  let writingCoordinator = null;
+  let writingPackController = null;
+  let academicReviewController = null;
+  let academicPublishingController = null;
+  let agentScenes = null;
+  let activeView = "home";
   try {
     const loaded = loadState();
     state = loaded.state;
@@ -1614,7 +1619,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       .catch(error => toast(`备份导入事务恢复失败：${error.message || "请重启应用重试"}`));
   }
   let currentProjectReviewCase = null;
-  let currentArticleReviewCase = null;
 
   function persist() {
     if (persistenceBlocked) {
@@ -1638,18 +1642,26 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     try { await navigator.clipboard.writeText(text); toast("已复制，可以粘贴给 AI 了"); }
     catch { const temp = document.createElement("textarea"); temp.value = text; document.body.append(temp); temp.select(); document.execCommand("copy"); temp.remove(); toast("已复制，可以粘贴给 AI 了"); }
   }
+  function persistWorkbenchState(nextState, options = {}) {
+    if (persistenceBlocked) throw new Error("本地数据读取异常，已暂停保存以避免覆盖原有数据");
+    state = saveState(localStorage, nextState, options);
+    return state;
+  }
   function go(view) {
+    const writingAlias = view === "article";
+    if (writingAlias) view = "prompt-agent";
+    activeView = view;
     document.querySelectorAll(".view").forEach(node => node.classList.toggle("active", node.id === `view-${view}`));
     document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === view));
-    const labels = { home: "新建规划", plans: "我的计划", article: "文章改写", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
+    const labels = { home: "新建规划", plans: "我的计划", "prompt-agent": "提示词 Agent", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
     document.getElementById("breadcrumb").textContent = `工作台　/　${labels[view] || "新建规划"}`;
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (view === "plans") renderPlans();
     if (view === "library") renderLibrary();
     if (view === "references") refreshKnowledgeView();
     if (view === "prompt-agent") {
-      window.ForwardStepPromptAgentUIController?.render();
-      window.ForwardStepPptSceneUIController?.render();
+      if (writingAlias) agentScenes?.selectScene("writing");
+      else agentScenes?.selectScene(agentScenes.getScene());
     }
   }
   document.querySelectorAll("[data-view]").forEach(node => node.addEventListener("click", () => go(node.dataset.view)));
@@ -1657,11 +1669,11 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const coordinator = window.ForwardStepSocialResearchCoordinator.createSocialResearchCoordinator({
       desktopApi,
       initialState: state,
-      persistState(nextState) { state = saveState(localStorage, nextState); return state; }
+      persistState: persistWorkbenchState
     });
     socialResearchUI = window.ForwardStepSocialResearchUI.createSocialResearchUI({
       document, desktopApi, coordinator, getState: () => state,
-      persistState(nextState) { state = saveState(localStorage, nextState); return state; }
+      persistState: persistWorkbenchState
     });
   }
   if (window.ForwardStepPromptAgentCoordinator && window.ForwardStepPromptAgentUI) {
@@ -1703,7 +1715,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       document,
       coordinator: promptAgentCoordinator,
       getState: () => state,
-      persistState(nextState) { state = saveState(localStorage, nextState); return state; },
+      persistState: persistWorkbenchState,
       requestModel: prompt => window.ForwardStepPromptAgentModelRequest({ messages: [{ role: "user", content: prompt }] }),
       copyText,
       navigate: go,
@@ -1770,6 +1782,76 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         knowledgeEntries = getKnowledgeIndex();
       }
     });
+    if (window.WritingPackCoordinator && window.WritingPackUI) {
+      const writingPackCoordinator = window.WritingPackCoordinator.createWritingPackCoordinator({ getState: () => state, persistState: persistWorkbenchState, builtinCatalog: window.WritingPackCatalog ? window.WritingPackCatalog.getBuiltinWritingPacks() : [] });
+      writingPackController = window.WritingPackUI.createWritingPackUI({ document, packCoordinator: writingPackCoordinator, getState: () => state, confirm: message => window.confirm(message), notify: toast, copyText });
+      window.WritingPackUIController = writingPackController;
+    }
+    async function saveWritingMaterialToLibrary(material) {
+      if (!knowledgeSchemaApi || typeof upsertKnowledgeEntry !== "function") throw new Error("资料库保存功能暂不可用");
+      const writingSchema = window.WritingWorkbenchSchema;
+      if (!writingSchema?.normalizeWritingRound) throw new Error("写作材料清洗功能暂不可用");
+      const normalized = material?.kind === "source"
+        ? writingSchema.normalizeWritingRound({ sources: [material] }).sources[0]
+        : writingSchema.normalizeWritingRound({ materials: [material] }).materials[0];
+      const excerpt = String(normalized?.excerpt || "").trim().slice(0, 1200);
+      if (!excerpt) throw new Error("只有含可见摘录的材料可以保存到资料库");
+      const sourceId = normalized.sourceId || normalized.id || "";
+      const existing = sourceId && state.knowledgeEntries.find(item => item.sourceKind === "reference" && item.sourceId === sourceId);
+      const sourceTypeLabels = {
+        "authorized-directory": "授权目录摘录", "text-file": "本地文本文件摘录",
+        "pasted-text": "手工摘录", "unread-file-reference": "附件摘录",
+        "library-entry": "资料库摘录", link: "网页摘录"
+      };
+      const locationNote = [
+        normalized.sourceLocator && `相对位置：${normalized.sourceLocator}`,
+        normalized.sourceVersion && `版本：${normalized.sourceVersion}`,
+        normalized.excerptLocator && `摘录位置：${normalized.excerptLocator}`,
+        normalized.selectionReason && `选用理由：${normalized.selectionReason}`
+      ].filter(Boolean).join("；");
+      const entry = knowledgeSchemaApi.normalizeKnowledgeEntry({
+        id: existing?.id || `writing-material-${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
+        type: "manual-note", title: normalized.title || "写作材料摘录",
+        sourceUrl: /^https?:\/\//i.test(normalized.url || "") ? normalized.url : "",
+        sourceType: sourceTypeLabels[normalized.sourceType] || "写作材料摘录",
+        sourceKind: "reference", sourceId, domains: ["写作材料"],
+        stages: [normalized.purpose === "style" ? "风格参考" : "写作参考"],
+        keywords: [normalized.purpose || "content"], summary: excerpt, contentExcerpt: excerpt,
+        limitations: ["仅保存用户明确选择的可见摘录；来源尚未核验，不包含原文件或授权目录全文。", locationNote].filter(Boolean).join(" "),
+        verificationStatus: "unverified", createdAt: existing?.createdAt || new Date().toISOString()
+      });
+      const previousState = state;
+      try {
+        const result = upsertKnowledgeEntry(state, entry);
+        state = result.state;
+        if (!persist()) throw new Error("资料库写入失败，尚未保存到本机");
+        refreshKnowledgeView();
+        toast(result.updated ? "已更新资料库中的材料摘录" : "已保存材料摘录到资料库");
+        return result.entry;
+      } catch (error) {
+        state = previousState;
+        throw error;
+      }
+    }
+    if (window.WritingWorkbenchCoordinator && window.WritingWorkbenchUI) {
+      writingCoordinator = window.WritingWorkbenchCoordinator.createWritingWorkbenchCoordinator({
+        getState: () => state, persistState: persistWorkbenchState,
+        requestModel: payload => window.ForwardStepPromptAgentModelRequest(payload), promptAgentCoordinator
+      });
+      window.WritingWorkbenchUIController = window.WritingWorkbenchUI.createWritingWorkbenchUI({
+        document, coordinator: writingCoordinator, packUI: writingPackController, getState: () => state, copyText,
+        saveMaterialToLibrary: saveWritingMaterialToLibrary,
+        confirm: message => window.confirm(message), notify: toast
+      });
+    }
+    agentScenes = window.ForwardStepPromptAgentUI.createPromptAgentScenes?.({
+      document,
+      onSceneChange(scene, label) {
+        if (activeView === "prompt-agent") document.getElementById("breadcrumb").textContent = `工作台　/　提示词 Agent　/　${label}`;
+        if (scene === "writing") window.WritingWorkbenchUIController?.render();
+        if (scene === "ppt") window.ForwardStepPptSceneUIController?.render();
+      }
+    });
     if (window.ForwardStepPptSceneCoordinator && window.ForwardStepPptSceneUI) {
       const pptCoordinator = window.ForwardStepPptSceneCoordinator.createPptSceneCoordinator({
         promptAgentCoordinator,
@@ -1784,7 +1866,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         sceneSchema: window.ForwardStepPptSceneSchema,
         taskSchema: window.ForwardStepPromptAgentSchema,
         getState: () => state,
-        persistState(nextState) { state = saveState(localStorage, nextState); return state; },
+        persistState: persistWorkbenchState,
         copyText,
         notify: toast
       });
@@ -2214,158 +2296,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     renderLibrary(); toast("已保存为新版本");
   }
   document.getElementById("save-master").addEventListener("click", () => { const p = getActiveProject(); if (p) savePrompt(p.idea, p.masterPrompt, p.id); });
-  let currentArticlePrompt = "";
-  let currentArticleInput = null;
-  document.getElementById("article-form").addEventListener("submit", event => {
-    event.preventDefault();
-    const original = document.getElementById("article-original").value.trim();
-    if (!original) return;
-    const article = {
-      original,
-      goal: document.getElementById("article-goal").value.trim(),
-      platform: document.getElementById("article-platform").value,
-      audience: document.getElementById("article-audience").value.trim(),
-      tone: document.getElementById("article-tone").value.trim(),
-      references: document.getElementById("article-references").value.trim(),
-      findExamples: document.getElementById("article-find-examples").checked,
-      styleFeatures: [...document.querySelectorAll(".article-style-feature:checked")].map(input => input.value),
-      preserveItems: [...document.querySelectorAll(".article-preserve-item:checked")].map(input => input.value),
-      webSearch: document.getElementById("article-web-search").checked
-    };
-    resetArticleReviewResult({ clearFeedback: true });
-    currentArticleInput = article;
-    currentArticlePrompt = buildArticleDiagnosticPrompt(article);
-    document.getElementById("article-instruction").textContent = currentArticlePrompt;
-    document.getElementById("article-revised").value = "";
-    document.getElementById("article-comparison").hidden = true;
-    document.getElementById("article-result").classList.add("visible");
-    document.getElementById("article-result").scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-  document.getElementById("copy-article-instruction").addEventListener("click", () => copyText(currentArticlePrompt));
-  document.getElementById("build-article-review").addEventListener("click", () => {
-    const before = document.getElementById("article-original").value.trim();
-    const after = document.getElementById("article-revised").value.trim();
-    if (!before || !after) { toast("先填写原稿和对照结果"); return; }
-    const goal = currentArticleInput?.goal || "改进文章表达，同时保留原意";
-    currentArticleReviewCase = {
-      id: currentArticleReviewCase?.id || createReviewId("article-review"),
-      projectId: currentArticleInput?.projectId || "",
-      domain: "写作",
-      taskType: "文章改写",
-      goal,
-      preserveItems: currentArticleInput?.preserveItems || [],
-      before,
-      after,
-      externalResult: after,
-      userFeedback: document.getElementById("article-review-feedback").value.trim(),
-      dimensions: ["目标", "保留项", "事实", "观点", "句式"],
-      evidence: [],
-      suggestedLabel: "",
-      status: "待验证",
-      lessons: "",
-      nextPrompt: "",
-      createdAt: currentArticleReviewCase?.createdAt || new Date().toISOString()
-    };
-    const prompt = buildCaseReviewPrompt({
-      idea: goal,
-      goalSummary: goal,
-      successCriteria: ["表达更符合文章目的和读者", "观点、事实、逻辑和指定保留项未被改偏"],
-      preserveItems: currentArticleInput?.preserveItems || []
-    }, currentArticleReviewCase);
-    document.getElementById("article-review-prompt").textContent = prompt;
-    document.getElementById("article-review-goal").textContent = goal;
-    document.getElementById("article-review-preserve").textContent = (currentArticleInput?.preserveItems || []).join("；") || "未指定";
-    document.getElementById("article-review-evidence").value = "";
-    document.getElementById("article-review-label").value = "";
-    document.getElementById("article-review-status").value = "待验证";
-    document.getElementById("article-review-lessons").value = "";
-    document.getElementById("article-review-next-prompt").value = "";
-    document.getElementById("article-review-result").classList.add("visible");
-  });
-  document.getElementById("copy-article-review").addEventListener("click", () => {
-    const prompt = document.getElementById("article-review-prompt").textContent;
-    if (prompt) copyText(prompt);
-  });
-  function resetArticleReviewResult({ clearFeedback = false } = {}) {
-    currentArticleReviewCase = null;
-    document.getElementById("article-review-result").classList.remove("visible");
-    document.getElementById("article-review-prompt").textContent = "";
-    document.getElementById("article-review-goal").textContent = "";
-    document.getElementById("article-review-preserve").textContent = "";
-    document.getElementById("article-review-evidence").value = "";
-    document.getElementById("article-review-label").value = "";
-    document.getElementById("article-review-status").value = "待验证";
-    document.getElementById("article-review-lessons").value = "";
-    document.getElementById("article-review-next-prompt").value = "";
-    document.getElementById("article-revised").value = "";
-    document.getElementById("article-comparison").hidden = true;
-    document.getElementById("article-original-preview").textContent = "";
-    document.getElementById("article-revised-preview").textContent = "";
-    if (clearFeedback) document.getElementById("article-review-feedback").value = "";
-  }
-  function articleReviewDraft() {
-    if (!currentArticleReviewCase) return null;
-    const after = document.getElementById("article-revised").value.trim();
-    return {
-      ...currentArticleReviewCase,
-      before: document.getElementById("article-original").value.trim(),
-      after,
-      externalResult: after,
-      userFeedback: document.getElementById("article-review-feedback").value.trim(),
-      evidence: splitLines(document.getElementById("article-review-evidence").value),
-      suggestedLabel: document.getElementById("article-review-label").value.trim(),
-      status: document.getElementById("article-review-status").value,
-      lessons: document.getElementById("article-review-lessons").value.trim(),
-      nextPrompt: document.getElementById("article-review-next-prompt").value.trim()
-    };
-  }
-  document.getElementById("edit-article-review").addEventListener("click", () => {
-    const reviewCase = articleReviewDraft();
-    if (!reviewCase) return;
-    if (currentArticleReviewCase.confirmed) {
-      state = updateCase(state, reviewCase);
-      syncCaseInsightState(state.cases.find(item => item.id === reviewCase.id));
-      if (!persist()) return;
-      currentArticleReviewCase = { ...state.cases.find(item => item.id === reviewCase.id), confirmed: true };
-      toast("判断已更新并保存");
-    } else {
-      currentArticleReviewCase = reviewCase;
-      toast("判断已更新；点击“确认记录”后才会保存");
-    }
-  });
-  document.getElementById("skip-article-review").addEventListener("click", () => {
-    resetArticleReviewResult({ clearFeedback: true });
-    toast("本次复盘暂不记录");
-  });
-  document.getElementById("confirm-article-review").addEventListener("click", () => {
-    const reviewCase = articleReviewDraft();
-    if (!reviewCase) return;
-    state = currentArticleReviewCase.confirmed
-      ? updateCase(state, reviewCase)
-      : confirmCase(state, reviewCase, true);
-    syncCaseInsightState(state.cases.find(item => item.id === reviewCase.id));
-    if (!persist()) return;
-    currentArticleReviewCase = { ...state.cases.find(item => item.id === reviewCase.id), confirmed: true };
-    toast("复盘案例已确认记录");
-  });
-  document.getElementById("save-article-instruction").addEventListener("click", () => {
-    if (currentArticlePrompt) savePrompt("文章诊断与修改提示词", currentArticlePrompt, null);
-  });
-  function renderArticleComparison() {
-    const original = document.getElementById("article-original").value.trim();
-    const revised = document.getElementById("article-revised").value.trim();
-    const comparison = document.getElementById("article-comparison");
-    comparison.hidden = !original || !revised;
-    document.getElementById("article-original-preview").textContent = original;
-    document.getElementById("article-revised-preview").textContent = revised;
-  }
-  document.getElementById("article-original").addEventListener("input", renderArticleComparison);
-  document.getElementById("article-revised").addEventListener("input", renderArticleComparison);
-  document.getElementById("copy-article-revision").addEventListener("click", () => {
-    const revised = document.getElementById("article-revised").value.trim();
-    if (!revised) { toast("先粘贴 AI 改完的文章"); document.getElementById("article-revised").focus(); return; }
-    copyText(revised);
-  });
   document.getElementById("optimize-form").addEventListener("submit", event => {
     event.preventDefault();
     const original = document.getElementById("old-prompt").value.trim(); if (!original) return;
@@ -2691,7 +2621,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     };
   }
   function knowledgeTypeLabel(type) {
-    return { "user-prompt": "我的提示词", "success-case": "成功案例", "failure-case": "失败案例", "review-insight": "复盘洞察（待验证）", "github-summary": "GitHub 摘要", "article-summary": "文章摘要", "method-card": "方法卡", "prompt-example": "提示词样例", "manual-note": "手动笔记" }[type] || type;
+    return { "academic-literature": "学术文献", "user-prompt": "我的提示词", "success-case": "成功案例", "failure-case": "失败案例", "review-insight": "复盘洞察（待验证）", "github-summary": "GitHub 摘要", "article-summary": "文章摘要", "method-card": "方法卡", "prompt-example": "提示词样例", "manual-note": "手动笔记" }[type] || type;
   }
   function linkedCase(item) {
     return item?.linkedCaseId
@@ -2862,7 +2792,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       state = deleteCase(state, caseId);
       if (!persist()) { state = previousState; return; }
       if (currentProjectReviewCase?.id === caseId) resetProjectReviewFields({ clearInputs: true });
-      if (currentArticleReviewCase?.id === caseId) resetArticleReviewResult({ clearFeedback: true });
       refreshKnowledgeView();
       toast("案例及其资料卡已删除，项目和提示词未受影响");
     } catch (error) {
@@ -3015,7 +2944,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     refreshKnowledgeView();
     toast("已保存资料摘要");
   }
-  knowledgeForm.addEventListener("submit", saveKnowledgeEntry);  async function exportKnowledgeBackup(scope) {
+  knowledgeForm.addEventListener("submit", saveKnowledgeEntry);
+  async function exportKnowledgeBackup(scope) {
     if (!workspaceBackup) { toast("备份功能暂不可用"); return; }
     try {
       const backup = workspaceBackup.createBackup(state, { scope, now: new Date().toISOString() });
@@ -3034,6 +2964,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       toast("备份已导出");
     } catch (error) { toast(`导出失败：${error.message || "备份无效"}`); }
   }
+  document.getElementById("knowledge-export-open").addEventListener("click", () => exportKnowledgeBackup(document.getElementById("knowledge-export-scope").value));
   async function createSafetyBackup() {
     const backup = workspaceBackup.createBackup(state, { scope: "workspace", now: new Date().toISOString() });
     const content = JSON.stringify(backup, null, 2);
@@ -3059,7 +2990,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
           : raw && typeof raw.content === "string" ? JSON.parse(raw.content) : raw;
       const summary = workspaceBackup.getBackupSummary(backup);
       if (archiveStage && summary.scope !== "workspace") throw new Error("ZIP 仅支持完整工作区备份");
-      const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
+      const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料、${summary.counts.writingArticles || 0} 篇文章、${summary.counts.writingMemories || 0} 条写作记忆。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
       let importAttachments = archiveStage?.attachments || [];
       if (archiveStage) {
         const metadata = new Map((backup.data.researchAttachments || []).map(item => [item.id, item]));
@@ -3104,16 +3035,23 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         transactionId = committed.transactionId;
       }
       const previousState = state;
-      state = result.state;
-      if (!persist()) {
+      try {
+        persistWorkbenchState(result.state, { restoreWriting: true });
+      } catch (error) {
         state = previousState;
         if (transactionId) {
           await desktopApi.rollbackBackupImport(transactionId).catch(() => {});
           transactionId = "";
         }
-        throw new Error("导入结果保存失败");
+        throw new Error(`导入结果保存失败：${error.message || "存储不可用"}`);
       }
       if (transactionId) await desktopApi.finalizeBackupImport(transactionId);
+      if (summary.scope === "workspace") {
+        await writingCoordinator?.refreshFromStorage({ preserveSessions: mode === "merge" });
+        window.WritingWorkbenchUIController?.refreshFromStorage();
+        academicReviewController?.refreshFromStorage();
+        academicPublishingController?.refreshFromStorage();
+      } else window.WritingWorkbenchUIController?.render();
       renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
       toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}${remappedAttachmentIds.length ? `；已重映射 ${remappedAttachmentIds.length} 个冲突附件 ID` : ""}${omittedAttachmentCount ? `；JSON 备份不含正文，已跳过 ${omittedAttachmentCount} 个附件索引` : ""}`);
     } catch (error) {
@@ -3136,13 +3074,90 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       await importBackupContent(raw);
     } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); }
   }
-  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; const importGate = browserImportGate; browserImportGate = null; try { consumeBrowserImportGate(importGate); await importBackupContent(await file.text(), importGate); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { event.target.value = ""; } });
+  document.getElementById("knowledge-import-open").addEventListener("click", importKnowledgeBackup);
+  // 浏览器令牌只在文件入口消费一次，且必须先于读取文件；导入函数复用桌面路径。
+  document.getElementById("knowledge-import-file").addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; const importGate = browserImportGate; browserImportGate = null; try { consumeBrowserImportGate(importGate); await importBackupContent(await file.text()); } catch (error) { toast(`导入失败，当前数据未改变：${error.message || "备份无效"}`); } finally { event.target.value = ""; } });
   document.getElementById("knowledge-bulk-hide").addEventListener("click", () => { state.knowledgeSelection.forEach(id => { state = hideKnowledgeEntry(state, id); }); persist(); refreshKnowledgeView(); });
   document.getElementById("knowledge-bulk-delete").addEventListener("click", () => { state = deleteKnowledgeEntries(state, state.knowledgeSelection); persist(); refreshKnowledgeView(); });
   renderCaseProjectOptions();
   refreshKnowledgeView();
   renderSearchResults();
   renderRecent();
+  const academicLiteratureRoot = document.getElementById("academic-literature-root");
+  if (academicLiteratureRoot && window.ForwardStepAcademicLiteratureUI?.createAcademicLiteratureUI) {
+    window.ForwardStepAcademicLiteratureUI.createAcademicLiteratureUI({
+      root: academicLiteratureRoot,
+      getState: () => state,
+      saveState: nextState => {
+        state = saveState(localStorage, nextState);
+        refreshKnowledgeView();
+        return true;
+      },
+      fetchImpl: (...args) => fetch(...args),
+      confirmExternal: message => window.confirm(message),
+      notify: message => toast(message),
+      clipboard: text => copyText(text),
+      download: (text, filename, mimeType) => {
+        const url = URL.createObjectURL(new Blob([text], { type: `${mimeType};charset=utf-8` }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      }
+    });
+  }
+  const academicReviewRoot = document.getElementById("academic-review-root");
+  if (academicReviewRoot && window.ForwardStepAcademicReviewCoordinator && window.ForwardStepAcademicReviewUI) {
+    const academicReviewCoordinator = window.ForwardStepAcademicReviewCoordinator.createAcademicReviewCoordinator({
+      getState: () => state,
+      persistState: persistWorkbenchState,
+      getKnowledgeEntries: () => state.knowledgeEntries || [],
+      builtinPack: window.WritingPackCatalog?.getBuiltinWritingPacks?.().find(pack => pack.id === "builtin-academic-review")
+    });
+    academicReviewController = window.ForwardStepAcademicReviewUI.createAcademicReviewUI({
+      root: academicReviewRoot,
+      coordinator: academicReviewCoordinator,
+      getState: () => state,
+      getKnowledgeEntries: () => state.knowledgeEntries || [],
+      getPackSnapshot: () => window.WritingPackCatalog?.getBuiltinWritingPacks?.().find(pack => pack.id === "builtin-academic-review") || null,
+      confirm: message => window.confirm(message),
+      notify: message => toast(message),
+      clipboard: text => copyText(text)
+    });
+    window.ForwardStepAcademicReviewCoordinatorInstance = academicReviewCoordinator;
+    window.ForwardStepAcademicReviewUIController = academicReviewController;
+  }
+  const academicPublishingRoot = document.getElementById("academic-publishing-root");
+  if (academicPublishingRoot && window.ForwardStepAcademicPublishingCoordinator && window.ForwardStepAcademicPublishingUI) {
+    const academicPublishingCoordinator = window.ForwardStepAcademicPublishingCoordinator.createAcademicPublishingCoordinator({
+      getState: () => state,
+      persistState: persistWorkbenchState,
+      getKnowledgeEntries: () => state.knowledgeEntries || [],
+      builtinPack: window.WritingPackCatalog?.getBuiltinWritingPacks?.().find(pack => pack.id === "builtin-academic-publishing")
+    });
+    academicPublishingController = window.ForwardStepAcademicPublishingUI.createAcademicPublishingUI({
+      root: academicPublishingRoot,
+      coordinator: academicPublishingCoordinator,
+      getKnowledgeEntries: () => state.knowledgeEntries || [],
+      lookup: async (type, identifier) => {
+        const response = await fetch("/api/academic-literature/lookup", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ [type]: identifier })
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload?.metadata) throw new Error(payload?.message || "登记题录查询失败");
+        return payload.metadata;
+      },
+      confirm: message => window.confirm(message),
+      notify: message => toast(message),
+      clipboard: text => copyText(text)
+    });
+    window.ForwardStepAcademicPublishingCoordinatorInstance = academicPublishingCoordinator;
+    window.ForwardStepAcademicPublishingUIController = academicPublishingController;
+  }
   async function loadServiceConfig() {
     if (desktopApi) return desktopApi.getConfig();
     const response = await fetch("/api/config");
@@ -3164,7 +3179,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     document.getElementById("settings-search-url").value = config.search?.baseUrl || "";
     document.getElementById("settings-model-name").value = config.model?.name || "";
     document.getElementById("settings-safe-storage").textContent = settingsStorageMessage(config);
-    toast("浏览器开发模式的安全备份仅含 JSON，不包含已保存附件正文。");
   }).catch(() => {
   const status = document.getElementById("service-status");
     status.textContent = "离线打开 · 复制指令模式";

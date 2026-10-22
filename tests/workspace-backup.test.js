@@ -733,6 +733,12 @@ test('备份按 scope 严格限制 data 和 counts 字段白名单', () => {
   extraKnowledgeField.data.extra = true;
   assert.throws(() => validateBackup(extraKnowledgeField), /字段/);
 
+  for (const field of ['promptAgentTasks', 'writingPacks', 'writingPackSettings']) {
+    const workspaceCountInKnowledgeBackup = createBackup(createState(), { scope: 'knowledge-base', now: exportedAt });
+    workspaceCountInKnowledgeBackup.counts[field] = 0;
+    assert.throws(() => validateBackup(workspaceCountInKnowledgeBackup), /统计字段/);
+  }
+
   const workspaceBackup = createBackup(createState(), { scope: 'workspace', now: exportedAt });
   workspaceBackup.data.extra = true;
   assert.throws(() => validateBackup(workspaceBackup), /字段/);
@@ -981,4 +987,207 @@ test('严格校验和替换拒绝集合内重复 id，合并则报告重复条�
     id: 'same',
     reason: 'duplicate-id'
   }]);
+});
+
+function backupWritingSnapshot(id = 'article-1', saveEnabled = true) {
+  return {
+    id, genre: 'article', article: { id, draft: '文章正文', saveEnabled },
+    rounds: [{ id: 'r1', draft: '初稿', feedback: '反馈', diagnosis: '诊断', prompt: '提示词' },
+      { id: 'r2', draft: '改稿', userFeedback: '用户意见' }],
+    styleProfile: { id: 'style-1', source: 'user', traits: ['口语'] }
+  };
+}
+
+test('真实拒绝搜索的完整备份导出导入保存重载保留拒绝及自动来源白名单', async () => {
+  const storage = require('../prototype/storage.js');
+  const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
+  const { createPromptAgentCoordinator } = require('../prototype/prompt-agent-coordinator.js');
+  const values = new Map();
+  const store = { getItem: k => values.get(k), setItem: (k, v) => values.set(k, v) };
+  let state = storage.createEmptyState();
+  const agent = createPromptAgentCoordinator();
+  agent.selectMaterials = async () => [{ title: '自动本地', location: 'https://local.test', excerpt: '本地摘要' }];
+  const dependencies = { getState: () => state, persistState(next) { state = storage.saveState(store, next); return state; }, promptAgentCoordinator: agent };
+  const c = createWritingWorkbenchCoordinator(dependencies);
+  const a = await c.createArticle({ draft: '稿件', saveEnabled: true });
+  await c.selectMaterials(a.id);
+  c.previewResearch(a.id);
+  await c.rejectResearch(a.id);
+  const exported = JSON.parse(JSON.stringify(createBackup(state)));
+  assert.equal(validateBackup(exported), true);
+  state = storage.saveState(store, replaceState({}, exported), { restoreWriting: true });
+  state = storage.loadState(store).state;
+  const restored = createWritingWorkbenchCoordinator(dependencies);
+  assert.equal(restored.getResearchState(a.id).status, 'rejected');
+  assert.equal(restored.getRounds(a.id)[0].sources[0].origin, 'local-search');
+  assert.throws(() => restored.previewResearch(a.id), /拒绝/);
+  assert.deepEqual(state.promptAgentTasks, []);
+  const knowledge = createBackup(state, { scope: 'knowledge-base' });
+  assert.equal(Object.hasOwn(knowledge.data, 'writingArticles'), false);
+});
+
+test('写作基础包备份包含包与设置集合并正确计数，资料库备份排除', () => {
+  const schema = require('../prototype/writing-pack-schema.js');
+  const pack = schema.normalizeWritingPack({
+    id: 'pack-1', name: '文献综述包', layer: 'task', version: 1,
+    checks: [{ id: 'c1', statement: '检查', apiKey: 'pack-credential-marker' }],
+    sources: [{ id: 's1', title: '来源', password: 'pack-credential-marker' }]
+  });
+  const state = { writingPacks: [pack], writingPackSettings: [{ id: 'pack-1', enabled: false }] };
+  const backup = createBackup(state);
+  assert.deepEqual(backup.data.writingPacks, [pack]);
+  assert.equal(backup.counts.writingPacks, 1);
+  assert.equal(getBackupSummary(backup).counts.writingPackSettings, 1);
+  const replaced = replaceState({}, JSON.parse(JSON.stringify(backup)));
+  assert.deepEqual(replaced.writingPacks, [pack]);
+  assert.equal(JSON.stringify(replaced).includes('pack-credential-marker'), false);
+  const knowledge = createBackup(state, { scope: 'knowledge-base' });
+  for (const field of ['writingPacks', 'writingPackSettings']) {
+    assert.equal(Object.hasOwn(knowledge.data, field), false);
+    assert.equal(Object.hasOwn(knowledge.counts, field), false);
+  }
+  assert.equal(replaceState(state, knowledge).writingPacks.length, 1);
+});
+
+test('写作基础包合并冲突保留当前版本，旧备份缺新增字段迁移为空集合', () => {
+  const schema = require('../prototype/writing-pack-schema.js');
+  const incoming = schema.normalizeWritingPack({ id: 'incoming-pack', name: '新包', layer: 'task', version: 1 });
+  const backup = createBackup({});
+  backup.data.writingPacks = [incoming];
+  backup.data.writingPackSettings = [{ id: 'incoming-pack', enabled: true }];
+  backup.counts.writingPacks = 1;
+  backup.counts.writingPackSettings = 1;
+  const current = {
+    writingPacks: [schema.normalizeWritingPack({ id: 'incoming-pack', name: '当前版本', layer: 'task', version: 2 })],
+    writingPackSettings: [{ id: 'incoming-pack', enabled: false, updatedAt: '2026-10-20T00:00:00.000Z' }]
+  };
+  const merged = mergeState(current, backup);
+  assert.deepEqual(merged.state.writingPacks.map(item => item.name), ['当前版本']);
+  assert.equal(merged.state.writingPackSettings[0].enabled, false);
+  assert.equal(merged.conflicts.filter(item => item.collection.startsWith('writingPack')).length, 2);
+  const fresh = mergeState({ writingPacks: [], writingPackSettings: [] }, backup);
+  assert.deepEqual(fresh.state.writingPacks.map(item => item.id), ['incoming-pack']);
+  assert.equal(fresh.state.writingPackSettings[0].enabled, true);
+  const legacy = createBackup({});
+  delete legacy.data.writingPacks;
+  delete legacy.data.writingPackSettings;
+  assert.equal(validateBackup(legacy), true);
+  const withCurrent = { writingPacks: [{ id: 'current-1' }], writingPackSettings: [] };
+  assert.deepEqual(replaceState(withCurrent, legacy).writingPacks, []);
+  assert.deepEqual(mergeState(withCurrent, legacy).state.writingPacks.map(item => item.id), ['current-1']);
+  const bad = createBackup({});
+  bad.data.writingPacks = [{ id: '' }];
+  bad.data.writingPackSettings = [{ id: '', enabled: true }];
+  bad.counts.writingPacks = 1;
+  bad.counts.writingPackSettings = 1;
+  assert.throws(() => validateBackup(bad), /id/);
+  const overlong = createBackup({});
+  overlong.data.writingPacks = [{ id: 'p'.repeat(121) }];
+  overlong.counts.writingPacks = 1;
+  assert.throws(() => validateBackup(overlong), /id/);
+});
+test('写作完整备份含历史快照和记忆及摘要计数，资料库备份排除写作集合', () => {
+  const schema = require('../prototype/writing-workbench-schema.js');
+  const state = {
+    writingArticles: [backupWritingSnapshot(), backupWritingSnapshot('disabled-history', false)],
+    writingMemories: [{ id: 'm1', preference: '短句' }]
+  };
+  const backup = createBackup(state);
+  assert.deepEqual(backup.data.writingArticles, state.writingArticles.map(schema.normalizeWritingWorkspace));
+  assert.equal(backup.counts.writingArticles, 2);
+  assert.equal(getBackupSummary(backup).counts.writingMemories, 1);
+  assert.deepEqual(replaceState({}, JSON.parse(JSON.stringify(backup))).writingArticles, backup.data.writingArticles);
+  const knowledge = createBackup(state, { scope: 'knowledge-base' });
+  for (const field of ['writingArticles', 'writingMemories']) {
+    assert.equal(Object.hasOwn(knowledge.data, field), false);
+    assert.equal(Object.hasOwn(knowledge.counts, field), false);
+  }
+  assert.equal(replaceState(state, knowledge).writingArticles.length, 2);
+});
+
+test('写作导入替换合并复用白名单，冲突保留当前项，兼容旧备份', () => {
+  const backup = createBackup({});
+  backup.data.writingArticles = [backupWritingSnapshot('incoming', false)];
+  backup.data.writingArticles[0].article.apiKey = 'writing-credential-marker';
+  backup.data.writingArticles[0].rounds[0].rawWorkspace = '未知全文';
+  backup.data.writingMemories = [{ id: 'm1', preference: '短句', authorization: 'writing-credential-marker' }];
+  backup.counts.writingArticles = 1;
+  backup.counts.writingMemories = 1;
+  const current = { writingArticles: [backupWritingSnapshot('current')], writingMemories: [] };
+  const merged = mergeState(current, backup);
+  assert.deepEqual(merged.state.writingArticles.map(item => item.id), ['current', 'incoming']);
+  assert.equal(merged.added.filter(item => item.collection.startsWith('writing')).length, 2);
+  const conflict = mergeState(merged.state, backup);
+  assert.equal(conflict.conflicts.filter(item => item.collection.startsWith('writing')).length, 2);
+  for (const result of [replaceState(current, backup), merged.state]) {
+    assert.equal(JSON.stringify(result).includes('writing-credential-marker'), false);
+    assert.equal(JSON.stringify(result).includes('未知全文'), false);
+  }
+  const legacy = createBackup({});
+  delete legacy.data.writingArticles;
+  delete legacy.data.writingMemories;
+  assert.equal(validateBackup(legacy), true);
+  assert.deepEqual(replaceState(current, legacy).writingArticles, []);
+  assert.equal(mergeState(current, legacy).state.writingArticles[0].id, 'current');
+});
+
+test('写作备份校验覆盖 id、重复、数量，允许由 article.id 补齐外层 id', () => {
+  const valid = createBackup({});
+  valid.data.writingArticles = [backupWritingSnapshot()];
+  valid.data.writingMemories = [{ id: 'm1', preference: '短句' }];
+  valid.counts.writingArticles = 1;
+  valid.counts.writingMemories = 1;
+  assert.equal(validateBackup(valid), true);
+  const fallback = structuredClone(valid);
+  fallback.data.writingArticles[0].id = '';
+  assert.equal(validateBackup(fallback), true);
+  assert.equal(replaceState({}, fallback).writingArticles[0].id, 'article-1');
+  for (const field of ['writingArticles', 'writingMemories']) {
+    const invalid = structuredClone(valid);
+    invalid.data[field][0] = { id: '' };
+    assert.throws(() => validateBackup(invalid), /id/);
+    const duplicate = structuredClone(valid);
+    duplicate.data[field].push(duplicate.data[field][0]);
+    duplicate.counts[field] = 2;
+    assert.throws(() => validateBackup(duplicate), /id/);
+    const wrongCount = structuredClone(valid);
+    wrongCount.counts[field] = 99;
+    assert.throws(() => validateBackup(wrongCount), /统计/);
+  }
+  const mismatch = structuredClone(valid);
+  mismatch.data.writingArticles[0].article.id = 'different';
+  assert.throws(() => validateBackup(mismatch), /id/);
+});
+
+test('写作显式恢复经备份替换和保存重载后保留关闭保存的历史，普通保存仍拒绝新 false 记录', () => {
+  const { createEmptyState, STORAGE_KEY, saveState, loadState } = require('../prototype/storage.js');
+  const values = new Map();
+  const store = {
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { values.set(key, value); }
+  };
+  const source = { ...createEmptyState(), writingArticles: [backupWritingSnapshot('history', false)],
+    writingMemories: [{ id: 'm1', preference: '短句' }] };
+  const backup = JSON.parse(JSON.stringify(createBackup(source)));
+  const restored = replaceState({}, backup);
+  assert.deepEqual(saveState(store, restored).writingArticles, []);
+  assert.deepEqual(saveState(store, restored, { restoreWriting: 'true' }).writingArticles, []);
+  const saved = saveState(store, restored, { restoreWriting: true });
+  assert.deepEqual(saved.writingArticles, backup.data.writingArticles);
+  assert.deepEqual(saved.writingMemories, backup.data.writingMemories);
+  assert.deepEqual(loadState(store).state.writingArticles, backup.data.writingArticles);
+  const edited = structuredClone(saved);
+  edited.writingArticles[0].article.draft = '恢复后未开启保存的编辑';
+  assert.deepEqual(saveState(store, edited).writingArticles, backup.data.writingArticles);
+  const replacement = structuredClone(backup);
+  replacement.data.writingArticles[0].article.draft = '显式替换的新历史';
+  const replaced = replaceState(saved, replacement);
+  assert.equal(saveState(store, replaced, { restoreWriting: true }).writingArticles[0].article.draft, '显式替换的新历史');
+  assert.equal(loadState(store).state.writingArticles[0].article.draft, '显式替换的新历史');
+  const previous = store.getItem(STORAGE_KEY);
+  const failure = new Error('quota');
+  store.setItem = () => { throw failure; };
+  assert.throws(() => saveState(store, restored, { restoreWriting: true }), error =>
+    error.name === 'StorageWriteError' && error.cause === failure);
+  assert.equal(store.getItem(STORAGE_KEY), previous);
 });
