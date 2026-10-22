@@ -17,12 +17,24 @@
   }
 
   function createCoordinator({ schema, workflow, prompts, storage, retriever }) {
-    return function createSocialResearchCoordinator({ desktopApi, initialState, persistState } = {}) {
+    const MAX_RESEARCH_DURATION_MS = 10 * 60 * 1000;
+    return function createSocialResearchCoordinator({ desktopApi, initialState, persistState, now = () => Date.now() } = {}) {
       if (!desktopApi || typeof desktopApi.requestModel !== "function" || !desktopApi.social) {
         throw new TypeError("研究协调器需要 desktopApi.requestModel 和 desktopApi.social");
       }
       let state = storage.migrateState(initialState || storage.createEmptyState());
       const activeRuns = new Map();
+      const volatileMaterials = new Map();
+      const materialSavesInFlight = new Map();
+      const volatileXsecTokens = new Map();
+      const xsecTokenKey = (taskId, platform, noteId) => JSON.stringify([taskId, platform, noteId]);
+      const clearVolatileXsecTokens = taskId => {
+        for (const key of volatileXsecTokens.keys()) {
+          try {
+            if (JSON.parse(key)[0] === taskId) volatileXsecTokens.delete(key);
+          } catch {}
+        }
+      };
       const persistenceErrors = new WeakSet();
       const persist = () => {
         state = typeof persistState === "function" ? persistState(state) || state
@@ -30,6 +42,11 @@
             : storage.migrateState(state);
         return state;
       };
+      const interruptedTasks = state.researchTasks.map(task => workflow.recoverResearchOperations(task));
+      if (interruptedTasks.some((task, index) => task.operations.some((operation, operationIndex) => operation !== state.researchTasks[index].operations?.[operationIndex]))) {
+        state = { ...state, researchTasks: interruptedTasks };
+        persist();
+      }
       const findTask = taskId => state.researchTasks.find(task => task.id === taskId);
       const updateTask = task => {
         state = { ...state, researchTasks: state.researchTasks.map(item => item.id === task.id ? schema.createResearchTask(task) : item) };
@@ -39,37 +56,506 @@
         }
         return findTask(task.id);
       };
+      const updateOperation = (taskId, operationId, patch) => {
+        const task = findTask(taskId);
+        if (!task) return null;
+        const operations = (task.operations || []).map(operation => operation.operationId === operationId
+          ? { ...operation, ...patch, updatedAt: new Date(now()).toISOString() } : operation);
+        return updateTask({ ...task, operations });
+      };
+      const chooseOperation = (taskId, operationId, choice) => {
+        const task = findTask(taskId);
+        if (!task) throw new Error("研究任务不存在");
+        const replacementId = choice === "retry" ? createOperationId() : "";
+        return updateTask(workflow.chooseResearchOperation(task, operationId, choice, new Date(now()).toISOString(), replacementId));
+      };
+      const retryOperation = async (taskId, operationId, { onEvent } = {}) => {
+        const task = findTask(taskId);
+        if (!task) throw new Error("研究任务不存在");
+        if (activeRuns.has(taskId)) throw new Error("研究任务已有操作在运行");
+        const original = (task.operations || []).find(item => item.operationId === operationId);
+        if (!original) throw new Error("研究操作不存在");
+        const queued = chooseOperation(taskId, operationId, "retry");
+        const operation = queued.operations.find(item => item.parentOperationId === operationId && item.state === "waiting");
+        if (!operation) throw new Error("无法创建操作重试记录");
+
+        if (operation.capability === "detail" || operation.capability === "comments") {
+          const result = (queued.results || []).find(item => (operation.resultIds || []).includes(item.id)
+            || item.platform === operation.platform && String(item.contentId || "") === String(operation.contentId?.noteId || operation.contentId?.bvid || operation.contentId?.aid || ""));
+          if (!result) throw new Error("找不到该深读操作对应的搜索结果");
+          if (queued.status !== "awaiting-save") updateTask({ ...queued, status: "awaiting-save" });
+          return deepRead(taskId, [result.id], [operation.capability], { onEvent, retryOperation: operation });
+        }
+
+        if (operation.capability !== "search") throw new Error("当前操作类型暂不支持重试");
+        if (!(queued.platforms || []).includes(operation.platform)) throw new Error("操作平台不在已批准的研究计划中");
+        const profileId = schema.resolveResearchProfileId(operation.platform, operation.profileId || queued.profileId);
+        const preference = queued.connectionModes?.[operation.platform] || "auto";
+        let mode = workflow.decideConnectionMode(operation.platform, {}, preference);
+        try {
+          const checked = await desktopApi.social.check(operation.platform, { profileId });
+          if (!checked || checked.status !== "ok" || checked.ready !== true) {
+            throw Object.assign(new Error(checked?.message || "平台尚未准备好，不能重试搜索"), { code: checked?.code || "PLATFORM_NOT_READY" });
+          }
+          const latest = findTask(taskId);
+          const reserved = workflow.consumeResearchBudget(latest, { platform: operation.platform, queries: 1, pages: 1, sourceRequests: 1 });
+          updateTask({ ...latest, usage: reserved.usage, operations: latest.operations.map(item => item.operationId === operation.operationId
+            ? { ...item, state: "running", updatedAt: new Date(now()).toISOString() } : item) });
+          const response = await desktopApi.social.search(operation.platform, {
+            query: operation.query, mode, profileId,
+            maxResults: queued.budget?.maxResultsPerQuery || 5
+          });
+          if (!response || response.status !== "ok") throw Object.assign(new Error(response?.message || "搜索重试未成功"), { code: response?.code || "SEARCH_FAILED" });
+          const items = Array.isArray(response.results) ? response.results : [];
+          const normalized = retriever.dedupeResearchResults(items).map(item => schema.normalizeSocialResult({ ...item, platform: operation.platform, searchQueries: [...(item.searchQueries || []), operation.query] }));
+          const latestAfterSearch = findTask(taskId);
+          const results = retriever.dedupeResearchResults([...(latestAfterSearch.results || []), ...normalized]);
+          updateTask({ ...latestAfterSearch, status: "awaiting-save", results, resultIds: results.map(item => item.id), operations: latestAfterSearch.operations.map(item => item.operationId === operation.operationId
+            ? { ...item, state: "completed", resultIds: normalized.map(result => result.id), summary: `搜索完成，返回 ${normalized.length} 条（已按内容去重）。`, pageCursor: String(response.nextCursor ?? response.cursor ?? ""), updatedAt: new Date(now()).toISOString() } : item) });
+          return findTask(taskId);
+        } catch (error) {
+          const latest = findTask(taskId);
+          updateTask({ ...latest, operations: latest.operations.map(item => item.operationId === operation.operationId
+            ? { ...item, state: "failed", cursorInvalid: /CURSOR_(?:EXPIRED|INVALID)|INVALID_CURSOR/i.test(String(error.code || "")), errorCode: error.code || "SEARCH_FAILED", errorMessage: error.message || "搜索重试失败", updatedAt: new Date(now()).toISOString() } : item) });
+          throw error;
+        }
+      };
+      const taskDurationLimit = task => Math.min(
+        MAX_RESEARCH_DURATION_MS,
+        Math.max(1, Number(task?.budget?.maxDurationMs) || MAX_RESEARCH_DURATION_MS)
+      );
+      const taskDurationUsed = task => Math.max(0, Number(task?.usage?.durationMs) || 0);
+      const makeBudgetError = (message = "研究任务已达到 maxDurationMs") =>
+        Object.assign(new RangeError(message), { code: "budget_exceeded" });
+      const elapsedWithoutPause = (start, end, activeRun) => {
+        const finish = Math.max(start, end);
+        let pausedMs = 0;
+        for (const interval of activeRun?.pauseIntervals || []) {
+          const overlap = Math.max(0, Math.min(finish, interval.end) - Math.max(start, interval.start));
+          pausedMs += overlap;
+        }
+        if (activeRun?.pauseStartedAt != null) {
+          pausedMs += Math.max(0, finish - Math.max(start, activeRun.pauseStartedAt));
+        }
+        return Math.max(0, finish - start - pausedMs);
+      };
+      const markRunPaused = activeRun => {
+        if (!activeRun) return;
+        if (!Array.isArray(activeRun.pauseIntervals)) activeRun.pauseIntervals = [];
+        if (activeRun.pauseStartedAt == null) activeRun.pauseStartedAt = now();
+        activeRun.paused = true;
+      };
+      const resumeRun = activeRun => {
+        if (!activeRun) return;
+        if (!Array.isArray(activeRun.pauseIntervals)) activeRun.pauseIntervals = [];
+        if (activeRun.pauseStartedAt != null) {
+          activeRun.pauseIntervals.push({ start: activeRun.pauseStartedAt, end: now() });
+          activeRun.pauseStartedAt = null;
+        }
+        activeRun.paused = false;
+        if (activeRun.wakeResume) {
+          activeRun.wakeResume();
+          activeRun.wakeResume = null;
+        }
+        activeRun.resume?.();
+      };
+      const recordDuration = (taskId, elapsedMs) => {
+        if (!(elapsedMs > 0)) return findTask(taskId);
+        const latest = findTask(taskId);
+        if (!latest) return latest;
+        return updateTask({
+          ...latest,
+          usage: { ...latest.usage, durationMs: taskDurationUsed(latest) + elapsedMs }
+        });
+      };
+      const runWithinTaskBudget = async (taskId, activeRun, operation, onTimeout) => {
+        const latest = findTask(taskId);
+        const remainingMs = taskDurationLimit(latest) - taskDurationUsed(latest);
+        if (remainingMs <= 0) throw makeBudgetError();
+        const startedAt = now();
+        let timer;
+        let value;
+        let requestError;
+        let timeoutHandled = false;
+        const handleTimeout = () => {
+          if (timeoutHandled) return;
+          timeoutHandled = true;
+          try { onTimeout?.(); } catch {}
+        };
+        try {
+          value = await Promise.race([
+            Promise.resolve().then(() => operation(remainingMs)),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => {
+                handleTimeout();
+                reject(makeBudgetError());
+              }, Math.max(1, Math.ceil(remainingMs)));
+            })
+          ]);
+        } catch (error) {
+          requestError = error;
+        } finally {
+          clearTimeout(timer);
+          const elapsedMs = elapsedWithoutPause(startedAt, now(), activeRun);
+          recordDuration(taskId, elapsedMs);
+        }
+        const afterRequest = findTask(taskId);
+        const elapsedMs = taskDurationUsed(afterRequest) - taskDurationUsed(latest);
+        if (elapsedMs > remainingMs || requestError?.code === "budget_exceeded") {
+          handleTimeout();
+          throw makeBudgetError();
+        }
+        if (requestError) throw requestError;
+        return value;
+      };
+      const runWithTimeout = async (operation, timeoutMs) => {
+        let timer;
+        try {
+          return await Promise.race([
+            Promise.resolve().then(operation),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(Object.assign(new Error("模型请求超时"), { code: "MODEL_TIMEOUT" })), Math.max(1, Math.ceil(timeoutMs)));
+            })
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
       const parseModel = (value, fallback) => {
         if (value && typeof value === "object") return typeof value.text === "string" ? parseModel(value.text, fallback) : value;
         const text = typeof value === "string" ? value.trim() : "";
         if (!text) return fallback;
         try { return JSON.parse(text); } catch { return fallback; }
       };
-      const requestModel = (purpose, prompt) => desktopApi.requestModel({
+      const requestModel = (purpose, prompt, options = {}) => desktopApi.requestModel({
         messages: [{ role: "user", content: `${purpose ? `任务用途：${purpose}\n` : ""}${prompt}` }],
-        options: { purpose }
+        options: { purpose, ...options }
       });
+      const estimateInputTokenCost = messages => {
+        const encoder = new TextEncoder();
+        return 264 + messages.reduce((total, message) => total
+          + encoder.encode(String(message?.content || "")).byteLength, 0);
+      };
+      const readReportedTokenUsage = response => {
+        const usage = response?.usage;
+        const valid = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+        const total = valid(usage?.total_tokens);
+        const prompt = valid(usage?.prompt_tokens);
+        const completion = valid(usage?.completion_tokens);
+        const combined = prompt !== null && completion !== null ? prompt + completion : null;
+        if (combined !== null && !Number.isSafeInteger(combined)) return null;
+        const parts = combined !== null ? combined
+          : Math.max(prompt || 0, completion || 0);
+        if (total === null && prompt === null && completion === null) return null;
+        return Math.max(total || 0, parts);
+      };
+      const estimateResponseTokenCost = (response, messages, outputLimit) => {
+        if (response?.configured === false) return 0;
+        const reported = readReportedTokenUsage(response);
+        if (reported !== null) return reported;
+        const promptTokens = estimateInputTokenCost(messages);
+        if (response?.code) return promptTokens;
+        const text = typeof response === "string" ? response : String(response?.text || "");
+        // 无 usage 时，输入按 UTF-8 字节保守估算；输出同时受文本字节数和 max_tokens 限制。
+        const completionEstimate = Math.min(new TextEncoder().encode(text).byteLength, outputLimit);
+        return promptTokens + completionEstimate;
+      };
+      const makeAnalysisBudgetError = (message = "研究任务已达到 maxAnalysisTokens") =>
+        Object.assign(new RangeError(message), { code: "analysis_budget_exceeded" });
+      const requestModelWithinAnalysisBudget = async ({
+        purpose, prompt, budget, usedTokens = 0, timeoutMs, timeoutManagedExternally = false, onUsage
+      }) => {
+        const messages = [{ role: "user", content: `${purpose ? `任务用途：${purpose}\\n` : ""}${prompt}` }];
+        const remaining = Number(budget?.maxAnalysisTokens) - Number(usedTokens || 0);
+        const promptCost = estimateInputTokenCost(messages);
+        const outputLimit = Math.floor(remaining - promptCost);
+        if (!Number.isFinite(remaining) || outputLimit < 1) {
+          throw makeAnalysisBudgetError("剩余模型 token 预算不足以覆盖请求内容并预留输出");
+        }
+        let usageRecorded = false;
+        const recordUsageOnce = async (tokens, details = {}) => {
+          if (usageRecorded) return;
+          usageRecorded = true;
+          await onUsage?.(tokens, details);
+        };
+        let response;
+        try {
+          const request = () => desktopApi.requestModel({
+              messages,
+              options: { purpose, ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}), max_tokens: outputLimit }
+            });
+          response = timeoutManagedExternally || !Number.isFinite(timeoutMs)
+            ? await request()
+            : await runWithTimeout(request, timeoutMs);
+        } catch (error) {
+          const timedOut = error?.code === "MODEL_TIMEOUT";
+          await recordUsageOnce(timedOut ? remaining : promptCost, { estimated: true });
+          throw error;
+        }
+        const reportedTokens = readReportedTokenUsage(response);
+        const chargedTokens = reportedTokens !== null
+          ? reportedTokens
+          : response?.code === "MODEL_TIMEOUT" ? remaining : estimateResponseTokenCost(response, messages, outputLimit);
+        const estimated = response?.configured !== false && reportedTokens === null;
+        await recordUsageOnce(chargedTokens, { estimated });
+        if (chargedTokens > remaining) {
+          throw makeAnalysisBudgetError("模型返回的实际 token 用量超出剩余预算；已记录用量并停止后续请求");
+        }
+        return response;
+      };
+      const recordTaskAnalysisTokens = (taskId, tokens, { estimated = false } = {}) => {
+        if (!tokens) return findTask(taskId);
+        const latest = findTask(taskId);
+        if (!latest) return latest;
+        return updateTask(workflow.recordAnalysisTokens(latest, tokens, { estimated }));
+      };
+      const createOperationId = () => globalThis.crypto?.randomUUID?.()
+        || `operation-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const createMaterialId = () => `material-${createOperationId()}`;
+      const reportPromptInput = task => ({
+        ...task,
+        report: undefined,
+        operations: undefined,
+        transientMaterials: (task.results || []).flatMap(result => (result.materials || [])
+          .filter(material => material.status === "completed")
+          .map(material => ({
+            materialId: material.id,
+            resultId: result.id,
+            kind: material.kind,
+            summary: material.summary,
+            content: volatileMaterials.get(material.id)?.content
+          })))
+      });
+      const validateReport = (raw, task) => {
+        const generated = raw && typeof raw === "object" ? raw : {};
+        const resultsById = new Map((task.results || []).map(result => [result.id, result]));
+        const materialsById = new Map();
+        for (const result of task.results || []) {
+          for (const material of result.materials || []) {
+            if (material.status === "completed") materialsById.set(material.id, result.id);
+          }
+        }
+        const citations = [...(Array.isArray(generated.citations) ? generated.citations : [])];
+        const rawFindings = Array.isArray(generated.coreFindings) ? generated.coreFindings : [];
+        rawFindings.forEach((finding, findingIndex) => {
+          if (finding && typeof finding === "object" && Array.isArray(finding.citations)) {
+            for (const citation of finding.citations) citations.push({ ...citation, findingIndex });
+          }
+        });
+        const acceptedCitations = [];
+        for (const item of citations) {
+          if (!item || typeof item !== "object") continue;
+          const resultId = String(item.resultId || "").trim();
+          const materialId = String(item.materialId || "").trim();
+          const findingIndex = item.findingIndex;
+          if (!Number.isInteger(findingIndex) || findingIndex < 0 || findingIndex >= rawFindings.length) continue;
+          if (!resultsById.has(resultId) || materialsById.get(materialId) !== resultId) continue;
+          acceptedCitations.push({ findingIndex, resultId, materialId });
+        }
+        const resultIds = [...new Set([
+          ...(Array.isArray(generated.resultIds) ? generated.resultIds : []),
+          ...acceptedCitations.map(item => item.resultId)
+        ].map(value => String(value || "").trim()).filter(id => resultsById.has(id)))];
+        const sourceUrls = [...new Set((Array.isArray(generated.sourceUrls) ? generated.sourceUrls : [])
+          .map(value => String(value || "").trim())
+          .filter(url => [...resultsById.values()].some(result => result.url === url)))];
+        return schema.createResearchTask({
+          ...task,
+          report: { ...generated, resultIds, sourceUrls, citations: acceptedCitations }
+        }).report;
+      };
+      const createSourceRegistryError = (value, fallbackMessage) => {
+        const details = value?.error && typeof value.error === "object" ? value.error : value;
+        const code = typeof details?.code === "string" && details.code.trim()
+          ? details.code : "SOURCE_REGISTRY_FAILED";
+        const message = typeof details?.message === "string" && details.message.trim()
+          ? details.message : fallbackMessage;
+        return Object.assign(new Error(message), { code, category: "source-registry-error" });
+      };
+      const getRegisteredSocialSource = async () => {
+        const listSources = desktopApi.socialSource?.list;
+        if (typeof listSources !== "function") {
+          throw createSourceRegistryError(null, "来源登记查询不可用。");
+        }
+        let registered;
+        try {
+          registered = await listSources();
+        } catch (error) {
+          throw createSourceRegistryError(error, "来源登记查询失败。");
+        }
+        const isSourceRecord = source => source && typeof source === "object" && !Array.isArray(source)
+          && typeof source.id === "string" && Boolean(source.id.trim());
+        if (!Array.isArray(registered) || !registered.every(isSourceRecord)) {
+          throw createSourceRegistryError(registered, "来源登记查询返回无效响应。");
+        }
+        const source = registered.find(item => item.id === "mediacrawler-lite") || null;
+        if (source && (!source.capabilities || typeof source.capabilities !== "object" || Array.isArray(source.capabilities))) {
+          throw createSourceRegistryError(null, "来源登记查询返回无效响应。");
+        }
+        return source;
+      };
+      const classifySourceError = code => ({
+        CANCELLED: "cancelled",
+        MISSING_CONTENT_ID: "missing-content-id",
+        budget_exceeded: "budget-exceeded",
+        TIMEOUT: "timeout",
+        CONTENT_NOT_FOUND: "content-not-found",
+        LOGIN_EXPIRED: "login-expired",
+        RATE_LIMITED: "rate-limited",
+        MANUAL_VERIFICATION_REQUIRED: "manual-verification",
+        RUNTIME_MISSING: "environment-error",
+        RUNTIME_INSTALL_FAILED: "environment-error",
+        DEPENDENCY_ERROR: "environment-error",
+        BROWSER_MISSING: "environment-error",
+        BUDGET_EXCEEDED: "budget-exceeded",
+        ACCOUNT_RESTRICTED: "restricted",
+        IP_BLOCKED: "restricted",
+        PERMISSION_DENIED: "permission-denied",
+        UNSUPPORTED_SOURCE: "source-unavailable",
+        SOURCE_REGISTRY_FAILED: "source-registry-error",
+        INVALID_RESPONSE: "invalid-response",
+        PROTOCOL_ERROR: "invalid-response",
+        PAGE_STRUCTURE_CHANGED: "page-changed"
+      }[code] || "source-error");
+      const reportedSourceRequestCount = (response, maxRequests) => {
+        const budget = response?.budget;
+        if (!budget || !Number.isSafeInteger(budget.usedRequests) || budget.usedRequests < 0
+          || budget.usedRequests > maxRequests || !Number.isSafeInteger(budget.unknownRequests)
+          || budget.unknownRequests < 0 || budget.unknownRequests > budget.usedRequests) return null;
+        return budget.usedRequests;
+      };
+      const commentSourceMetadata = data => {
+        const containers = [data, data?.data].filter(value => value && typeof value === "object");
+        const find = keys => {
+          for (const container of containers) {
+            for (const key of keys) {
+              if (Object.prototype.hasOwnProperty.call(container, key) && container[key] != null) return container[key];
+            }
+          }
+          return null;
+        };
+        const sortOrder = find(["sortOrder", "sort_order"]);
+        const totalCount = find(["totalCount", "total_count", "commentCount", "comment_count", "total"]);
+        return {
+          sortOrder: typeof sortOrder === "string" && sortOrder.trim() ? sortOrder : "unknown",
+          totalCount: totalCount !== null && totalCount !== undefined && totalCount !== ""
+            && Number.isSafeInteger(Number(totalCount)) && Number(totalCount) >= 0
+            ? Number(totalCount) : null
+        };
+      };
+      const extractCommentItems = data => {
+        const candidates = [
+          data?.comments, data?.replies, data?.items,
+          data?.data?.comments, data?.data?.replies, data?.data?.items
+        ];
+        return candidates.find(Array.isArray) || [];
+      };
+      const stripNestedReplies = item => {
+        const copy = { ...item };
+        for (const key of ["replies", "subReplies", "sub_replies", "subComments", "sub_comments", "replyList", "children"]) {
+          delete copy[key];
+        }
+        return copy;
+      };
+      const summarizeDetail = data => {
+        return "已取得内容详情；原文仅保留在本次运行内存。";
+      };
+      const encodeBase64 = value => {
+        const bytes = new TextEncoder().encode(value);
+        let binary = "";
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
+        return { content: btoa(binary), byteLength: bytes.byteLength };
+      };
       const createPlan = async input => {
         const taskInput = { ...input };
-        const generated = parseModel(await requestModel("plan", prompts.buildResearchPlanPrompt(taskInput)), {});
+        const hasExplicitPlatforms = Object.prototype.hasOwnProperty.call(taskInput, "platforms");
+        if (!hasExplicitPlatforms) throw new TypeError("至少选择一个国内社媒平台");
+        const platforms = workflow.assertDomesticPlatformList(taskInput.platforms);
+        const requestedPlanBudget = schema.normalizeResearchPlan({
+          budget: taskInput.budget || taskInput.plan?.budget
+        }).budget;
+        const planningLimitMs = Math.min(MAX_RESEARCH_DURATION_MS, requestedPlanBudget.maxDurationMs);
+        const planningStartedAt = now();
+        let planningAnalysisTokens = 0;
+        let planningAnalysisTokensEstimated = false;
+        let modelResponse;
+        let planningError = null;
+        try {
+          modelResponse = await requestModelWithinAnalysisBudget({
+            purpose: "plan",
+            prompt: prompts.buildResearchPlanPrompt(taskInput),
+            budget: requestedPlanBudget,
+            timeoutMs: planningLimitMs,
+            onUsage: (tokens, details = {}) => {
+              planningAnalysisTokens += tokens;
+              planningAnalysisTokensEstimated ||= details.estimated === true;
+            }
+          });
+        } catch (error) {
+          planningError = {
+            code: error.code || "MODEL_REQUEST_FAILED",
+            message: `${error.message || "研究计划请求失败"}；已改用默认计划，请核对后确认。`
+          };
+          modelResponse = { code: planningError.code, message: planningError.message, configured: true };
+        }
+        const planningElapsedMs = Math.max(0, now() - planningStartedAt);
+        if (planningElapsedMs > planningLimitMs || modelResponse?.code === "MODEL_TIMEOUT") {
+          planningError = { code: "MODEL_TIMEOUT", message: "研究计划请求超出 maxDurationMs，已使用默认计划继续；模型预算已预留。" };
+          modelResponse = { code: "MODEL_TIMEOUT", message: planningError.message, configured: true };
+        }
+        if (modelResponse?.code && !planningError) {
+          planningError = { code: modelResponse.code, message: modelResponse.message || "模型未能生成研究计划，已使用默认计划。" };
+        }
+        const generated = modelResponse?.code ? {} : parseModel(modelResponse, {});
         const generatedFields = ["objective", "researchType", "platformRoles", "timeRange", "region", "audience", "filters", "expectedResultCount", "evidenceRequirements", "stopConditions"];
         const generatedPlan = Object.fromEntries(generatedFields
           .filter(field => Object.prototype.hasOwnProperty.call(generated, field))
           .map(field => [field, generated[field]]));
+        const validatePlanRoles = (roles, label) => {
+          if (!Array.isArray(roles)) throw new TypeError(`${label}必须是平台角色数组`);
+          for (const role of roles) {
+            const [rolePlatform] = workflow.assertDomesticPlatformList([role?.platform]);
+            if (!platforms.includes(rolePlatform)) throw new TypeError(`${label}包含未选择的平台：${rolePlatform}`);
+          }
+        };
+        if (Object.prototype.hasOwnProperty.call(generated, "platforms")) {
+          const generatedPlatforms = workflow.assertDomesticPlatformList(generated.platforms);
+          if (generatedPlatforms.some(platform => !platforms.includes(platform))) {
+            throw new TypeError("模型计划包含未选择的平台");
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(generated, "platformRoles")) validatePlanRoles(generated.platformRoles, "模型平台角色");
+        if (Object.prototype.hasOwnProperty.call(taskInput, "platformRoles")) validatePlanRoles(taskInput.platformRoles, "用户平台角色");
+        if (Object.prototype.hasOwnProperty.call(taskInput.plan || {}, "platformRoles")) validatePlanRoles(taskInput.plan.platformRoles, "用户计划平台角色");
         const planned = workflow.createResearchPlan({
           ...taskInput,
           topic: taskInput.topic,
           template: taskInput.template,
-          platforms: taskInput.platforms || generated.platforms,
-          budget: taskInput.budget || generated.budget,
+          platforms,
+          budget: requestedPlanBudget,
           queries: taskInput.queries || generated.queries
         });
         const userPlan = taskInput.plan && typeof taskInput.plan === "object" ? taskInput.plan : {};
+        const boundedBudget = schema.normalizeResearchPlan({
+          budget: taskInput.budget || userPlan.budget || generated.budget || planned.plan.budget
+        }).budget;
+        boundedBudget.maxDurationMs = Math.min(MAX_RESEARCH_DURATION_MS, boundedBudget.maxDurationMs);
         const userPlanFields = Object.fromEntries(generatedFields
           .filter(field => Object.prototype.hasOwnProperty.call(taskInput, field))
           .map(field => [field, taskInput[field]]));
         const task = {
           ...planned,
+          budget: boundedBudget,
+          usage: {
+            ...planned.usage,
+            durationMs: planningElapsedMs,
+            analysisTokens: planningAnalysisTokens,
+            analysisTokensEstimated: planningAnalysisTokensEstimated
+          },
+          planError: planningError?.message || "",
+          planErrorCode: planningError?.code || "",
           profileId: taskInput.profileId,
           plan: schema.normalizeResearchPlan({
             ...planned.plan,
@@ -77,9 +563,10 @@
             ...userPlanFields,
             ...userPlan,
             queries: taskInput.queries || userPlan.queries || generated.queries || planned.plan.queries,
-            budget: taskInput.budget || userPlan.budget || generated.budget || planned.plan.budget
+            budget: boundedBudget
           })
         };
+        validatePlanRoles(task.plan.platformRoles, "最终计划平台角色");
         state = { ...state, researchTasks: [...state.researchTasks, task] };
         persist();
         return task;
@@ -87,6 +574,7 @@
       const confirmPlan = async taskId => {
         const task = findTask(taskId);
         if (!task) throw new Error("研究任务不存在");
+        workflow.assertDomesticPlatformList(task.platforms);
         return updateTask(workflow.approveResearchPlan(task));
       };
       const cancel = taskId => {
@@ -95,10 +583,19 @@
         const activeRun = activeRuns.get(taskId);
         if (activeRun) {
           activeRun.cancelRequested = true;
-          activeRun.paused = false;
-          activeRun.resume();
-          return task;
+          clearVolatileXsecTokens(taskId);
+          resumeRun(activeRun);
+          if (activeRun.kind === "deep-read" && activeRun.currentAction && typeof desktopApi.socialSource?.cancel === "function") {
+            desktopApi.socialSource.cancel({
+              sourceId: "mediacrawler-lite",
+              platform: activeRun.currentAction.platform,
+              profileId: activeRun.currentAction.profileId,
+              taskId
+            }).catch(() => {});
+          }
+          return findTask(taskId) || task;
         }
+        clearVolatileXsecTokens(taskId);
         if (task.status === "awaiting-plan-confirmation") return updateTask(workflow.rejectResearchPlan(task, "用户取消"));
         const cancelled = workflow.transitionResearchTask(task, { type: "cancel" });
         return updateTask({ ...cancelled, rejectionReason: "用户取消" });
@@ -106,149 +603,290 @@
       const pause = taskId => {
         const activeRun = activeRuns.get(taskId);
         if (!activeRun) throw new Error("研究任务当前未运行");
-        activeRun.paused = true;
+        markRunPaused(activeRun);
         return findTask(taskId);
       };
       const resume = taskId => {
         const activeRun = activeRuns.get(taskId);
         if (!activeRun) throw new Error("研究任务当前未运行");
-        activeRun.paused = false;
-        activeRun.resume();
+        resumeRun(activeRun);
         return findTask(taskId);
       };
       const run = async (taskId, { onEvent } = {}) => {
         const current = findTask(taskId);
         if (!current) throw new Error("研究任务不存在");
+        workflow.assertDomesticPlatformList(current.platforms);
         if (activeRuns.has(taskId)) throw new Error("研究任务已在运行");
         if (current.status !== "awaiting-platform-preparation") throw new Error("研究任务不在可运行的准备状态");
         let wakeResume;
         const activeRun = {
+          kind: "search",
           paused: false,
           cancelRequested: false,
+          pauseIntervals: [],
+          pauseStartedAt: null,
           resume: () => { if (wakeResume) { wakeResume(); wakeResume = null; } },
           emit: event => { if (typeof onEvent === "function") { try { onEvent(event); } catch {} } }
         };
         activeRuns.set(taskId, activeRun);
         const checkpoint = async () => {
-          if (activeRun.cancelRequested) return false;
           while (activeRun.paused && !activeRun.cancelRequested) {
             await new Promise(resolve => { wakeResume = resolve; });
           }
           return !activeRun.cancelRequested;
         };
         const finishCancelled = taskToCancel => {
-          const cancelled = workflow.transitionResearchTask(taskToCancel, { type: "cancel" });
-          return updateTask({
-            ...cancelled,
-            results: [], resultIds: [], report: null, reportId: "",
-            failureReason: "用户取消（在当前请求完成后生效，未完成结果已丢弃）"
-          });
+          const latest = findTask(taskId) || taskToCancel;
+          const cancelled = workflow.transitionResearchTask(latest, { type: "cancel" });
+          clearVolatileXsecTokens(taskId);
+          return updateTask({ ...cancelled, rejectionReason: "用户取消" });
         };
         let task = current;
         const prepared = [];
-        const platformErrors = {};
+        const platformErrors = { ...(current.platformErrors || {}) };
         const capabilities = {};
-        try {
-        for (const platform of task.platforms) {
-          if (!await checkpoint()) return finishCancelled(task);
-          try {
-            const capability = await desktopApi.social.check(platform, task.profileId || task.id);
-            if (capability && (capability.status === "failed" || capability.status === "restricted" || capability.status === "not-ready")) throw new Error(`${platform} 平台未准备完成`);
-            capabilities[platform] = capability || {};
-            prepared.push(platform);
-          } catch (error) {
-            platformErrors[platform] = { message: error.message || "平台检查失败" };
+        const persistLatest = patch => {
+          task = updateTask({ ...(findTask(taskId) || task), ...patch });
+          return task;
+        };
+        const persistSearchSuccess = (platform, profileId) => {
+          const previous = state.platformConnections?.[platform] || {};
+          const sameProfile = previous.profileId === profileId;
+          const now = Date.now();
+          const previousTime = sameProfile ? Date.parse(previous.lastSuccessfulSearchAt || "") : NaN;
+          const lastSuccessfulSearchAt = new Date(Number.isFinite(previousTime) ? Math.max(now, previousTime + 1) : now).toISOString();
+          state = {
+            ...state,
+            platformConnections: {
+              ...(state.platformConnections || {}),
+              [platform]: { ...previous, platform, profileId, searchVerified: true, lastSuccessfulSearchAt }
+            }
+          };
+          try { persist(); } catch (error) {
+            if (error && (typeof error === "object" || typeof error === "function")) persistenceErrors.add(error);
+            throw error;
           }
-        }
-        if (!await checkpoint()) return finishCancelled(task);
-        if (prepared.length) task = workflow.transitionResearchTask(task, { type: "prepared", platforms: prepared });
-        if (prepared.length === 0 || task.platforms.length === 0) {
-          task = workflow.transitionResearchTask(task, { type: "preparation_failed" });
-          return {
-            ...updateTask({
-              ...task,
+          activeRun.emit({ type: "search-verified", taskId, platform, profileId, lastSuccessfulSearchAt });
+        };
+        try {
+          for (const platform of task.platforms) {
+            if (!await checkpoint()) return finishCancelled(task);
+            try {
+              const profileId = schema.resolveResearchProfileId(platform, task.profileId);
+              const checkResult = await runWithinTaskBudget(taskId, activeRun, timeoutMs => Promise.allSettled([
+                desktopApi.social.check(platform, { profileId, timeoutMs }),
+                typeof desktopApi.social.getStatus === "function" ? desktopApi.social.getStatus(platform) : Promise.resolve(null)
+              ]));
+              if (activeRun.cancelRequested) return finishCancelled(findTask(taskId) || task);
+              const checkFailure = checkResult[0].status === "rejected" ? checkResult[0].reason : null;
+              const capability = checkResult[0].status === "fulfilled" ? checkResult[0].value || {} : {};
+              const status = checkResult[1].status === "fulfilled" ? checkResult[1].value || {} : {};
+              const apiConfigured = capability.apiConfigured === true || status.apiConfigured === true;
+              const browserReady = capability.status === "ok" && capability.ready === true;
+              if (!browserReady && !apiConfigured) {
+                const error = new Error(capability.message || checkFailure?.message || status.message || "平台检查未通过；需要 status 为 ok 且 ready 为 true，或明确配置 API");
+                error.code = capability.code || capability.errorCode || checkFailure?.code || status.code || "PLATFORM_NOT_READY";
+                throw error;
+              }
+              capabilities[platform] = { ...capability, apiConfigured };
+              prepared.push(platform);
+              delete platformErrors[platform];
+            } catch (error) {
+              if (error && (typeof error === "object" || typeof error === "function") && persistenceErrors.has(error)) throw error;
+              platformErrors[platform] = {
+                message: error.message || "平台检查失败",
+                code: error.code || "CHECK_FAILED"
+              };
+              if (["budget_exceeded", "BUDGET_EXCEEDED"].includes(error.code)) break;
+            }
+            task = persistLatest({ platformErrors: { ...platformErrors } });
+          }
+          task = findTask(taskId) || task;
+          if (!await checkpoint()) return finishCancelled(task);
+          if (prepared.length) {
+            task = workflow.transitionResearchTask(task, { type: "prepared", platforms: prepared });
+            task = updateTask(task);
+          }
+          if (prepared.length === 0) {
+            task = workflow.transitionResearchTask(task, { type: "preparation_failed" });
+            return updateTask({ ...task, platformErrors, failureReason: "没有可用平台，研究未启动" });
+          }
+          task = updateTask(workflow.startResearchTask(task));
+          let results = [...(task.results || [])];
+          let stopAllPlatforms = false;
+
+          for (const platform of prepared) {
+            if (!await checkpoint()) return finishCancelled(task);
+            const preference = task.connectionModes?.[platform] || "auto";
+            const capability = capabilities[platform] || {};
+            let mode;
+            try {
+              mode = workflow.decideConnectionMode(platform, capability, preference);
+              activeRun.emit({ type: "platform-start", taskId, platform, mode, resultCount: results.length });
+              const roleQueries = task.plan.platformRoles.find(item => item.platform === platform)?.queries || [];
+              const queries = [...new Set((roleQueries.length ? roleQueries : task.queries.length ? task.queries : task.plan.queries).slice(0, task.budget?.maxQueriesPerPlatform || 1))];
+              for (const query of queries) {
+                if (!await checkpoint()) return finishCancelled(task);
+                const issueSearchRequest = async requestMode => {
+                  const latest = findTask(taskId) || task;
+                  if (taskDurationLimit(latest) - taskDurationUsed(latest) <= 0) throw makeBudgetError("自动搜索耗时已达到 maxDurationMs");
+                  const sourceReserved = workflow.consumeResearchBudget(latest, { platform, queries: 1, pages: 1, sourceRequests: 1 });
+                  task = updateTask(sourceReserved);
+                  const operationId = createOperationId();
+                  const operation = schema.normalizeResearchOperation({
+                    operationId, planVersion: task.planVersion, platform, profileId: schema.resolveResearchProfileId(platform, task.profileId),
+                    capability: "search", query, state: "running", attempt: 1,
+                    budget: { queries: 1, pages: 1, sourceRequests: 1 }, createdAt: new Date(now()).toISOString()
+                  });
+                  task = updateTask({ ...task, operations: [...(task.operations || []), operation] });
+                  activeRun.emit({ type: "query-start", taskId, platform, mode: requestMode, query, resultCount: results.length });
+                  try {
+                    const response = await runWithinTaskBudget(taskId, activeRun, timeoutMs => desktopApi.social.search(platform, {
+                      query,
+                      mode: requestMode,
+                      maxResults: task.budget?.maxResultsPerQuery || 5,
+                      profileId: schema.resolveResearchProfileId(platform, task.profileId),
+                      timeoutMs
+                    }));
+                    task = findTask(taskId) || task;
+                    if (activeRun.cancelRequested) updateOperation(taskId, operationId, { state: "unknown", errorCode: "CANCELLED", errorMessage: "取消后收到的响应已丢弃。" });
+                    return { response };
+                  } catch (error) {
+                    updateOperation(taskId, operationId, { state: activeRun.cancelRequested ? "unknown" : "failed", errorCode: error.code || "SEARCH_FAILED", errorMessage: error.message || "搜索失败" });
+                    return { error };
+                  }
+                };
+
+                let request = await issueSearchRequest(mode);
+                if (activeRun.cancelRequested) return finishCancelled(findTask(taskId) || task);
+                if (request.cancelled) return finishCancelled(findTask(taskId) || task);
+                const fallbackInput = request.error
+                  ? { status: "error", code: request.error.code, message: request.error.message, error: request.error.message }
+                  : request.response;
+                if (preference === "auto" && mode === "api"
+                  && !["budget_exceeded", "BUDGET_EXCEEDED"].includes(request.error?.code)
+                  && workflow.shouldFallbackToBrowser(fallbackInput, { ...capability, preference })) {
+                  mode = "browser";
+                  request = await issueSearchRequest(mode);
+                  if (activeRun.cancelRequested) return finishCancelled(findTask(taskId) || task);
+                  if (request.cancelled) return finishCancelled(findTask(taskId) || task);
+                }
+                if (request.error) throw request.error;
+                const response = request.response;
+                if (!response || response.status !== "ok") {
+                  throw Object.assign(new Error(response?.message || "平台搜索响应未成功"), {
+                    code: response?.code || response?.errorCode || (response?.status && response.status !== "error" ? response.status : "SEARCH_FAILED")
+                  });
+                }
+                const items = Array.isArray(response.results) ? response.results : [];
+                const retrievalMethod = response.retrievalMethod || (mode === "browser" ? "browser" : "api");
+                const normalized = retriever.dedupeResearchResults(items).map(item => {
+                  const normalizedResult = schema.normalizeSocialResult({
+                    ...item,
+                    platform,
+                    retrievalMethod,
+                    searchQueries: [...(item.searchQueries || []), query]
+                  });
+                  const rawContentId = schema.resolveDomesticContentId({ ...item, platform });
+                  const transientToken = rawContentId?.xsecToken || item?.volatileAccess?.xsecToken;
+                  const noteId = rawContentId?.noteId || (platform === "xiaohongshu" ? normalizedResult.contentId : "");
+                  if (platform === "xiaohongshu" && noteId && typeof transientToken === "string" && transientToken) {
+                    volatileXsecTokens.set(xsecTokenKey(taskId, platform, noteId), transientToken);
+                  }
+                  return normalizedResult;
+                });
+                results = retriever.dedupeResearchResults([...(findTask(taskId)?.results || results), ...normalized]);
+                task = persistLatest({ results, resultIds: results.map(item => item.id) });
+                const completedSearch = [...(task.operations || [])].reverse().find(operation => operation.platform === platform && operation.capability === "search" && operation.query === query && operation.state === "running");
+                if (completedSearch) updateOperation(taskId, completedSearch.operationId, { state: "completed", resultIds: normalized.map(item => item.id), summary: `搜索完成，返回 ${normalized.length} 条（已按内容去重）。`, pageCursor: String(response.nextCursor || response.cursor || "") });
+                persistSearchSuccess(platform, schema.resolveResearchProfileId(platform, task.profileId));
+                activeRun.emit({ type: "result-count", taskId, platform, mode, query, resultCount: results.length });
+              }
+              activeRun.emit({ type: "platform-finish", taskId, platform, mode, resultCount: results.length });
+            } catch (error) {
+              if (error && (typeof error === "object" || typeof error === "function") && persistenceErrors.has(error)) throw error;
+              const errorPlatform = error.platform || platform;
+              platformErrors[errorPlatform] = { message: error.message || "平台执行失败", code: error.code || "SEARCH_FAILED" };
+              task = persistLatest({ platformErrors: { ...platformErrors }, results, resultIds: results.map(item => item.id) });
+              if (["budget_exceeded", "BUDGET_EXCEEDED"].includes(error.code)
+                && !String(error.message || "").startsWith("平台 ")) {
+                stopAllPlatforms = true;
+              }
+            }
+            if (stopAllPlatforms) break;
+          }
+          if (!await checkpoint()) return finishCancelled(findTask(taskId) || task);
+          const beforeReport = findTask(taskId) || task;
+          if (taskDurationLimit(beforeReport) - taskDurationUsed(beforeReport) <= 0) {
+            throw makeBudgetError("研究时长预算已耗尽，未发起报告请求");
+          }
+          activeRun.emit({ type: "report-start", taskId, resultCount: results.length });
+          if (!await checkpoint()) return finishCancelled(findTask(taskId) || task);
+          let reportRaw;
+          try {
+            const reportTask = { ...task, results };
+            const analysisTokensRemaining = Math.max(0, task.budget.maxAnalysisTokens - task.usage.analysisTokens);
+            let analysisChargeRecorded = false;
+            const chargeAnalysisTokens = (tokens, details = {}) => {
+              if (analysisChargeRecorded) return findTask(taskId);
+              analysisChargeRecorded = true;
+              return recordTaskAnalysisTokens(taskId, tokens, details);
+            };
+            reportRaw = await runWithinTaskBudget(taskId, activeRun, timeoutMs => requestModelWithinAnalysisBudget({
+              purpose: "report",
+              prompt: prompts.buildResearchReportPrompt(reportPromptInput(reportTask), results),
+              budget: task.budget,
+              usedTokens: task.usage.analysisTokens,
+              timeoutMs,
+              timeoutManagedExternally: true,
+              onUsage: chargeAnalysisTokens
+            }), () => chargeAnalysisTokens(analysisTokensRemaining, { estimated: true }));
+            if (reportRaw?.code) {
+              throw Object.assign(new Error(reportRaw.message || "报告模型请求失败"), { code: reportRaw.code });
+            }
+          } catch (error) {
+            if (activeRun.cancelRequested) return finishCancelled(findTask(taskId) || task);
+            const latest = findTask(taskId) || task;
+            const failed = workflow.transitionResearchTask(latest, { type: "partial_failure" });
+            clearVolatileXsecTokens(taskId);
+            return updateTask({
+              ...failed,
+              results: latest.results || results,
+              resultIds: latest.resultIds || results.map(item => item.id),
               platformErrors,
-              failureReason: "没有可用平台，研究未启动"
-            }),
+              reportError: error.message || "研究报告生成失败",
+              reportErrorCode: error.code || ""
+            });
+          }
+          if (activeRun.cancelRequested) return finishCancelled(findTask(taskId) || task);
+          const latest = findTask(taskId) || task;
+          const generatedReport = parseModel(reportRaw, { summary: "", resultIds: results.map(item => item.id) });
+          const errorNotes = Object.entries(platformErrors).map(([name, error]) => `${name} 平台执行失败，需核验：${error.message}`);
+          const verificationItems = Array.isArray(generatedReport.needsVerification)
+            ? generatedReport.needsVerification
+            : generatedReport.needsVerification ? [generatedReport.needsVerification] : [];
+          const normalizedReport = validateReport({
+            ...generatedReport,
+            needsVerification: [...verificationItems, ...errorNotes]
+          }, { ...latest, results: latest.results || results });
+          let finished = workflow.transitionResearchTask(latest, "report_ready");
+          finished = workflow.transitionResearchTask(finished, "request_save");
+          finished = {
+            ...finished,
+            results: latest.results || results,
+            resultIds: latest.resultIds || results.map(item => item.id),
+            report: normalizedReport,
+            reportId: `${finished.id}-report`,
             platformErrors
           };
-        }
-        task = workflow.startResearchTask(task);
-        updateTask(task);
-        const results = [];
-        for (const platform of prepared) {
-          if (!await checkpoint()) return finishCancelled(task);
-          const preference = task.connectionModes?.[platform] || "auto";
-          const capability = capabilities[platform] || (task.capabilities || []).find(item => item.platform === platform) || {};
-          let mode;
-          try {
-            mode = workflow.decideConnectionMode(platform, capability, preference);
-            activeRun.emit({ type: "platform-start", taskId, platform, mode, resultCount: results.length });
-            const roleQueries = task.plan.platformRoles.find(item => item.platform === platform)?.queries || [];
-            const queries = [...new Set((roleQueries.length ? roleQueries : task.queries.length ? task.queries : task.plan.queries).slice(0, task.budget?.maxQueriesPerPlatform || 1))];
-            for (const query of queries) {
-              if (!await checkpoint()) return finishCancelled(task);
-              activeRun.emit({ type: "query-start", taskId, platform, mode, query, resultCount: results.length });
-              let response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
-              if (preference === "auto" && mode === "api" && workflow.shouldFallbackToBrowser(response, { preference, minimumResults: 1 })) {
-                mode = "browser";
-                response = await desktopApi.social.search(platform, { query, mode, maxResults: task.budget?.maxResultsPerQuery || 5, profileId: task.profileId || task.id });
-              }
-              if (activeRun.cancelRequested) return finishCancelled(task);
-              if (response?.status === "error") throw Object.assign(new Error(response.message || "平台搜索失败"), { code: response.code });
-              const items = Array.isArray(response) ? response : response?.results || [];
-              const retrievalMethod = response?.retrievalMethod || (mode === "browser" ? "browser" : mode === "api" ? "api" : "browser");
-              const normalized = retriever.dedupeResearchResults(items).map(item => schema.normalizeSocialResult({ ...item, platform, retrievalMethod, searchQueries: [...(item.searchQueries || []), query] }));
-              results.push(...normalized);
-              task = workflow.consumeResearchBudget(task, { platform, queries: 1, pages: 1, details: normalized.length });
-              updateTask({ ...task, results, resultIds: results.map(item => item.id) });
-              activeRun.emit({ type: "result-count", taskId, platform, mode, query, resultCount: results.length });
-            }
-            activeRun.emit({ type: "platform-finish", taskId, platform, mode, resultCount: results.length });
-          } catch (error) {
-            if (error.code === "budget_exceeded") throw error;
-            platformErrors[platform] = { message: error.message || "平台执行失败" };
-          }
-        }
-        if (!await checkpoint()) return finishCancelled(task);
-        activeRun.emit({ type: "report-start", taskId, resultCount: results.length });
-        if (!await checkpoint()) return finishCancelled(task);
-        let reportRaw;
-        try {
-          reportRaw = await requestModel("report", prompts.buildResearchReportPrompt({ ...task, results }, results));
-        } catch (error) {
-          if (activeRun.cancelRequested) return finishCancelled(findTask(taskId) || task);
-          task = workflow.transitionResearchTask(task, { type: "partial_failure" });
-          return updateTask({
-            ...task,
-            results,
-            resultIds: results.map(item => item.id),
-            platformErrors,
-            reportError: error.message || "研究报告生成失败",
-            reportErrorCode: error.code || ""
-          });
-        }
-        if (!await checkpoint()) return finishCancelled(task);
-        const generatedReport = parseModel(reportRaw, { summary: "", resultIds: results.map(item => item.id) });
-        const errorNotes = Object.entries(platformErrors).map(([platform, error]) => `${platform} 平台执行失败，需核验：${error.message}`);
-        const verificationItems = Array.isArray(generatedReport.needsVerification)
-          ? generatedReport.needsVerification
-          : generatedReport.needsVerification ? [generatedReport.needsVerification] : [];
-        const normalizedReport = schema.createResearchTask({
-          ...task,
-          results,
-          report: { ...generatedReport, needsVerification: [...verificationItems, ...errorNotes] }
-        }).report;
-        task = workflow.transitionResearchTask(task, "report_ready");
-        task = workflow.transitionResearchTask(task, "request_save");
-        task = { ...task, results, resultIds: results.map(item => item.id), report: normalizedReport, reportId: `${task.id}-report`, platformErrors };
-        return { ...updateTask(task), platformErrors };
+          return { ...updateTask(finished), platformErrors };
         } catch (error) {
           if (error && (typeof error === "object" || typeof error === "function") && persistenceErrors.has(error)) throw error;
           const latest = findTask(taskId);
-          if (activeRun.cancelRequested && latest?.status === "searching") return finishCancelled(latest);
+          if (activeRun.cancelRequested && latest && ["awaiting-platform-preparation", "searching"].includes(latest.status)) return finishCancelled(latest);
           if (latest?.status === "searching") {
             const failed = workflow.transitionResearchTask(latest, { type: "partial_failure" });
+            clearVolatileXsecTokens(taskId);
             return updateTask({
               ...failed,
               results: latest.results || [],
@@ -258,10 +896,429 @@
               reportErrorCode: error.code || ""
             });
           }
+          if (latest?.status === "awaiting-platform-preparation") {
+            const errors = { ...platformErrors };
+            const name = error.platform || "unknown";
+            errors[name] = { message: error.message || "平台检查失败", code: error.code || "CHECK_FAILED" };
+            const failed = workflow.transitionResearchTask(latest, { type: "preparation_failed" });
+            return updateTask({ ...failed, platformErrors: errors, failureReason: "没有可用平台，研究未启动" });
+          }
           throw error;
         } finally {
           activeRuns.delete(taskId);
         }
+      };
+      const deepRead = async (taskId, resultIds, requestedActions = ["detail", "comments"], { onEvent, retryOperation: retryContext } = {}) => {
+        const initial = findTask(taskId);
+        if (!initial) throw new Error("研究任务不存在");
+        if (initial.status !== "awaiting-save") throw new Error("深读仅能在搜索报告完成后执行");
+        if (activeRuns.has(taskId)) throw new Error("研究任务已有操作在运行");
+        if (typeof desktopApi.socialSource?.run !== "function") throw new Error("当前桌面 API 未提供已登记来源动作");
+        const selectedIds = [...new Set(Array.isArray(resultIds) ? resultIds.map(String) : [])];
+        const actions = [...new Set(Array.isArray(requestedActions) ? requestedActions : [])]
+          .filter(action => action === "detail" || action === "comments");
+        if (!selectedIds.length || !actions.length) throw new TypeError("请先选择结果和深读动作");
+        let wakeDeepReadResume;
+        const activeRun = {
+          kind: "deep-read", cancelRequested: false, currentAction: null,
+          pauseIntervals: [], pauseStartedAt: null,
+          resume: () => { if (wakeDeepReadResume) { wakeDeepReadResume(); wakeDeepReadResume = null; } },
+          emit: event => { if (typeof onEvent === "function") { try { onEvent(event); } catch {} } }
+        };
+        activeRuns.set(taskId, activeRun);
+        const checkpoint = async () => {
+          while (activeRun.paused && !activeRun.cancelRequested) {
+            await new Promise(resolve => { wakeDeepReadResume = resolve; });
+          }
+          return !activeRun.cancelRequested;
+        };
+        const persistMaterial = (resultId, metadata) => {
+          const latest = findTask(taskId);
+          const material = schema.normalizeResearchMaterial(metadata, resultId);
+          const results = (latest.results || []).map(result => result.id !== resultId ? result : {
+            ...result,
+            materials: [...(result.materials || []).filter(item => item.id !== material.id), material]
+          });
+          return updateTask({ ...latest, results });
+        };
+        const failedMetadata = (result, action, contentId, source, code, message, status = "failed", budgetReserved = false, errorCategory) => ({
+          id: createMaterialId(),
+          resultId: result.id,
+          kind: action,
+            contentId: contentId?.noteId || contentId?.bvid || contentId?.aid || contentId?.postId || contentId?.answerId || contentId?.articleId || "",
+          sourceId: "mediacrawler-lite",
+          sourceVersion: source?.version || "unknown",
+          operationId: createOperationId(),
+          connectionMethod: "local-process",
+          acquisitionMethod: "platform-interface",
+          capturedAt: new Date().toISOString(),
+          itemCount: 0,
+          sortOrder: action === "comments" ? "unknown" : "unknown",
+          sourceType: "unknown",
+          language: "unknown",
+          status,
+          summary: "",
+          truncated: false,
+          errorCategory: errorCategory || classifySourceError(code),
+          errorCode: code || "SOURCE_UNAVAILABLE",
+          errorMessage: message || "深读未完成",
+          budgetReserved
+        });
+        let source = null;
+        let sourceRegistryError = null;
+        try { source = await getRegisteredSocialSource(); } catch (error) { sourceRegistryError = error; }
+        const sourcePlatforms = source?.capabilities || {};
+        let stopForBudget = false;
+        try {
+          for (const resultId of selectedIds) {
+            await checkpoint();
+            const current = findTask(taskId);
+            const result = current.results.find(item => item.id === resultId);
+            if (!result) continue;
+            const resolvedContentId = schema.resolveDomesticContentId(result);
+            const xsecToken = result.platform === "xiaohongshu" && resolvedContentId?.noteId
+              ? volatileXsecTokens.get(xsecTokenKey(taskId, result.platform, resolvedContentId.noteId))
+              : "";
+            const contentId = xsecToken ? { ...resolvedContentId, xsecToken } : resolvedContentId;
+            const platformAllowed = Array.isArray(sourcePlatforms[result.platform]);
+            const sourceVersion = source?.version || "unknown";
+            let detailsReserved = (result.materials || []).some(item => item.budgetReserved);
+            for (const action of actions) {
+              await checkpoint();
+              if (activeRun.cancelRequested) {
+                persistMaterial(result.id, failedMetadata(result, action, contentId, source, "CANCELLED", "用户取消了深读动作。", "cancelled", detailsReserved));
+                continue;
+              }
+              if (sourceRegistryError) {
+                persistMaterial(result.id, failedMetadata(
+                  result, action, contentId, source,
+                  sourceRegistryError.code || "SOURCE_REGISTRY_FAILED",
+                  sourceRegistryError.message || "来源登记查询失败。",
+                  "failed", detailsReserved, sourceRegistryError.category || "source-registry-error"
+                ));
+                continue;
+              }
+              if (!platformAllowed || !sourcePlatforms[result.platform].includes(action)) {
+                persistMaterial(result.id, failedMetadata(result, action, contentId, source, "UNSUPPORTED_SOURCE", "该平台或动作未在已登记来源能力中启用。", "unavailable", detailsReserved));
+                continue;
+              }
+              if (!contentId) {
+                persistMaterial(result.id, failedMetadata(result, action, null, source, "MISSING_CONTENT_ID", "搜索结果缺少可校验的平台内容 ID，未发送来源请求。", "unavailable", detailsReserved));
+                continue;
+              }
+              if (stopForBudget) {
+                persistMaterial(result.id, failedMetadata(result, action, contentId, source, "BUDGET_EXCEEDED", "任务深读预算已耗尽，未发送来源请求。", "skipped", detailsReserved));
+                continue;
+              }
+              let attemptMetadata = null;
+              let sourceRequestsReserved = 0;
+              let operationId = "";
+              try {
+                let reservation = findTask(taskId);
+                if (!detailsReserved) reservation = workflow.reserveDeepReadBudget(reservation, { details: 1 });
+                const pagesToReserve = action === "comments" && result.platform === "bilibili" && contentId.bvid ? 2 : 1;
+                for (let page = 0; page < pagesToReserve; page += 1) {
+                  reservation = workflow.reserveDeepReadBudget(reservation, { pages: 1 });
+                }
+                updateTask({ ...findTask(taskId), usage: reservation.usage });
+                if (!detailsReserved) detailsReserved = true;
+                const latest = findTask(taskId);
+                const remainingMs = taskDurationLimit(latest) - taskDurationUsed(latest);
+                const maxDurationMs = taskDurationLimit(latest);
+                if (remainingMs <= 0) {
+                  const error = new RangeError("深读耗时预算已耗尽");
+                  error.code = "BUDGET_EXCEEDED";
+                  throw error;
+                }
+                const materialId = createMaterialId();
+                operationId = retryContext?.capability === action
+                  ? retryContext.operationId : createOperationId();
+                const profileId = schema.resolveResearchProfileId(result.platform, findTask(taskId).profileId);
+                const requestContentId = action === "comments" ? { ...contentId, cursor: result.platform === "bilibili" ? 0 : "" } : contentId;
+                const queuedOperation = schema.normalizeResearchOperation({
+                  operationId, planVersion: findTask(taskId).planVersion, platform: result.platform, profileId,
+                  sourceId: "mediacrawler-lite", sourceVersion, capability: action, contentId: requestContentId,
+                  parentOperationId: retryContext?.operationId === operationId ? retryContext.parentOperationId : "",
+                  pageCursor: String(requestContentId.cursor || ""), state: "running", attempt: 1,
+                  budget: { details: detailsReserved ? 0 : 1, pages: pagesToReserve, sourceRequests: action === "comments" && result.platform === "bilibili" && contentId.bvid ? 2 : 1 },
+                  createdAt: new Date(now()).toISOString()
+                });
+                const currentOperations = findTask(taskId).operations || [];
+                updateTask({ ...findTask(taskId), operations: currentOperations.some(item => item.operationId === operationId)
+                  ? currentOperations.map(item => item.operationId === operationId ? { ...queuedOperation, attempt: retryContext?.attempt || queuedOperation.attempt, parentOperationId: retryContext?.parentOperationId || "" } : item)
+                  : [...currentOperations, queuedOperation] });
+                const baseMetadata = {
+                  id: materialId, resultId: result.id, kind: action,
+                  contentId: contentId.noteId || contentId.bvid || contentId.aid || contentId.postId || contentId.answerId || contentId.articleId,
+                  sourceId: "mediacrawler-lite", sourceVersion,
+                  operationId, connectionMethod: "local-process", acquisitionMethod: "platform-interface",
+                  capturedAt: new Date().toISOString(), itemCount: 0, sortOrder: "unknown",
+                  sourceType: "unknown", language: "unknown", status: "running", summary: "",
+                  truncated: false, errorCategory: "", errorCode: "", errorMessage: "", budgetReserved: true
+                };
+                attemptMetadata = baseMetadata;
+                persistMaterial(result.id, baseMetadata);
+                const requestBudget = {
+                  maxRequests: action === "comments" && result.platform === "bilibili" && contentId.bvid ? 2 : 1,
+                  maxItems: action === "comments" ? 20 : 1,
+                  deadlineAt: new Date(Date.now() + Math.max(1, Math.min(120000, remainingMs))).toISOString()
+                };
+                const sourceRequestReservation = workflow.consumeResearchBudget(findTask(taskId), {
+                  sourceRequests: requestBudget.maxRequests
+                });
+                updateTask({ ...findTask(taskId), usage: sourceRequestReservation.usage });
+                sourceRequestsReserved = requestBudget.maxRequests;
+                activeRun.currentAction = { platform: result.platform, profileId, operationId };
+                activeRun.emit({ type: "deep-read-start", taskId, resultId: result.id, action, operationId });
+                let response;
+                let requestError;
+                try {
+                  response = await runWithinTaskBudget(taskId, activeRun, timeoutMs => desktopApi.socialSource.run({
+                      sourceId: "mediacrawler-lite",
+                      action,
+                      capability: action,
+                      platform: result.platform,
+                      profileId,
+                      taskId,
+                      contentId: requestContentId,
+                      budget: {
+                        ...requestBudget,
+                        deadlineAt: new Date(Date.now() + Math.max(1, Math.min(120000, timeoutMs))).toISOString()
+                      }
+                    }), () => desktopApi.socialSource.cancel?.({
+                      sourceId: "mediacrawler-lite", platform: result.platform, profileId, taskId
+                    }));
+                } catch (error) { requestError = error; }
+                activeRun.currentAction = null;
+                const reportedRequests = reportedSourceRequestCount(response || requestError, requestBudget.maxRequests);
+                if (sourceRequestsReserved && reportedRequests !== null) {
+                  const latest = findTask(taskId);
+                  const settled = workflow.settleSourceRequests(latest, sourceRequestsReserved, reportedRequests);
+                  updateTask({ ...latest, usage: settled.usage });
+                  sourceRequestsReserved = 0;
+                }
+                if (activeRun.cancelRequested) {
+                  updateOperation(taskId, operationId, { state: "unknown", errorCode: "CANCELLED", errorMessage: "取消后收到的响应已丢弃。" });
+                  const error = new Error("用户取消了深读动作。");
+                  error.code = "CANCELLED";
+                  throw error;
+                }
+                if (requestError) throw requestError;
+                if (!response || response.status !== "ok" || !response.data || typeof response.data !== "object") {
+                  const error = new Error(response?.message || "来源没有返回有效材料");
+                  error.code = response?.code || "INVALID_RESPONSE";
+                  throw error;
+                }
+                const data = response.data;
+                let content;
+                let itemCount;
+                let truncated = data.truncated === true;
+                let summary;
+                let materialMetadata = { sortOrder: "unknown", totalCount: null };
+                if (action === "comments") {
+                  const rawComments = extractCommentItems(data);
+                  const comments = rawComments.slice(0, 20).map(stripNestedReplies);
+                  content = { comments };
+                  itemCount = comments.length;
+                  truncated = truncated || rawComments.length > 20 || comments.length === 20
+                    || data.hasMore === true || data.has_more === true || Boolean(data.cursor || data.nextCursor);
+                  materialMetadata = commentSourceMetadata(data);
+                  summary = `已取得 ${itemCount} 条一级评论；排序${materialMetadata.sortOrder === "unknown" ? "未知" : materialMetadata.sortOrder}。${truncated ? "结果可能截断。" : ""}`;
+                } else {
+                  content = data;
+                  itemCount = 1;
+                  summary = summarizeDetail(data);
+                }
+                const completed = schema.normalizeResearchMaterial({
+                  ...baseMetadata,
+                  ...materialMetadata,
+                  sourceVersion: response.version || sourceVersion,
+                  capturedAt: new Date().toISOString(),
+                  status: "completed",
+                  itemCount,
+                  summary,
+                  truncated,
+                  truncationReason: truncated ? (action === "comments" ? "comment-page-or-limit" : "source-reported") : ""
+                }, result.id);
+                volatileMaterials.set(materialId, { taskId, resultId: result.id, content });
+                persistMaterial(result.id, completed);
+                updateOperation(taskId, operationId, { state: "completed", pageCursor: String(data.nextCursor || data.cursor || ""), summary: completed.summary, resultIds: [result.id] });
+                activeRun.emit({ type: "deep-read-finish", taskId, resultId: result.id, action, materialId, itemCount, truncated });
+              } catch (error) {
+                activeRun.currentAction = null;
+                const code = String(error?.code || (activeRun.cancelRequested ? "CANCELLED" : "REQUEST_FAILED"));
+                if (operationId) updateOperation(taskId, operationId, {
+                  state: activeRun.cancelRequested ? "unknown" : "failed", errorCode: code,
+                  errorMessage: activeRun.cancelRequested ? "取消后收到的响应已丢弃。" : error?.message || "深读未完成",
+                  cursorInvalid: /CURSOR_(?:EXPIRED|INVALID)|INVALID_CURSOR/i.test(code)
+                });
+                const status = code === "CANCELLED" || activeRun.cancelRequested ? "cancelled" : "failed";
+                const sourceError = {
+                  ...(attemptMetadata || failedMetadata(result, action, contentId, source, code, error?.message, status, detailsReserved)),
+                  status,
+                  summary: "",
+                  itemCount: 0,
+                  truncated: false,
+                  errorCategory: classifySourceError(code),
+                  errorCode: code,
+                  errorMessage: error?.message || "深读未完成"
+                };
+                persistMaterial(result.id, sourceError);
+                activeRun.emit({ type: "deep-read-error", taskId, resultId: result.id, action, errorCode: code });
+                if (code === "BUDGET_EXCEEDED" || code === "budget_exceeded") stopForBudget = true;
+              }
+            }
+          }
+          return findTask(taskId);
+        } finally {
+          activeRuns.delete(taskId);
+        }
+      };
+      const loadMaterialText = async material => {
+        const volatile = volatileMaterials.get(material.id);
+        if (volatile) return typeof volatile.content === "string" ? volatile.content : JSON.stringify(volatile.content, null, 2);
+        if (!material.attachmentId || typeof desktopApi.research?.readAttachment !== "function") return "";
+        const response = await desktopApi.research.readAttachment(material.attachmentId);
+        if (response?.status !== "ok" || typeof response.content !== "string") return "";
+        const binary = atob(response.content);
+        const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+        return new TextDecoder().decode(bytes);
+      };
+      const regenerateReport = async taskId => {
+        const task = findTask(taskId);
+        if (!task || task.status !== "awaiting-save") throw new Error("当前任务尚未完成搜索报告");
+        if (activeRuns.has(taskId)) throw new Error("研究任务已有操作在运行");
+        const completedMaterials = task.results.flatMap(result => (result.materials || [])
+          .filter(material => material.status === "completed").map(material => ({ result, material })));
+        if (!completedMaterials.length) throw new Error("请先完成至少一项深读材料");
+        const activeRun = { kind: "report", cancelRequested: false, pauseIntervals: [], pauseStartedAt: null };
+        activeRuns.set(taskId, activeRun);
+        try {
+          const transientMaterials = [];
+          for (const { result, material } of completedMaterials) {
+            transientMaterials.push({
+              materialId: material.id,
+              resultId: result.id,
+              kind: material.kind,
+              summary: material.summary,
+              content: await loadMaterialText(material)
+            });
+          }
+          const input = { ...task, report: undefined, transientMaterials };
+          const currentUsage = findTask(taskId)?.usage.analysisTokens || 0;
+          const analysisTokensRemaining = Math.max(0, task.budget.maxAnalysisTokens - currentUsage);
+          let analysisChargeRecorded = false;
+          const chargeAnalysisTokens = (tokens, details = {}) => {
+            if (analysisChargeRecorded) return findTask(taskId);
+            analysisChargeRecorded = true;
+            return recordTaskAnalysisTokens(taskId, tokens, details);
+          };
+          const raw = await runWithinTaskBudget(taskId, activeRun, timeoutMs => requestModelWithinAnalysisBudget({
+            purpose: "report",
+            prompt: prompts.buildResearchReportPrompt(input, task.results),
+            budget: task.budget,
+            usedTokens: currentUsage,
+            timeoutMs,
+            timeoutManagedExternally: true,
+            onUsage: chargeAnalysisTokens
+          }), () => chargeAnalysisTokens(analysisTokensRemaining, { estimated: true }));
+          if (raw?.code) throw Object.assign(new Error(raw.message || "报告模型请求失败"), { code: raw.code });
+          if (activeRun.cancelRequested) return findTask(taskId);
+          const generated = parseModel(raw, null);
+          const hasReportContent = generated && typeof generated === "object"
+            && (String(generated.summary || "").trim()
+              || ["coreFindings", "commonPoints", "platformDifferences", "painPointsOrPatterns", "representativeCases", "conflicts", "needsVerification", "nextSteps"]
+                .some(field => Array.isArray(generated[field]) && generated[field].length));
+          if (!hasReportContent) throw Object.assign(new Error("模型未返回可用报告内容；旧报告仍保留。"), { code: "INVALID_REPORT" });
+          const report = validateReport(generated, task);
+          return updateTask({ ...findTask(taskId), report, reportId: `${taskId}-report`, reportError: "", reportErrorCode: "" });
+        } catch (error) {
+          if (activeRun.cancelRequested) return findTask(taskId);
+          return updateTask({
+            ...findTask(taskId),
+            reportError: error.message || "基于深读材料重新生成报告失败",
+            reportErrorCode: error.code || ""
+          });
+        } finally {
+          activeRuns.delete(taskId);
+        }
+      };
+      const saveMaterials = async (taskId, materialIds) => {
+        const task = findTask(taskId);
+        if (!task || task.status !== "awaiting-save") throw new Error("任务当前不在材料保存阶段");
+        if (typeof desktopApi.research?.saveAttachment !== "function") throw new Error("当前桌面 API 不支持材料附件保存");
+        for (const materialId of [...new Set(Array.isArray(materialIds) ? materialIds : [])]) {
+          const inFlight = materialSavesInFlight.get(materialId);
+          if (inFlight) {
+            await inFlight;
+            continue;
+          }
+
+          const savePromise = Promise.resolve().then(async () => {
+            const latest = findTask(taskId);
+            const owner = latest.results.find(result => result.materials.some(material => material.id === materialId));
+            const material = owner?.materials.find(item => item.id === materialId);
+            const volatile = volatileMaterials.get(materialId);
+            if (!owner || !material || material.status !== "completed" || !volatile || material.attachmentId) return;
+            const textContent = typeof volatile.content === "string" ? volatile.content : JSON.stringify(volatile.content, null, 2);
+            const encoded = encodeBase64(textContent);
+            let reservedBytes = 0;
+            let attachmentSaved = false;
+            try {
+              const reserved = workflow.consumeResearchBudget(latest, { attachmentBytes: encoded.byteLength });
+              reservedBytes = encoded.byteLength;
+              updateTask({ ...latest, usage: reserved.usage });
+              const response = await desktopApi.research.saveAttachment({
+                taskId,
+                content: encoded.content,
+                encoding: "base64",
+                mimeType: "text/plain",
+                sourceResultId: owner.id
+              });
+              if (response?.status !== "ok" || !response.attachment?.id) {
+                throw Object.assign(new Error(response?.message || "材料附件保存失败"), { code: response?.code || "ATTACHMENT_ERROR" });
+              }
+              attachmentSaved = true;
+              const attachment = schema.normalizeAttachmentMeta(response.attachment);
+              const current = findTask(taskId);
+              const results = current.results.map(result => result.id !== owner.id ? result : {
+                ...result,
+                attachmentIds: [...new Set([...(result.attachmentIds || []), attachment.id])],
+                materials: result.materials.map(item => item.id === materialId ? { ...item, attachmentId: attachment.id } : item)
+              });
+              state = {
+                ...state,
+                researchAttachments: [...(state.researchAttachments || []).filter(item => item.id !== attachment.id), attachment]
+              };
+              updateTask({ ...current, results });
+            } catch (error) {
+              if (reservedBytes && !attachmentSaved) {
+                const current = findTask(taskId);
+                if (current) {
+                  try {
+                    updateTask({
+                      ...current,
+                      usage: {
+                        ...current.usage,
+                        attachmentBytes: Math.max(0, Number(current.usage?.attachmentBytes || 0) - reservedBytes)
+                      }
+                    });
+                  } catch (rollbackError) {
+                    throw new AggregateError([error, rollbackError], "附件保存失败，预算回滚也未能持久化");
+                  }
+                }
+              }
+              throw error;
+            }
+          });
+          materialSavesInFlight.set(materialId, savePromise);
+          try {
+            await savePromise;
+          } finally {
+            if (materialSavesInFlight.get(materialId) === savePromise) materialSavesInFlight.delete(materialId);
+          }
+        }
+        return findTask(taskId);
       };
       const saveSelected = (taskId, selectedResultIds) => {
         const task = findTask(taskId);
@@ -272,10 +1329,17 @@
         const savedTask = workflow.transitionResearchTask(task, "save");
         state = { ...state, knowledgeEntries: [...state.knowledgeEntries, ...entries], researchTasks: state.researchTasks.map(item => item.id === taskId ? { ...savedTask, selectedResultIds: entries.map(entry => entry.sourceId), savedResultIds: entries.map(entry => entry.sourceId) } : item) };
         persist();
+        clearVolatileXsecTokens(taskId);
         next = findTask(taskId);
         return next;
       };
-      return { createPlan, confirmPlan, cancel, pause, resume, run, saveSelected, getState: () => state };
+      return {
+        createPlan, confirmPlan, cancel, pause, resume, run, deepRead, regenerateReport,
+        chooseOperation, retryOperation,
+        saveMaterials,
+        getTransientMaterial: materialId => volatileMaterials.get(materialId)?.content,
+        saveSelected, getState: () => state
+      };
     };
   }
 })(typeof globalThis === "undefined" ? this : globalThis);
@@ -545,6 +1609,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   let activeProjectId = null;
   let currentOptimizedPrompt = "";
   let currentFollowupBasePrompt = "";
+  if (desktopApi?.recoverBackupImports) {
+    desktopApi.recoverBackupImports((state.researchAttachments || []).map(item => item.id))
+      .catch(error => toast(`备份导入事务恢复失败：${error.message || "请重启应用重试"}`));
+  }
   let currentProjectReviewCase = null;
   let currentArticleReviewCase = null;
 
@@ -1952,7 +3020,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     try {
       const backup = workspaceBackup.createBackup(state, { scope, now: new Date().toISOString() });
       const content = JSON.stringify(backup, null, 2);
-      if (desktopApi?.exportBackup) await desktopApi.exportBackup(content);
+      if (desktopApi?.exportBackup) {
+        const result = await desktopApi.exportBackup(scope === "workspace"
+          ? { format: "workspace-archive", content, attachmentIds: (backup.data.researchAttachments || []).map(item => item.id) }
+          : content);
+        if (result?.canceled) { toast("已取消导出"); return; }
+      }
       else {
         const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
         const link = document.createElement("a"); link.href = url; link.download = `forward-step-${scope}.json`; link.click(); URL.revokeObjectURL(url);
@@ -1965,7 +3038,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const backup = workspaceBackup.createBackup(state, { scope: "workspace", now: new Date().toISOString() });
     const content = JSON.stringify(backup, null, 2);
     if (desktopApi?.exportBackup) {
-      const result = await desktopApi.exportBackup(content);
+      const result = await desktopApi.exportBackup({
+        format: "workspace-archive", content,
+        attachmentIds: (backup.data.researchAttachments || []).map(item => item.id)
+      });
       if (result && result.canceled) throw new Error("安全备份已取消");
       return result;
     }
@@ -1974,17 +3050,76 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     confirmBrowserSafetyBackup(window.confirm);
     return { browser: true };
   }
-  async function importBackupContent(raw, importGate) {
-    if (!desktopApi) consumeBrowserImportGate(importGate);
-    const backup = typeof raw === "string" ? JSON.parse(raw) : raw;
-    const summary = workspaceBackup.getBackupSummary(backup);
-    const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
-    const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, backup) } : workspaceBackup.mergeState(state, backup);
-    const previousState = state;
-    state = result.state;
-    if (!persist()) { state = previousState; throw new Error("导入结果保存失败"); }
-    renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
-    toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}`);
+  async function importBackupContent(raw) {
+    const archiveStage = raw && typeof raw === "object" && raw.format === "workspace-archive" ? raw : null;
+    let transactionId = "";
+    try {
+      const backup = typeof raw === "string" ? JSON.parse(raw)
+        : archiveStage ? JSON.parse(archiveStage.content)
+          : raw && typeof raw.content === "string" ? JSON.parse(raw.content) : raw;
+      const summary = workspaceBackup.getBackupSummary(backup);
+      if (archiveStage && summary.scope !== "workspace") throw new Error("ZIP 仅支持完整工作区备份");
+      const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
+      let importAttachments = archiveStage?.attachments || [];
+      if (archiveStage) {
+        const metadata = new Map((backup.data.researchAttachments || []).map(item => [item.id, item]));
+        if (!Array.isArray(archiveStage.attachments) || metadata.size !== importAttachments.length || importAttachments.some(item => {
+          const itemMetadata = metadata.get(item.id);
+          return !itemMetadata || itemMetadata.type !== item.type || itemMetadata.size !== item.size
+            || !item.id.startsWith(`${item.taskId}_`);
+        })) throw new Error("ZIP 附件清单与工作区附件索引不一致");
+      }
+      let sourceBackup = backup;
+      let remappedAttachmentIds = [];
+      let omittedAttachmentCount = 0;
+      if (mode === "merge" && summary.scope === "workspace") {
+        const acceptedTaskIds = new Set(workspaceBackup.mergeState(state, backup).added
+          .filter(item => item.collection === "researchTasks").map(item => item.id));
+        importAttachments = importAttachments.filter(item => acceptedTaskIds.has(item.taskId));
+        const mapped = workspaceBackup.remapResearchAttachmentIds({
+          ...backup.data,
+          researchTasks: (backup.data.researchTasks || []).filter(item => acceptedTaskIds.has(item.id)),
+          researchAttachments: (backup.data.researchAttachments || []).filter(item => acceptedTaskIds.has(item.id.slice(0, item.id.lastIndexOf("_"))))
+        }, importAttachments, (state.researchAttachments || []).map(item => item.id), () => crypto.randomUUID().replace(/-/g, ""));
+        importAttachments = mapped.attachments;
+        remappedAttachmentIds = mapped.remapped;
+        sourceBackup = {
+          ...backup,
+          data: { ...mapped.data, researchAttachments: mapped.data.researchAttachments.filter(item => acceptedTaskIds.has(item.id.slice(0, item.id.lastIndexOf("_")))) },
+          counts: { ...backup.counts, researchTasks: acceptedTaskIds.size, researchAttachments: importAttachments.length }
+        };
+      }
+      if (!archiveStage && summary.scope === "workspace") {
+        const retained = workspaceBackup.retainResearchAttachments(sourceBackup.data,
+          (state.researchAttachments || []).map(item => item.id));
+        sourceBackup = { ...sourceBackup, data: retained.data };
+        omittedAttachmentCount = retained.removed;
+      }
+      const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, sourceBackup) } : workspaceBackup.mergeState(state, sourceBackup);
+      if (archiveStage && desktopApi?.commitBackupImport) {
+        const committed = await desktopApi.commitBackupImport(archiveStage.stageId,
+          archiveStage.attachments.filter(item => importAttachments.some(target => target.sourceId === item.id)).map(item => item.id),
+          importAttachments.map(item => item.id));
+        if (committed?.status !== "ok" || !committed.transactionId) throw new Error(committed?.message || "附件安装失败");
+        transactionId = committed.transactionId;
+      }
+      const previousState = state;
+      state = result.state;
+      if (!persist()) {
+        state = previousState;
+        if (transactionId) {
+          await desktopApi.rollbackBackupImport(transactionId).catch(() => {});
+          transactionId = "";
+        }
+        throw new Error("导入结果保存失败");
+      }
+      if (transactionId) await desktopApi.finalizeBackupImport(transactionId);
+      renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
+      toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}${remappedAttachmentIds.length ? `；已重映射 ${remappedAttachmentIds.length} 个冲突附件 ID` : ""}${omittedAttachmentCount ? `；JSON 备份不含正文，已跳过 ${omittedAttachmentCount} 个附件索引` : ""}`);
+    } catch (error) {
+      if (archiveStage && !transactionId) await desktopApi?.discardBackupImport?.(archiveStage.stageId).catch(() => {});
+      throw error;
+    }
   }
   async function importKnowledgeBackup() {
     if (!workspaceBackup) { toast("备份功能暂不可用"); return; }
@@ -2012,6 +3147,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (desktopApi) return desktopApi.getConfig();
     const response = await fetch("/api/config");
     return response.json();
+        if (scope === "workspace") toast("浏览器开发模式仅导出 JSON，不包含已保存附件正文；完整附件备份请在桌面应用中导出。");
   }
   function settingsStorageMessage(config) {
     if (!desktopApi) return "当前是浏览器开发模式，不能安全保存密钥，请使用 Windows 桌面应用。";
@@ -2028,6 +3164,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     document.getElementById("settings-search-url").value = config.search?.baseUrl || "";
     document.getElementById("settings-model-name").value = config.model?.name || "";
     document.getElementById("settings-safe-storage").textContent = settingsStorageMessage(config);
+    toast("浏览器开发模式的安全备份仅含 JSON，不包含已保存附件正文。");
   }).catch(() => {
   const status = document.getElementById("service-status");
     status.textContent = "离线打开 · 复制指令模式";

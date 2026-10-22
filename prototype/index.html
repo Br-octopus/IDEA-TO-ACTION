@@ -209,6 +209,20 @@
     .library-meta { color: #84918b; font-size: 10px; margin-top: 4px; }
     .status { border-radius: 99px; padding: 4px 8px; color: #766b54; background: #f5f2e9; font-size: 10px; flex: none; }
     .status.verified { color: #286049; background: #e7f2eb; }
+    .social-result-actions, .social-material { margin-top: 10px; }
+    .social-material { border-left: 2px solid var(--line); padding: 8px 10px; }
+    .social-material-content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; background: #f7f9f7; padding: 10px; }
+    .social-source-manager { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .social-source-config { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 10px 0; }
+    .social-source-config label { display: grid; gap: 5px; min-width: 150px; color: var(--muted); font-size: 12px; }
+    .social-source-phase { margin-top: 10px; }
+    .social-source-unavailable { display: grid; gap: 5px; margin-top: 12px; color: var(--muted); font-size: 12px; }
+    .social-source-diagnostics { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .writing-material-coverage { min-width: 0; }
+    .writing-material-coverage ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .writing-material-coverage li { margin: 8px 0; overflow-wrap: anywhere; }
+    .writing-coverage-batch { min-width: 0; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+    .writing-coverage-batch textarea, .writing-material-coverage textarea, .writing-material-coverage input { box-sizing: border-box; max-width: 100%; }
     .library-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
     .reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 900px; }
     .reference { background: white; border: 1px solid #e5ebe5; border-radius: 12px; padding: 17px; display: flex; flex-direction: column; min-height: 168px; }
@@ -504,7 +518,7 @@
         </section>
 
         <section class="view" id="view-social-research">
-          <div class="eyebrow">只读研究工作台</div><h1>社媒研究</h1>
+          <h1>社媒研究</h1><p class="lede">只读研究工作台；确认研究计划后才会开始搜索。</p>
           <p class="lede">连接平台、确认研究计划，再查看可追溯结果。研究只读，不会自动发布内容。</p>
           <div class="social-layout">
             <section class="social-panel" aria-labelledby="social-research-entry-title">
@@ -516,10 +530,10 @@
                 <div class="button-row"><button class="button-primary" id="social-research-create-plan" type="submit">生成研究计划</button></div>
               </form>
             </section>
-            <section class="social-panel" id="social-platform-preparation"><div class="block-top"><div><h2>平台准备</h2><p class="block-desc">自动回退模式会优先使用已配置 API；API 失败或结果不足时切换到真实浏览器。浏览器使用独立 profile。</p></div><button class="button-secondary" id="social-platform-refresh" type="button">刷新平台状态</button></div><div id="social-platform-cards" class="social-grid"></div><p class="social-muted">仅只读搜索；不会点赞、评论或发布。登录状态由本机独立 profile 管理。</p></section>
-            <section class="social-panel" id="social-research-plan"><div class="block-top"><div><h2>研究计划</h2><div class="social-muted" id="social-research-status" role="status">填写目标后生成计划，确认前不会开始搜索。</div></div><div class="button-row"><button class="button-secondary" id="social-research-plan-confirm" type="button" disabled>确认并运行</button><button class="button-secondary" id="social-research-pause" type="button" disabled>暂停</button><button class="button-quiet" id="social-research-cancel" type="button" disabled>取消</button></div></div><div id="social-research-plan-detail" class="social-plan-detail">等待生成计划</div><div class="social-progress" aria-label="研究进度"><span id="social-research-progress"></span></div><div class="social-muted" id="social-research-progress-detail" role="status" aria-live="polite"></div></section>
-            <section class="social-panel" id="social-research-results"><div class="block-top"><div><h2>结果集</h2><p class="block-desc">结果默认未核验；保存前请检查来源和内容。</p></div><button class="button-primary" id="social-research-save-selection" type="button" disabled>保存勾选结果</button></div><div class="social-filters"><label>平台 <select id="social-filter-platform"><option value="">全部平台</option></select></label><label>查询词 <select id="social-filter-query"><option value="">全部查询</option></select></label><label>证据 <select id="social-filter-evidence"><option value="">全部状态</option><option value="unverified">未核验</option><option value="source-reviewed">已核对来源</option><option value="user-confirmed">用户确认</option><option value="multiple-sources">多个来源</option><option value="conflicting">存在冲突</option></select></label><label>保存状态 <select id="social-filter-saved"><option value="">全部</option><option value="saved">已保存</option><option value="unsaved">未保存</option></select></label><label>发布时间 <input id="social-filter-from" type="date" aria-label="发布时间起始"></label><label>至 <input id="social-filter-to" type="date" aria-label="发布时间结束"></label></div><div id="social-research-results-list"></div></section>
-            <section class="social-panel" id="social-research-report"><h2>研究报告</h2><div id="social-research-report-content" class="social-muted">报告结论会关联到对应原始结果。</div></section>
+            <section class="social-panel" id="social-platform-preparation"><div class="block-top"><div><h2>平台准备</h2><p class="block-desc">自动回退模式会优先使用已配置 API；API 失败或结果不足时切换到真实浏览器。浏览器使用独立 profile。</p></div><button class="button-secondary" id="social-platform-refresh" type="button">刷新平台状态</button></div><div id="social-platform-cards" class="social-grid"></div><div class="social-source-manager"><h3>固定来源生命周期</h3><div id="social-source-manager-content"></div><h3>B 站字幕来源</h3><div id="social-source-candidate"></div></div><p class="social-muted">仅只读搜索；不会点赞、评论或发布。登录状态由本机独立 profile 管理。</p></section>
+            <section class="social-panel" id="social-research-plan"><div class="block-top"><div><h2>研究计划</h2><div class="social-muted" id="social-research-status" role="status">填写目标后生成计划，确认前不会开始搜索。</div></div><div class="button-row"><button class="button-secondary" id="social-research-plan-confirm" type="button" disabled>确认并运行</button><button class="button-secondary" id="social-research-pause" type="button" disabled>暂停</button><button class="button-quiet" id="social-research-cancel" type="button" disabled>取消</button></div></div><div id="social-research-plan-detail" class="social-plan-detail">等待生成计划</div><div id="social-research-operations" class="social-plan-detail" aria-live="polite"></div><div class="social-progress" aria-label="研究进度"><span id="social-research-progress"></span></div><div class="social-muted" id="social-research-progress-detail" role="status" aria-live="polite"></div></section>
+            <section class="social-panel" id="social-research-results"><div class="block-top"><div><h2>结果集</h2><p class="block-desc">深读选择与摘要保存相互独立。先勾选“选择深读”，再明确选择读取详情或一级评论；每条评论最多 20 条，不读取二级回复。</p></div><div class="button-row"><button class="button-secondary" id="social-research-read-details" type="button" disabled>读取所选详情</button><button class="button-secondary" id="social-research-read-comments" type="button" disabled>读取所选一级评论</button><button class="button-primary" id="social-research-save-selection" type="button" disabled>保存勾选摘要</button><button class="button-secondary" id="social-research-save-materials" type="button" disabled>保存所选全文附件</button><button class="button-quiet" id="social-research-read-transcript" type="button" disabled title="字幕来源尚未登记">读取 B 站字幕（不可用）</button></div></div><div class="social-filters"><label>平台 <select id="social-filter-platform"><option value="">全部平台</option></select></label><label>查询词 <select id="social-filter-query"><option value="">全部查询</option></select></label><label>证据 <select id="social-filter-evidence"><option value="">全部状态</option><option value="unverified">未核验</option><option value="source-reviewed">已核对来源</option><option value="user-confirmed">用户确认</option><option value="multiple-sources">多个来源</option><option value="conflicting">存在冲突</option></select></label><label>保存状态 <select id="social-filter-saved"><option value="">全部</option><option value="saved">已保存</option><option value="unsaved">未保存</option></select></label><label>发布时间 <input id="social-filter-from" type="date" aria-label="发布时间起始"></label><label>至 <input id="social-filter-to" type="date" aria-label="发布时间结束"></label></div><div id="social-research-results-list"></div></section>
+            <section class="social-panel" id="social-research-report"><div class="block-top"><h2>研究报告</h2><button class="button-secondary" id="social-research-regenerate-report" type="button" disabled>基于已完成材料重新生成报告</button></div><div id="social-research-report-content" class="social-muted">报告结论会关联到对应原始结果与材料。</div></section>
           </div>
         </section>
 

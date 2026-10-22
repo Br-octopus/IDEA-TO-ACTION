@@ -6,6 +6,8 @@ const {
   createResearchTask,
   normalizeResearchPlan,
   normalizeSocialResult,
+  normalizeResearchMaterial,
+  resolveDomesticContentId,
   normalizePlatformCapability,
   normalizeAttachmentMeta,
   sanitizeResearchState,
@@ -23,6 +25,25 @@ test('研究任务默认是草稿且不预填平台和结果', () => {
   assert.deepEqual(task.resultIds, []);
 });
 
+test('操作队列持久化恢复所需字段并清洗未知字段和敏感信息', () => {
+  const [task] = sanitizeResearchState({ researchTasks: [{ id: 'queue-task', operations: [{
+    operationId: 'op-1', planVersion: 3, platform: 'bilibili', profileId: 'profile-a', sourceId: 'source-a',
+    capability: 'comments', contentId: { bvid: 'BV1234567890', cursor: 0, token: 'secret' }, query: 'query',
+    pageCursor: '0', budget: { pages: 2, sourceRequests: 2, token: 'secret' }, state: 'running', attempt: 2,
+    apiKey: 'secret'
+  }] }] }).researchTasks;
+  assert.equal(task.planVersion, 1);
+  assert.equal(task.operations[0].state, 'running');
+  assert.deepEqual(task.operations[0].contentId, { bvid: 'BV1234567890', cursor: '0' });
+  assert.deepEqual(task.operations[0].budget, { pages: 2, sourceRequests: 2 });
+  assert.equal(JSON.stringify(task).includes('secret'), false);
+});
+
+test('研究任务清洗会保留取消原因，供调用方展示取消结果', () => {
+  const task = createResearchTask({ status: 'cancelled', rejectionReason: '用户取消' });
+  assert.equal(task.rejectionReason, '用户取消');
+});
+
 test('研究计划、结果和平台能力只保留契约字段', () => {
   const plan = normalizeResearchPlan({
     objective: '找出高频痛点',
@@ -33,6 +54,7 @@ test('研究计划、结果和平台能力只保留契约字段', () => {
   });
   const result = normalizeSocialResult({
     platform: 'reddit',
+    contentId: 'post-123',
     url: 'https://example.test/post',
     title: '体验',
     publishedAt: '2026-10-19',
@@ -53,6 +75,7 @@ test('研究计划、结果和平台能力只保留契约字段', () => {
   assert.equal(plan.unknownField, undefined);
   assert.equal(result.evidenceStatus, 'unverified');
   assert.equal(result.retrievalMethod, 'browser');
+  assert.equal(result.contentId, 'post-123');
   assert.equal(result.unknownField, undefined);
   assert.equal(capability.platform, 'reddit');
   assert.equal(capability.supportsSearch, true);
@@ -88,6 +111,86 @@ test('附件元数据只保留六个可备份字段', () => {
   ]);
   assert.equal(attachment.content, undefined);
   assert.equal(attachment.cookie, undefined);
+});
+
+test('研究材料只保留摘要和来源元数据，未知枚举不猜测且原文不会进入状态', () => {
+  const material = normalizeResearchMaterial({
+    id: 'material-1', kind: 'comments', contentId: 'note-1', sourceId: 'mediacrawler-lite',
+    sourceVersion: '1.0.0', operationId: 'operation-1', connectionMethod: 'local-process',
+    acquisitionMethod: 'browser', itemCount: 20, sortOrder: '', sourceType: 'platform-original',
+    language: '', status: 'completed', truncated: true, summary: '20 条一级评论',
+    content: 'FULL_TEXT_SENTINEL', comments: ['FULL_TEXT_SENTINEL']
+  }, 'result-1');
+  assert.equal(material.resultId, 'result-1');
+  assert.equal(material.sortOrder, 'unknown');
+  assert.equal(material.sourceType, 'unknown');
+  assert.equal(material.language, 'unknown');
+  assert.equal(material.itemCount, 20);
+  assert.equal(material.totalCount, null, '旧材料缺少总数时保持 unknown/null');
+  assert.equal(material.truncated, true);
+  assert.equal(JSON.stringify(material).includes('FULL_TEXT_SENTINEL'), false);
+});
+
+test('研究来源请求用量会持久化并保持旧任务兼容', () => {
+  const oldTask = createResearchTask({ id: 'old-task', status: 'awaiting-save' });
+  const newTask = createResearchTask({
+    id: 'new-task', status: 'awaiting-save', budget: { maxSourceRequests: 7 }, usage: { sourceRequests: 4 }
+  });
+  assert.equal(oldTask.budget.maxSourceRequests, 100);
+  assert.equal(oldTask.usage.sourceRequests, 0);
+  assert.equal(newTask.budget.maxSourceRequests, 7);
+  assert.equal(newTask.usage.sourceRequests, 4);
+});
+
+test('平台内容 ID 解析只返回 manager 接受的结构，缺失 ID 时返回 null', () => {
+  assert.deepEqual(resolveDomesticContentId({
+    platform: 'xiaohongshu', url: 'https://www.xiaohongshu.com/explore/note_123?xsec_source=pc&xsec_token=t'
+  }), { noteId: 'note_123', xsecSource: 'pc', xsecToken: 't' });
+  assert.deepEqual(resolveDomesticContentId({
+    platform: 'xiaohongshu', url: 'https://www.xiaohongshu.com/explore/note_123?XSEC_SOURCE=pc&XSeCToken=t'
+  }), { noteId: 'note_123', xsecToken: 't' });
+  assert.deepEqual(resolveDomesticContentId({
+    platform: 'bilibili', url: 'https://www.bilibili.com/video/BV1Q541167Qg'
+  }), { bvid: 'BV1Q541167Qg' });
+  assert.deepEqual(resolveDomesticContentId({ platform: 'bilibili', contentId: 'av12345' }), { aid: '12345' });
+  assert.deepEqual(resolveDomesticContentId({
+    platform: 'weibo', url: 'https://weibo.com/123456/AbC987'
+  }), { postId: 'AbC987' });
+  assert.deepEqual(resolveDomesticContentId({
+    platform: 'weibo', url: 'https://weibo.com/detail/1234567890123456'
+  }), { postId: '1234567890123456' });
+  assert.equal(resolveDomesticContentId({
+    platform: 'weibo', url: 'https://evil.example/123456/AbC987'
+  }), null);
+  assert.deepEqual(resolveDomesticContentId({
+    platform: 'zhihu', url: 'https://www.zhihu.com/question/123/answer/456'
+  }), { questionId: '123', answerId: '456' });
+  assert.deepEqual(resolveDomesticContentId({
+    platform: 'zhihu', url: 'https://zhuanlan.zhihu.com/p/789'
+  }), { articleId: '789' });
+  assert.equal(resolveDomesticContentId({
+    platform: 'zhihu', url: 'https://www.zhihu.com/question/123'
+  }), null);
+  assert.equal(resolveDomesticContentId({ platform: 'xiaohongshu', url: 'https://example.test/search' }), null);
+});
+
+test('小红书持久化结果和清洗状态移除各种大小写的访问 token 参数', () => {
+  const result = normalizeSocialResult({
+    id: 'xhs-result', platform: 'xiaohongshu',
+    url: 'https://www.xiaohongshu.com/explore/note_123?xsec_source=pc&keep=one&XSeCToken=secret-one&xsec_token=secret-two&tail=two'
+  });
+  const persistedUrl = new URL(result.url);
+  assert.equal(persistedUrl.searchParams.get('xsec_source'), 'pc');
+  assert.equal(persistedUrl.searchParams.get('keep'), 'one');
+  assert.equal(persistedUrl.searchParams.get('tail'), 'two');
+  assert.deepEqual([...persistedUrl.searchParams.keys()], ['xsec_source', 'keep', 'tail']);
+
+  const state = sanitizeResearchState({ researchTasks: [{
+    id: 'task-xhs', status: 'awaiting-save', results: [result]
+  }] });
+  assert.equal(state.researchTasks[0].results[0].url, result.url);
+  assert.equal(JSON.stringify(state).includes('secret-one'), false);
+  assert.equal(JSON.stringify(state).includes('secret-two'), false);
 });
 
 test('研究状态清洗会移除平台凭证、会话字段和未知字段', () => {

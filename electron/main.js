@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, safeStorage, session } = require('electron');
+const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createBackupStore } = require(path.join(__dirname, 'backup-store.js'));
@@ -6,9 +7,12 @@ const { createSettingsStore } = require(path.join(__dirname, 'settings-store.js'
 const { createModelClient } = require(path.join(__dirname, '..', 'server', 'model-client.js'));
 const { createSearchClient } = require(path.join(__dirname, '..', 'server', 'search-client.js'));
 const { createSocialBrowserManager } = require(path.join(__dirname, 'social-browser-manager.js'));
-const { createBrowserPlatformAdapters } = require(path.join(__dirname, 'social-browser-adapters.js'));
-const { createSocialApiClient, listSocialPlatformDefinitions } = require(path.join(__dirname, '..', 'server', 'social-api-client.js'));
+const { createSocialSourceManager } = require(path.join(__dirname, 'social-source-manager.js'));
+const { createBrowserPlatformAdapters, isRegisteredSearchAdapter } = require(path.join(__dirname, 'social-browser-adapters.js'));
+const { parseSocialContentUrl } = require(path.join(__dirname, 'social-content-url.js'));
+const { createSocialApiClient, listSocialPlatformDefinitions, SOCIAL_API_CODES } = require(path.join(__dirname, '..', 'server', 'social-api-client.js'));
 const { createSocialAttachmentStore } = require(path.join(__dirname, 'social-attachment-store.js'));
+const workspaceArchive = require(path.join(__dirname, 'workspace-backup-archive.js'));
 const { createPromptAgentSources } = require(path.join(__dirname, 'prompt-agent-sources.js'));
 
 const DEV_PAGE_URL = process.env.DESKTOP_SERVICE_URL || 'http://127.0.0.1:4173';
@@ -20,17 +24,26 @@ let settingsStore;
 let backupStore;
 let backupExportTempSequence = 0;
 let socialBrowserManager;
+let socialSourceManager;
 const socialBrowserAdapters = new Map();
 let socialAttachmentStore;
 const socialProfiles = new Map();
+const backupImportStages = new Map();
+const backupImportTransactions = new Map();
 const SOCIAL_PLATFORMS = new Set(listSocialPlatformDefinitions().map(item => item.platform));
 const SOCIAL_START_URLS = Object.freeze({
   xiaohongshu: 'https://www.xiaohongshu.com/',
+  bilibili: 'https://www.bilibili.com/',
+  weibo: 'https://weibo.com/',
+  zhihu: 'https://www.zhihu.com/',
   reddit: 'https://www.reddit.com/',
   youtube: 'https://www.youtube.com/'
 });
 const SOCIAL_RESULT_DOMAINS = Object.freeze({
   xiaohongshu: new Set(['www.xiaohongshu.com', 'xiaohongshu.com']),
+  bilibili: new Set(['www.bilibili.com', 'bilibili.com']),
+  weibo: new Set(['www.weibo.com', 'weibo.com']),
+  zhihu: new Set(['www.zhihu.com', 'zhihu.com', 'zhuanlan.zhihu.com']),
   reddit: new Set(['www.reddit.com', 'reddit.com']),
   youtube: new Set(['www.youtube.com', 'youtube.com'])
 });
@@ -88,11 +101,19 @@ function getSocialManager() {
   return socialBrowserManager;
 }
 
+function getSocialSourceManager() {
+  if (!socialSourceManager) socialSourceManager = createSocialSourceManager({ app, resourcesPath: process.resourcesPath });
+  return socialSourceManager;
+}
+
 function getSocialAdapter(platform, profileId) {
   const key = `${platform}:${profileId}`;
   let adapter = socialBrowserAdapters.get(key);
   if (!adapter) {
     adapter = createBrowserPlatformAdapters({ manager: getSocialManager() })[platform];
+    if (!adapter || typeof adapter.search !== 'function') {
+      throw Object.assign(new Error('该平台没有已注册的只读浏览器搜索适配器'), { code: 'UNSUPPORTED_CAPABILITY' });
+    }
     adapter.attachSession(key);
     socialBrowserAdapters.set(key, adapter);
   }
@@ -130,9 +151,26 @@ function validateSocialResultPayload(platform, payload) {
 
   const hostname = resultUrl.hostname.toLowerCase();
   if (!['http:', 'https:'].includes(resultUrl.protocol) || resultUrl.username || resultUrl.password
-    || !SOCIAL_RESULT_DOMAINS[platform].has(hostname)) {
+    || resultUrl.protocol !== 'https:' || resultUrl.port || !SOCIAL_RESULT_DOMAINS[platform].has(hostname)) {
     throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
   }
+
+  const isDomesticContent = ['xiaohongshu', 'bilibili', 'weibo', 'zhihu'].includes(platform)
+    ? Boolean(parseSocialContentUrl(platform, payload.url))
+    : isLegacySocialContentUrl(platform, resultUrl);
+  if (!isDomesticContent) throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+}
+
+function isLegacySocialContentUrl(platform, url) {
+  if (platform === 'reddit') {
+    return /^\/r\/[A-Za-z0-9_]+\/comments\/[A-Za-z0-9]+(?:\/|$)/.test(url.pathname);
+  }
+  if (platform === 'youtube') {
+    const contentId = url.pathname.match(/^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]+)\/?$/)?.[1]
+      || (url.pathname === '/watch' ? url.searchParams.get('v') : '');
+    return /^[A-Za-z0-9_-]+$/.test(contentId || '');
+  }
+  return false;
 }
 
 function validateSocialPayload(payload, allowedKeys) {
@@ -143,16 +181,32 @@ function validateSocialPayload(payload, allowedKeys) {
 }
 
 function socialError(error) {
-  const code = ['UNSUPPORTED_PLATFORM', 'INVALID_REQUEST', 'NOT_CONFIGURED', 'UNSUPPORTED_CAPABILITY', 'SESSION_NOT_FOUND', 'SESSION_CLOSED', 'NAVIGATION_TIMEOUT', 'UNSUPPORTED_PAGE', 'PAGE_READ_FAILED', 'NAVIGATION_FAILED', 'AUTH_FAILED', 'RATE_LIMITED', 'UPSTREAM_ERROR', 'TIMEOUT', 'INVALID_RESPONSE', 'EMPTY_RESULTS', 'REQUEST_FAILED', 'ATTACHMENT_ERROR'].includes(error?.code)
+  const code = new Set(['UNSUPPORTED_PLATFORM', 'INVALID_REQUEST', 'NOT_CONFIGURED', 'UNSUPPORTED_CAPABILITY', 'SESSION_NOT_FOUND', 'SESSION_CLOSED', 'SESSION_BUSY', 'NAVIGATION_TIMEOUT', 'SCRIPT_TIMEOUT', 'BUDGET_EXCEEDED', 'UNSUPPORTED_PAGE', 'PAGE_NOT_READY', 'PAGE_READ_FAILED', 'NAVIGATION_FAILED', 'LOGIN_REQUIRED', 'MANUAL_VERIFICATION_REQUIRED', 'AUTH_FAILED', 'RATE_LIMITED', 'UPSTREAM_ERROR', 'TIMEOUT', 'INVALID_RESPONSE', 'EMPTY_RESULTS', 'REQUEST_FAILED', 'ATTACHMENT_ERROR', ...Object.values(SOCIAL_API_CODES)]).has(error?.code)
     ? error.code : 'REQUEST_FAILED';
   const messages = {
     UNSUPPORTED_PLATFORM: '不支持该平台。', INVALID_REQUEST: '请求参数无效。', NOT_CONFIGURED: '该平台 API 尚未安全配置。',
     UNSUPPORTED_CAPABILITY: '该平台暂不支持此 API 能力。', SESSION_NOT_FOUND: '尚未打开该平台浏览器。',
-    SESSION_CLOSED: '平台浏览器已关闭。', NAVIGATION_TIMEOUT: '平台页面加载超时。', UNSUPPORTED_PAGE: '平台页面结构暂不支持。',
+    SESSION_CLOSED: '平台浏览器已关闭。', SESSION_BUSY: '该平台浏览器正在执行其他操作。',
+    NAVIGATION_TIMEOUT: '平台页面加载超时；浏览器已关闭，请重新检查连接。',
+    SCRIPT_TIMEOUT: '平台页面读取超时；浏览器已关闭，请重新检查连接。',
+    BUDGET_EXCEEDED: '研究任务已达到 maxDurationMs。',
+    UNSUPPORTED_PAGE: '平台页面结构暂不支持。', PAGE_NOT_READY: '平台搜索结果在等待时间内未就绪。',
+    LOGIN_REQUIRED: '该平台要求登录后才能继续搜索。', MANUAL_VERIFICATION_REQUIRED: '该平台要求人工完成安全验证。',
     PAGE_READ_FAILED: '无法读取平台页面。', NAVIGATION_FAILED: '平台页面导航失败。', AUTH_FAILED: '平台 API 凭证无效或已过期。',
     RATE_LIMITED: '平台 API 暂时限流。', UPSTREAM_ERROR: '平台 API 暂时不可用。', TIMEOUT: '平台 API 请求超时。',
     INVALID_RESPONSE: '平台 API 返回了无法识别的数据。', EMPTY_RESULTS: '平台 API 未返回可用结果。',
-    ATTACHMENT_ERROR: '附件操作失败。', REQUEST_FAILED: '社媒请求失败。'
+    ATTACHMENT_ERROR: '附件操作失败。', REQUEST_FAILED: '社媒请求失败。',
+    [SOCIAL_API_CODES.NOT_CONFIGURED]: '该平台 API 尚未安全配置。',
+    [SOCIAL_API_CODES.UNSUPPORTED_PLATFORM]: '不支持该平台。',
+    [SOCIAL_API_CODES.UNSUPPORTED_CAPABILITY]: '该平台暂不支持此 API 能力。',
+    [SOCIAL_API_CODES.AUTH_FAILED]: '平台 API 凭证无效或已过期。',
+    [SOCIAL_API_CODES.RATE_LIMITED]: '平台 API 暂时限流。',
+    [SOCIAL_API_CODES.UPSTREAM_ERROR]: '平台 API 暂时不可用。',
+    [SOCIAL_API_CODES.TIMEOUT]: '平台 API 请求超时。',
+    [SOCIAL_API_CODES.INVALID_RESPONSE]: '平台 API 返回了无法识别的数据。',
+    [SOCIAL_API_CODES.EMPTY_RESULTS]: '平台 API 未返回可用结果。',
+    [SOCIAL_API_CODES.PLATFORM_MISMATCH]: '平台 API 返回了不匹配的平台结果。',
+    [SOCIAL_API_CODES.REQUEST_FAILED]: '社媒 API 请求失败。'
   };
   return { status: 'error', code, message: messages[code] };
 }
@@ -164,31 +218,40 @@ function attachSocialProfile(platform, profileId) {
 
 async function browserSocialSearch(platform, profileId, payload) {
   validateSocialProfileId(profileId);
-  return getSocialAdapter(platform, profileId).search(payload.query, { maxResults: payload.maxResults });
+  return getSocialAdapter(platform, profileId).search(payload.query, {
+    maxResults: payload.maxResults, timeoutMs: payload.timeoutMs
+  });
 }
 
 async function runSocialSearch(platform, payload) {
   validateSocialPlatform(platform);
-  validateSocialPayload(payload, ['query', 'profileId', 'mode', 'maxResults']);
+  validateSocialPayload(payload, ['query', 'profileId', 'mode', 'maxResults', 'timeoutMs']);
   const query = typeof payload.query === 'string' ? payload.query.trim() : '';
   if (!query || query.length > 500) throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
   const mode = payload.mode || 'auto';
   if (!SOCIAL_MODES.has(mode)) throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
   const maxResults = payload.maxResults == null ? 5 : payload.maxResults;
   if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 100) throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  const timeoutMs = payload.timeoutMs;
+  if (timeoutMs != null && (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000)) {
+    throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+  }
   validateSocialProfileId(payload.profileId);
-  const normalized = { query, profileId: payload.profileId, maxResults };
+  const normalized = { query, profileId: payload.profileId, maxResults, ...(timeoutMs == null ? {} : { timeoutMs }) };
 
   if (mode !== 'browser' && platform !== 'xiaohongshu') {
     const settings = getSettingsStore();
     const config = typeof settings.getSocialApiConfig === 'function' ? settings.getSocialApiConfig(platform) : null;
     const client = createSocialApiClient({ platform, config: config || {} });
     if (client.configured) {
-      const apiResult = await client.search(query, { maxResults });
-      if (Array.isArray(apiResult) && (mode === 'api' || apiResult.length >= maxResults)) {
+      const apiResult = await client.search(query, { maxResults, timeoutMs });
+      if (!Array.isArray(apiResult) && apiResult?.code === SOCIAL_API_CODES.EMPTY_RESULTS) {
+        return { status: 'ok', platform, retrievalMethod: 'api', results: [] };
+      }
+      if (Array.isArray(apiResult)) {
         return { status: 'ok', platform, retrievalMethod: 'api', results: apiResult };
       }
-      if (!Array.isArray(apiResult) && mode === 'api') return socialError(apiResult);
+      return socialError(apiResult);
     } else if (mode === 'api') {
       return socialError(Object.assign(new Error(), { code: 'NOT_CONFIGURED' }));
     }
@@ -199,7 +262,20 @@ async function runSocialSearch(platform, payload) {
 }
 
 function registerSocialHandlers() {
-  ipcMain.handle('social:list-platforms', async () => listSocialPlatformDefinitions());
+  getSocialSourceManager().registerIpcHandlers(ipcMain);
+  ipcMain.handle('social:list-platforms', async () => listSocialPlatformDefinitions().map(definition => {
+    const browserSearchRegistered = isRegisteredSearchAdapter(definition.platform);
+    return {
+      ...definition,
+      browserSearchRegistered,
+      browserAvailable: browserSearchRegistered || definition.apiAvailable === true,
+      supportsSearch: definition.apiAvailable === true ? definition.supportsSearch === true : browserSearchRegistered,
+      searchVerified: definition.searchVerified === true,
+      browserSearchStatus: browserSearchRegistered
+        ? (definition.searchVerified === true ? 'verified' : 'pending-live-test')
+        : 'unavailable'
+    };
+  }));
   ipcMain.handle('social:get-status', async (_event, platform) => {
     try {
       validateSocialPlatform(platform);
@@ -216,14 +292,24 @@ function registerSocialHandlers() {
       const manager = getSocialManager();
       const opened = await manager.openPlatformSession({ platform, profileId, startUrl: SOCIAL_START_URLS[platform] });
       attachSocialProfile(platform, profileId);
-      return { status: 'ok', ...opened };
+      return { ...opened, status: 'ok', browserStatus: opened.status };
     } catch (error) { return socialError(error); }
   });
-  ipcMain.handle('social:check', async (_event, platform, profileId) => {
+  ipcMain.handle('social:check', async (_event, platform, profileInput) => {
     try {
+      let profileId = profileInput;
+      let timeoutMs;
+      if (profileInput && typeof profileInput === 'object' && !Array.isArray(profileInput)) {
+        validateSocialPayload(profileInput, ['profileId', 'timeoutMs']);
+        profileId = profileInput.profileId;
+        timeoutMs = profileInput.timeoutMs;
+        if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) {
+          throw Object.assign(new TypeError(), { code: 'INVALID_REQUEST' });
+        }
+      }
       validateSocialPlatform(platform); validateSocialProfileId(profileId);
       if (!socialProfiles.has(`${platform}:${profileId}`)) return { status: 'not-ready', platform, profileId };
-      return await getSocialAdapter(platform, profileId).checkReady();
+      return await getSocialAdapter(platform, profileId).checkReady({ timeoutMs });
     } catch (error) { return socialError(error); }
   });
   ipcMain.handle('social:search', async (_event, platform, payload) => {
@@ -412,15 +498,55 @@ ipcMain.handle('search:request', async (_event, payload) => {
 });
 
 ipcMain.handle('backup:export', async (_event, content) => {
+  const archiveRequest = content && typeof content === 'object' && !Array.isArray(content)
+    && content.format === 'workspace-archive';
+  if (archiveRequest && (Object.keys(content).some(key => !['format', 'content', 'attachmentIds'].includes(key))
+    || typeof content.content !== 'string' || !Array.isArray(content.attachmentIds))) {
+    throw Object.assign(new TypeError('工作区 ZIP 备份请求无效'), { code: 'BACKUP_EXPORT_INVALID_REQUEST' });
+  }
   const result = await showFileDialog('showSaveDialog', {
     title: '导出备份',
-    defaultPath: path.join(app.getPath('documents'), 'forward-step-backup.json'),
-    filters: [{ name: 'JSON 备份', extensions: ['json'] }],
+    defaultPath: path.join(app.getPath('documents'), archiveRequest ? 'forward-step-workspace.zip' : 'forward-step-backup.json'),
+    filters: archiveRequest
+      ? [{ name: '完整工作区 ZIP', extensions: ['zip'] }]
+      : [{ name: 'JSON 备份', extensions: ['json'] }],
     showOverwriteConfirmation: true
   });
   if (result.canceled || !result.filePath) return { canceled: true };
 
-  writeBackupFileAtomically(result.filePath, serializeBackupContent(content));
+  if (!archiveRequest) {
+    writeBackupFileAtomically(result.filePath, serializeBackupContent(content));
+    return { canceled: false, filePath: result.filePath, format: 'json' };
+  }
+  if (path.extname(result.filePath).toLowerCase() !== '.zip') {
+    throw Object.assign(new TypeError('完整工作区备份必须导出为 ZIP 文件'), { code: 'BACKUP_EXPORT_INVALID_EXTENSION' });
+  }
+  let backup;
+  try { backup = JSON.parse(content.content); } catch (error) {
+    throw Object.assign(new TypeError('工作区 JSON 内容无效', { cause: error }), { code: 'BACKUP_EXPORT_INVALID_JSON' });
+  }
+  if (backup?.scope !== 'workspace' || backup?.format !== 'forward-step-workspace') {
+    throw Object.assign(new TypeError('完整工作区备份需要工作区 JSON'), { code: 'BACKUP_EXPORT_INVALID_JSON' });
+  }
+  const attachments = content.attachmentIds.map(id => {
+    if (typeof id !== 'string') throw Object.assign(new TypeError('附件 ID 无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+    const metadata = backup.data?.researchAttachments?.find(item => item?.id === id);
+    const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32})\.(txt|pdf|png|jpg|webp)$/.exec(id);
+    if (!metadata || !match) throw Object.assign(new TypeError('附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+    return {
+      id, taskId: match[1], type: metadata.type, size: metadata.size,
+      openStream: () => getSocialAttachmentStore().createReadStream(id)
+    };
+  });
+  const tempPath = result.filePath + `.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const output = fs.createWriteStream(tempPath, { flags: 'wx', mode: 0o600 });
+    await workspaceArchive.exportWorkspaceArchive({ output, workspace: backup, attachments });
+    fs.renameSync(tempPath, result.filePath);
+  } catch (error) {
+    try { fs.unlinkSync(tempPath); } catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
+    throw Object.assign(new Error('完整工作区 ZIP 导出失败'), { code: error.code || 'BACKUP_EXPORT_FAILED', cause: error });
+  }
   return { canceled: false, filePath: result.filePath };
 });
 
@@ -428,11 +554,29 @@ ipcMain.handle('backup:import', async () => {
   const result = await showFileDialog('showOpenDialog', {
     title: '导入备份',
     properties: ['openFile'],
-    filters: [{ name: 'JSON 备份', extensions: ['json'] }]
+    filters: [{ name: '完整工作区 ZIP 或 JSON 备份', extensions: ['zip', 'json'] }]
   });
   const filePath = result.filePaths?.[0];
   if (result.canceled || !filePath) return { canceled: true };
-  if (path.extname(filePath).toLowerCase() !== '.json') {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === '.zip') {
+    const stageId = randomUUID();
+    const stageDirectory = path.join(app.getPath('userData'), 'workspace-backup-import-staging', stageId);
+    fs.mkdirSync(stageDirectory, { recursive: true, mode: 0o700 });
+    try {
+      const archive = await workspaceArchive.importWorkspaceArchive({ archivePath: filePath, tempDirectory: stageDirectory });
+      backupImportStages.set(stageId, { stageDirectory, archive });
+      return {
+        canceled: false, format: 'workspace-archive', stageId,
+        content: JSON.stringify(archive.workspace),
+        attachments: archive.attachments.map(({ id, taskId, type, size, sha256 }) => ({ id, taskId, type, size, sha256 }))
+      };
+    } catch (error) {
+      fs.rmSync(stageDirectory, { recursive: true, force: true });
+      throw Object.assign(new Error('工作区 ZIP 校验失败'), { code: error.code || 'BACKUP_IMPORT_INVALID_ARCHIVE', cause: error });
+    }
+  }
+  if (extension !== '.json') {
     const error = new TypeError('只能导入 JSON 备份文件');
     error.code = 'BACKUP_IMPORT_INVALID_EXTENSION';
     throw error;
@@ -442,6 +586,146 @@ ipcMain.handle('backup:import', async () => {
     filePath,
     content: readBackupFile(filePath)
   };
+});
+
+ipcMain.handle('backup:commit-import', async (_event, payload) => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || Object.keys(payload).some(key => !['stageId', 'attachmentIds', 'targetAttachmentIds'].includes(key))
+    || typeof payload.stageId !== 'string' || !Array.isArray(payload.attachmentIds)
+    || payload.attachmentIds.some(id => typeof id !== 'string')
+    || payload.targetAttachmentIds !== undefined && (!Array.isArray(payload.targetAttachmentIds)
+      || payload.targetAttachmentIds.some(id => typeof id !== 'string'))) {
+    throw Object.assign(new TypeError('工作区导入提交请求无效'), { code: 'BACKUP_IMPORT_INVALID_REQUEST' });
+  }
+  const stage = backupImportStages.get(payload.stageId);
+  if (!stage) throw Object.assign(new Error('工作区 ZIP 暂存已失效，请重新选择文件'), { code: 'BACKUP_IMPORT_STAGE_EXPIRED' });
+  const selected = payload.attachmentIds;
+  if (new Set(selected).size !== selected.length) {
+    throw Object.assign(new TypeError('工作区附件导入清单重复'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+  }
+  const targetIds = payload.targetAttachmentIds || selected;
+  if (targetIds.length !== selected.length || new Set(targetIds).size !== targetIds.length) {
+    throw Object.assign(new TypeError('工作区附件目标 ID 清单无效'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+  }
+  const descriptors = new Map(stage.archive.attachments.map(item => [item.id, item]));
+  if (selected.some(id => !descriptors.has(id))) throw Object.assign(new TypeError('导入附件不在已校验清单中'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+  const store = getSocialAttachmentStore();
+  for (const [index, sourceId] of selected.entries()) {
+    const item = descriptors.get(sourceId);
+    const targetId = targetIds[index];
+    const prefix = `${item.taskId}_`;
+    const targetSuffix = targetId.startsWith(prefix) ? targetId.slice(prefix.length) : '';
+    if (!/^[a-f0-9]{32}\.(txt|pdf|png|jpg|webp)$/.test(targetSuffix)) {
+      throw Object.assign(new TypeError('工作区附件目标 ID 与所属任务不匹配'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+    }
+    if (store.has(targetId)) throw Object.assign(new Error('目标设备已存在相同附件 ID；请先处理冲突再导入'), { code: 'BACKUP_IMPORT_ATTACHMENT_CONFLICT' });
+  }
+  const transactionId = randomUUID();
+  const transactionRoot = path.join(app.getPath('userData'), 'workspace-backup-transactions');
+  fs.mkdirSync(transactionRoot, { recursive: true, mode: 0o700 });
+  const journalPath = path.join(transactionRoot, `${transactionId}.json`);
+  const ids = targetIds;
+  const journal = { version: 1, transactionId, stageId: payload.stageId, stageDirectory: stage.stageDirectory, attachmentIds: ids };
+  writeBackupFileAtomically(journalPath, JSON.stringify(journal));
+  backupImportTransactions.set(transactionId, { journalPath, journal });
+  try {
+    for (const [index, sourceId] of selected.entries()) {
+      const item = descriptors.get(sourceId);
+      await store.importFile({ id: targetIds[index], type: item.type, size: item.size, sha256: item.sha256, sourcePath: item.path });
+    }
+    return { status: 'ok', transactionId };
+  } catch (error) {
+    for (const id of ids) { if (store.has(id)) store.delete(id); }
+    fs.rmSync(journalPath, { force: true });
+    throw Object.assign(new Error('工作区附件安装失败，已回滚导入文件'), { code: error.code || 'BACKUP_IMPORT_COMMIT_FAILED', cause: error });
+  }
+});
+
+ipcMain.handle('backup:discard-import', async (_event, stageId) => {
+  if (typeof stageId !== 'string') throw Object.assign(new TypeError('工作区暂存 ID 无效'), { code: 'BACKUP_IMPORT_INVALID_REQUEST' });
+  const stage = backupImportStages.get(stageId);
+  if (!stage) return { status: 'ok', discarded: false };
+  fs.rmSync(stage.stageDirectory, { recursive: true, force: true });
+  backupImportStages.delete(stageId);
+  return { status: 'ok', discarded: true };
+});
+
+ipcMain.handle('backup:finalize-import', async (_event, transactionId) => {
+  const transaction = backupImportTransactions.get(transactionId);
+  if (!transaction) return { status: 'ok', finalized: false };
+  fs.rmSync(transaction.journalPath, { force: true });
+  const stage = backupImportStages.get(transaction.journal.stageId);
+  if (stage) fs.rmSync(stage.stageDirectory, { recursive: true, force: true });
+  backupImportStages.delete(transaction.journal.stageId);
+  backupImportTransactions.delete(transactionId);
+  return { status: 'ok', finalized: true };
+});
+
+ipcMain.handle('backup:rollback-import', async (_event, transactionId) => {
+  const transaction = backupImportTransactions.get(transactionId);
+  if (!transaction) return { status: 'ok', rolledBack: false };
+  const store = getSocialAttachmentStore();
+  for (const id of transaction.journal.attachmentIds) { if (store.has(id)) store.delete(id); }
+  fs.rmSync(transaction.journalPath, { force: true });
+  const stage = backupImportStages.get(transaction.journal.stageId);
+  if (stage) fs.rmSync(stage.stageDirectory, { recursive: true, force: true });
+  backupImportStages.delete(transaction.journal.stageId);
+  backupImportTransactions.delete(transactionId);
+  return { status: 'ok', rolledBack: true };
+});
+
+ipcMain.handle('backup:recover-imports', async (_event, attachmentIds) => {
+  if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string')) {
+    throw Object.assign(new TypeError('附件引用列表无效'), { code: 'BACKUP_IMPORT_INVALID_REQUEST' });
+  }
+  const transactionRoot = path.join(app.getPath('userData'), 'workspace-backup-transactions');
+  const references = new Set(attachmentIds);
+  const store = getSocialAttachmentStore();
+  let recovered = 0;
+  if (fs.existsSync(transactionRoot)) {
+    for (const filename of fs.readdirSync(transactionRoot).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
+      const journalPath = path.join(transactionRoot, filename);
+      let journal;
+      try { journal = JSON.parse(fs.readFileSync(journalPath, 'utf8')); } catch { fs.rmSync(journalPath, { force: true }); continue; }
+      if (journal?.version !== 1 || !Array.isArray(journal.attachmentIds)
+        || journal.attachmentIds.some(id => typeof id !== 'string')) { fs.rmSync(journalPath, { force: true }); continue; }
+      const committed = journal.attachmentIds.every(id => references.has(id));
+      if (!committed) for (const id of journal.attachmentIds) { if (store.has(id)) store.delete(id); }
+      if (typeof journal.stageDirectory === 'string') {
+        const expectedRoot = path.resolve(app.getPath('userData'), 'workspace-backup-import-staging');
+        const resolved = path.resolve(journal.stageDirectory);
+        const relative = path.relative(expectedRoot, resolved);
+        if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) fs.rmSync(resolved, { recursive: true, force: true });
+      }
+      fs.rmSync(journalPath, { force: true });
+      recovered += 1;
+    }
+  }
+
+  const stagingRoot = path.join(app.getPath('userData'), 'workspace-backup-import-staging');
+  if (fs.existsSync(stagingRoot)) {
+    const rootStats = fs.lstatSync(stagingRoot);
+    if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+      throw Object.assign(new Error('工作区导入暂存目录不安全，未执行清理'), { code: 'BACKUP_IMPORT_UNSAFE_STAGING' });
+    }
+    const protectedStageIds = new Set([
+      ...backupImportStages.keys(),
+      ...[...backupImportTransactions.values()].map(item => item.journal.stageId)
+    ]);
+    const root = fs.realpathSync(stagingRoot);
+    for (const stageId of fs.readdirSync(root)) {
+      if (!/^[a-f0-9-]{36}$/.test(stageId) || protectedStageIds.has(stageId)) continue;
+      const stageDirectory = path.join(root, stageId);
+      const stats = fs.lstatSync(stageDirectory);
+      if (!stats.isDirectory() || stats.isSymbolicLink()) continue;
+      const resolved = fs.realpathSync(stageDirectory);
+      const relative = path.relative(root, resolved);
+      if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+        fs.rmSync(resolved, { recursive: true, force: true });
+      }
+    }
+  }
+  return { status: 'ok', recovered };
 });
 
 ipcMain.handle('backup:list', async () => getBackupStore().listBackups());
@@ -465,24 +749,28 @@ app.on('window-all-closed', () => {
 
 let shuttingDown = false;
 app.on('before-quit', event => {
-  if (!bundledService || shuttingDown) return;
+  if (shuttingDown) return;
+  if (!bundledService && !socialSourceManager) return;
   event.preventDefault();
   shuttingDown = true;
 
   const forceCloseTimer = setTimeout(() => {
-    bundledService.closeAllConnections?.();
+    bundledService?.closeAllConnections?.();
     app.quit();
   }, SERVER_SHUTDOWN_TIMEOUT_MS);
-
-  try {
-    bundledService.close(() => {
-      clearTimeout(forceCloseTimer);
-      app.quit();
-    });
-  } catch (error) {
-    clearTimeout(forceCloseTimer);
-    console.error('关闭本地服务失败：', error);
-    bundledService.closeAllConnections?.();
-    app.quit();
+  const cleanup = [socialSourceManager?.stopAll() || Promise.resolve()];
+  if (bundledService) {
+    cleanup.push(new Promise(resolve => {
+      try {
+        bundledService.close(resolve);
+      } catch {
+        bundledService.closeAllConnections?.();
+        resolve();
+      }
+    }));
   }
+  Promise.allSettled(cleanup).finally(() => {
+    clearTimeout(forceCloseTimer);
+    app.quit();
+  });
 });

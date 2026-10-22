@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createRetriever } = require('../prototype/retriever.js');
+const { createRetriever, dedupeResearchResults } = require('../prototype/retriever.js');
 
 const entries = [
   { id: 'local-search', title: '本地关键词检索', summary: '关键词命中资料' },
@@ -85,4 +85,37 @@ test('没有 provider 或 provider.search 非函数时稳定回退关键词', as
   assert.deepEqual(invalidResult.map(item => item.id), ['local-search']);
   assert.deepEqual(missingProvider.status(), { mode: 'semantic', fallback: false });
   assert.deepEqual(invalidProvider.status(), { mode: 'semantic', fallback: false });
+});
+
+test('社媒结果按 platform 和 contentId 去重，保留首个 ID、访问链接和查询来源顺序', () => {
+  const results = dedupeResearchResults([
+    { id: 'first', platform: 'weibo', contentId: 'post-1', url: 'https://weibo.com/123/post-1?from=search', searchQueries: ['q1'] },
+    { id: 'second', platform: 'weibo', contentId: 'post-1', url: 'https://weibo.com/detail/post-1', searchQueries: ['q2', 'q1'] },
+    { id: 'other-platform', platform: 'zhihu', contentId: 'post-1', url: 'https://zhuanlan.zhihu.com/p/post-1', searchQueries: ['q3'] }
+  ]);
+  assert.equal(results.length, 2);
+  assert.equal(results[0].id, 'first');
+  assert.equal(results[0].url, 'https://weibo.com/123/post-1?from=search');
+  assert.deepEqual(results[0].searchQueries, ['q1', 'q2']);
+  assert.equal(results[1].id, 'other-platform');
+});
+
+test('URL 回退键只规范 scheme 和 host，不合并大小写不同的路径', () => {
+  const results = dedupeResearchResults([
+    { id: 'upper', platform: 'custom', url: 'HTTPS://Example.COM/CaseSensitive' },
+    { id: 'same', platform: 'custom', url: 'https://example.com/CaseSensitive' },
+    { id: 'lower', platform: 'custom', url: 'https://example.com/casesensitive' }
+  ]);
+  assert.deepEqual(results.map(item => item.id), ['upper', 'lower']);
+});
+
+test('重复内容的首个链接无效时采用后续有效访问链接', () => {
+  const results = dedupeResearchResults([
+    { id: 'stable-id', platform: 'zhihu', contentId: '1:2', url: 'javascript:alert(1)', searchQueries: ['q1'] },
+    { id: 'new-id', platform: 'zhihu', contentId: '1:2', url: 'https://www.zhihu.com/question/1/answer/2', searchQueries: ['q2'] }
+  ]);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'stable-id');
+  assert.equal(results[0].url, 'https://www.zhihu.com/question/1/answer/2');
+  assert.deepEqual(results[0].searchQueries, ['q1', 'q2']);
 });

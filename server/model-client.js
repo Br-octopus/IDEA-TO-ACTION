@@ -28,7 +28,7 @@ function modelMessage(code) {
     [MODEL_CODES.AUTH_FAILED]: '模型服务拒绝了凭证，请检查配置。',
     [MODEL_CODES.RATE_LIMITED]: '模型服务暂时限流，请稍后重试。',
     [MODEL_CODES.UPSTREAM_ERROR]: '模型服务暂时不可用，请稍后重试。',
-    [MODEL_CODES.TIMEOUT]: '模型请求超过 30 秒，已停止等待。',
+    [MODEL_CODES.TIMEOUT]: '模型请求超时，已停止等待。',
     [MODEL_CODES.EMPTY_RESPONSE]: '模型没有返回可用内容。',
     [MODEL_CODES.REQUEST_FAILED]: '模型请求失败，仍可复制提示词继续。'
   };
@@ -45,6 +45,24 @@ function extractText(data) {
   return typeof content === 'string' ? content.trim() : '';
 }
 
+function normalizeUsage(usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return null;
+  const integer = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const promptTokens = integer(usage.prompt_tokens);
+  const completionTokens = integer(usage.completion_tokens);
+  const reportedTotal = integer(usage.total_tokens);
+  const combined = promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null;
+  if (combined !== null && !Number.isSafeInteger(combined)) return null;
+  const knownParts = Number.isSafeInteger(combined) ? combined : Math.max(promptTokens || 0, completionTokens || 0);
+  const totalTokens = Math.max(reportedTotal || 0, knownParts);
+  if (totalTokens === 0 && reportedTotal === null && promptTokens === null && completionTokens === null) return null;
+  return {
+    total_tokens: totalTokens,
+    ...(promptTokens !== null ? { prompt_tokens: promptTokens } : {}),
+    ...(completionTokens !== null ? { completion_tokens: completionTokens } : {})
+  };
+}
+
 function createModelClient(config = {}, { fetchImpl = globalThis.fetch, timeoutMs = MODEL_TIMEOUT_MS } = {}) {
   const baseUrl = String(config.baseUrl || '').replace(/\/$/, '');
   const name = String(config.name || '');
@@ -57,27 +75,38 @@ function createModelClient(config = {}, { fetchImpl = globalThis.fetch, timeoutM
       return { configured: true, code: MODEL_CODES.REQUEST_FAILED, retryable: false, message: modelMessage(MODEL_CODES.REQUEST_FAILED) };
     }
 
+    const requestedTimeout = Number(options.timeoutMs);
+    const duration = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+      ? Math.max(1, Math.floor(requestedTimeout)) : timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), options.timeoutMs || timeoutMs);
+    const timer = setTimeout(() => controller.abort(), duration);
     try {
+      const requestBody = { model: name, messages, temperature: options.temperature ?? 0.2 };
+      if (Number.isSafeInteger(options.max_tokens) && options.max_tokens > 0) {
+        requestBody.max_tokens = options.max_tokens;
+      }
       const response = await fetchImpl(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
-        body: JSON.stringify({ model: name, messages, temperature: options.temperature ?? 0.2 }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal
       });
       const raw = await response.text();
       let data;
       try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
+      const usage = normalizeUsage(data.usage);
       if (!response.ok) {
         const normalized = normalizeModelError({ status: response.status });
-        return { configured: true, ...normalized, message: modelMessage(normalized.code) };
+        return { configured: true, ...normalized, message: modelMessage(normalized.code), ...(usage ? { usage } : {}) };
       }
       const text = extractText(data);
       if (!text) {
-        return { configured: true, code: MODEL_CODES.EMPTY_RESPONSE, retryable: false, message: modelMessage(MODEL_CODES.EMPTY_RESPONSE) };
+        return {
+          configured: true, code: MODEL_CODES.EMPTY_RESPONSE, retryable: false,
+          message: modelMessage(MODEL_CODES.EMPTY_RESPONSE), ...(usage ? { usage } : {})
+        };
       }
-      return { configured: true, text, model: name };
+      return { configured: true, text, model: name, ...(usage ? { usage } : {}) };
     } catch (error) {
       const normalized = normalizeModelError(error);
       return { configured: true, ...normalized, message: modelMessage(normalized.code) };
@@ -89,4 +118,4 @@ function createModelClient(config = {}, { fetchImpl = globalThis.fetch, timeoutM
   return { configured: isConfigured(config), name, request };
 }
 
-module.exports = { MODEL_TIMEOUT_MS, MODEL_CODES, normalizeModelError, createModelClient, extractText };
+module.exports = { MODEL_TIMEOUT_MS, MODEL_CODES, normalizeModelError, createModelClient, extractText, normalizeUsage };

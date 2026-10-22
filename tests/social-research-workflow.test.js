@@ -6,7 +6,7 @@ const schema = require('../prototype/social-research-schema.js');
 const workflow = require('../prototype/social-research-workflow.js');
 const prompts = require('../prototype/social-research-prompts.js');
 
-const platforms = ['xiaohongshu', 'reddit', 'youtube'];
+const platforms = ['xiaohongshu', 'bilibili', 'weibo'];
 
 function makePlan(overrides = {}) {
   return workflow.createResearchPlan({
@@ -16,6 +16,15 @@ function makePlan(overrides = {}) {
     ...overrides
   });
 }
+
+test('新建研究只接受四个国内平台且拒绝空值、未知值与重复项', () => {
+  assert.deepEqual(workflow.assertDomesticPlatformList(['xiaohongshu', 'bilibili', 'weibo', 'zhihu']), [
+    'xiaohongshu', 'bilibili', 'weibo', 'zhihu'
+  ]);
+  for (const value of [undefined, [], ['reddit'], ['xiaohongshu', 'youtube'], ['xiaohongshu', 'xiaohongshu']]) {
+    assert.throws(() => workflow.assertDomesticPlatformList(value), TypeError);
+  }
+});
 
 function startPreparedTask(task) {
   const prepared = workflow.transitionResearchTask(task, { type: 'prepared', platforms: task.platforms });
@@ -82,7 +91,11 @@ test('拒绝和取消后任务不可继续推进', () => {
 
 test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () => {
   assert.throws(
-    () => makePlan({ platforms: [...platforms, 'tiktok'], budget: { maxPlatforms: 3 } }),
+    () => makePlan({ platforms: [...platforms, 'tiktok'], budget: { maxPlatforms: 4 } }),
+    TypeError
+  );
+  assert.throws(
+    () => makePlan({ platforms: [...platforms, 'zhihu'], budget: { maxPlatforms: 3 } }),
     error => error.code === 'budget_exceeded'
   );
   assert.throws(
@@ -101,7 +114,7 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
   })));
   const cases = [
     { platforms: 4 },
-    { platform: 'reddit', queries: 3 },
+    { platform: 'xiaohongshu', queries: 3 },
     { pages: 3 },
     { details: 3 },
     { durationMs: 1001 },
@@ -111,15 +124,28 @@ test('每类预算超限都以 budget_exceeded 拒绝且不修改原任务', () 
   const originalUsage = structuredClone(task.usage);
   for (const usage of cases) expectBudgetExceeded(task, usage);
   assert.throws(
-    () => workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 0, queriesPerPlatform: 100 }),
+    () => workflow.consumeResearchBudget(task, { platform: 'xiaohongshu', queries: 0, queriesPerPlatform: 100 }),
     TypeError
   );
-  expectBudgetExceeded(task, { platform: 'reddit', queries: 3, queriesPerPlatform: 3 });
+  expectBudgetExceeded(task, { platform: 'xiaohongshu', queries: 3, queriesPerPlatform: 3 });
   assert.deepEqual(task.usage, originalUsage);
-  const consumed = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 1 });
+  const consumed = workflow.consumeResearchBudget(task, { platform: 'xiaohongshu', queries: 1 });
   assert.equal(consumed.usage.platforms, 1);
-  assert.deepEqual(consumed.usage.queriesByPlatform, { reddit: 1 });
+  assert.deepEqual(consumed.usage.queriesByPlatform, { xiaohongshu: 1 });
   assert.equal(task.usage.platforms, 0);
+});
+
+test('模型实际用量即使意外超预算也要记录，阻止后续继续消耗', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
+    budget: { maxAnalysisTokens: 100 }
+  })));
+  const recorded = workflow.recordAnalysisTokens(task, 120);
+  assert.equal(recorded.usage.analysisTokens, 120);
+  assert.equal(recorded.usage.analysisTokensEstimated, false);
+  assert.equal(task.usage.analysisTokens, 0);
+  assert.equal(workflow.recordAnalysisTokens(task, 12, { estimated: true }).usage.analysisTokensEstimated, true);
+  assert.equal(workflow.canRequestSupplementarySearch(recorded, { platform: 'xiaohongshu', analysisTokens: 1 }).allowed, false);
+  assert.throws(() => workflow.recordAnalysisTokens(recorded, -1), TypeError);
 });
 
 test('查询计量必须带平台或使用逐平台 map，并对重复调用累计', () => {
@@ -128,12 +154,12 @@ test('查询计量必须带平台或使用逐平台 map，并对重复调用累�
   })));
   assert.throws(() => workflow.consumeResearchBudget(task, { queries: 1 }), TypeError);
   assert.throws(() => workflow.consumeResearchBudget(task, { queriesPerPlatform: 1 }), TypeError);
-  let used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 1 });
-  used = workflow.consumeResearchBudget(used, { platform: 'reddit', queriesPerPlatform: 1 });
-  assert.equal(used.usage.queriesByPlatform.reddit, 2);
-  expectBudgetExceeded(used, { platform: 'reddit', queries: 1 });
-  used = workflow.consumeResearchBudget(task, { queriesByPlatform: { reddit: 2, youtube: 1 } });
-  assert.deepEqual(used.usage.queriesByPlatform, { reddit: 2, youtube: 1 });
+  let used = workflow.consumeResearchBudget(task, { platform: 'xiaohongshu', queries: 1 });
+  used = workflow.consumeResearchBudget(used, { platform: 'xiaohongshu', queriesPerPlatform: 1 });
+  assert.equal(used.usage.queriesByPlatform.xiaohongshu, 2);
+  expectBudgetExceeded(used, { platform: 'xiaohongshu', queries: 1 });
+  used = workflow.consumeResearchBudget(task, { queriesByPlatform: { xiaohongshu: 2, bilibili: 1 } });
+  assert.deepEqual(used.usage.queriesByPlatform, { xiaohongshu: 2, bilibili: 1 });
 });
 
 test('预算计量拒绝非有限、负数和非整数值，且无效输入不修改旧任务', () => {
@@ -157,9 +183,9 @@ test('补搜只允许在已批准预算剩余额度内进行', () => {
   const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
     budget: { maxQueriesPerPlatform: 2 }
   })));
-  assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, true);
-  const used = workflow.consumeResearchBudget(task, { platform: 'reddit', queries: 2 });
-  assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'reddit', queries: 1 }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'xiaohongshu', queries: 1 }).allowed, true);
+  const used = workflow.consumeResearchBudget(task, { platform: 'xiaohongshu', queries: 2 });
+  assert.equal(workflow.canRequestSupplementarySearch(used, { platform: 'xiaohongshu', queries: 1 }).allowed, false);
   const analysisUsed = workflow.consumeResearchBudget(task, { analysisTokens: 9000 });
   assert.equal(analysisUsed.usage.analysisTokens, 9000);
   assert.equal(workflow.canRequestSupplementarySearch(analysisUsed, { analysisTokens: 1001 }).allowed, false);
@@ -171,37 +197,37 @@ test('补搜规范化单平台数组、累计平台预算并要求多平台逐�
   const task = startPreparedTask(workflow.approveResearchPlan(makePlan({
     budget: { maxPlatforms: 3, maxQueriesPerPlatform: 2 }
   })));
-  const single = workflow.canRequestSupplementarySearch(task, { platforms: [' REDDIT '], queries: 1 });
+  const single = workflow.canRequestSupplementarySearch(task, { platforms: [' XIAOHONGSHU '], queries: 1 });
   assert.equal(single.allowed, true);
-  assert.equal(single.usage.platform, 'reddit');
+  assert.equal(single.usage.platform, 'xiaohongshu');
   let used = single.task;
-  const second = workflow.canRequestSupplementarySearch(used, { platforms: ['youtube'], queries: 1 });
+  const second = workflow.canRequestSupplementarySearch(used, { platforms: ['bilibili'], queries: 1 });
   assert.equal(second.allowed, true);
   used = second.task;
-  assert.deepEqual(used.usage.usedPlatforms, ['reddit', 'youtube']);
-  const third = workflow.canRequestSupplementarySearch(used, { platforms: ['xiaohongshu'], queries: 1 });
+  assert.deepEqual(used.usage.usedPlatforms, ['xiaohongshu', 'bilibili']);
+  const third = workflow.canRequestSupplementarySearch(used, { platforms: ['weibo'], queries: 1 });
   assert.equal(third.allowed, true);
   used = third.task;
   assert.equal(used.usage.platforms, 3);
   const limitedTask = { ...task, budget: { ...task.budget, maxPlatforms: 2 } };
-  const firstLimited = workflow.canRequestSupplementarySearch(limitedTask, { platforms: ['reddit'], queries: 1 });
-  const secondLimited = workflow.canRequestSupplementarySearch(firstLimited.task, { platforms: ['youtube'], queries: 1 });
+  const firstLimited = workflow.canRequestSupplementarySearch(limitedTask, { platforms: ['xiaohongshu'], queries: 1 });
+  const secondLimited = workflow.canRequestSupplementarySearch(firstLimited.task, { platforms: ['bilibili'], queries: 1 });
   assert.equal(secondLimited.allowed, true);
-  const thirdLimited = workflow.canRequestSupplementarySearch(secondLimited.task, { platforms: ['xiaohongshu'], queries: 1 });
+  const thirdLimited = workflow.canRequestSupplementarySearch(secondLimited.task, { platforms: ['weibo'], queries: 1 });
   assert.equal(thirdLimited.allowed, false);
   assert.equal(workflow.canRequestSupplementarySearch(task, { platforms: ['unknown'] }).allowed, false);
   assert.equal(workflow.canRequestSupplementarySearch(task, {
     platform: 'unknown',
-    platforms: ['reddit', 'youtube'],
-    queriesByPlatform: { reddit: 1, youtube: 1 }
+    platforms: ['xiaohongshu', 'bilibili'],
+    queriesByPlatform: { xiaohongshu: 1, bilibili: 1 }
   }).allowed, false);
-  assert.equal(workflow.canRequestSupplementarySearch(task, { platforms: ['reddit', 'youtube'], queries: 1 }).allowed, false);
+  assert.equal(workflow.canRequestSupplementarySearch(task, { platforms: ['xiaohongshu', 'bilibili'], queries: 1 }).allowed, false);
   const multi = workflow.canRequestSupplementarySearch(task, {
-    platforms: ['reddit', 'youtube'],
-    queriesByPlatform: { reddit: 1, youtube: 2 }
+    platforms: ['xiaohongshu', 'bilibili'],
+    queriesByPlatform: { xiaohongshu: 1, bilibili: 2 }
   });
   assert.equal(multi.allowed, true);
-  assert.deepEqual(multi.usage.queriesByPlatform, { reddit: 1, youtube: 2 });
+  assert.deepEqual(multi.usage.queriesByPlatform, { xiaohongshu: 1, bilibili: 2 });
 });
 
 test('补搜仅在 searching 状态开放', () => {
@@ -211,34 +237,45 @@ test('补搜仅在 searching 状态开放', () => {
   const reportReady = workflow.transitionResearchTask(searching, { type: 'finish' });
   const awaitingSave = workflow.transitionResearchTask(reportReady, { type: 'request_save' });
   for (const task of [draft, awaitingPreparation, awaitingSave]) {
-    assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'reddit', queries: 1 }).allowed, false);
+    assert.equal(workflow.canRequestSupplementarySearch(task, { platform: 'xiaohongshu', queries: 1 }).allowed, false);
   }
-  assert.equal(workflow.canRequestSupplementarySearch(searching, { platform: 'reddit', queries: 1 }).allowed, true);
+  assert.equal(workflow.canRequestSupplementarySearch(searching, { platform: 'xiaohongshu', queries: 1 }).allowed, true);
 });
 
 test('连接偏好尊重能力和明确选择，并在 auto 下检查 API 结果质量', () => {
-  assert.equal(workflow.decideConnectionMode('xiaohongshu', { apiAvailable: false, browserAvailable: true }, 'auto'), 'browser');
-  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'auto'), 'api');
-  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'browser'), 'browser');
-  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: true, browserAvailable: true }, 'api'), 'api');
+  assert.equal(workflow.decideConnectionMode('xiaohongshu', { apiConfigured: false, browserAvailable: true }, 'auto'), 'browser');
+  assert.equal(workflow.decideConnectionMode('xiaohongshu', { apiConfigured: true, browserAvailable: true }, 'auto'), 'api');
+  assert.equal(workflow.decideConnectionMode('xiaohongshu', { apiConfigured: true, browserAvailable: true }, 'browser'), 'browser');
+  assert.equal(workflow.decideConnectionMode('xiaohongshu', { apiConfigured: true, browserAvailable: true }, 'api'), 'api');
   assert.throws(
-    () => workflow.decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'api'),
+    () => workflow.decideConnectionMode('xiaohongshu', { apiConfigured: false, browserAvailable: true }, 'api'),
     error => error.code === 'api_unavailable' && /API/.test(error.message)
   );
   assert.throws(
-    () => workflow.decideConnectionMode('reddit', { apiAvailable: true, status: 'not-ready' }, 'api'),
+    () => workflow.decideConnectionMode('xiaohongshu', { apiConfigured: true, status: 'not-ready' }, 'api'),
     error => error.code === 'api_unavailable'
   );
-  assert.equal(workflow.decideConnectionMode('reddit', { apiAvailable: false, browserAvailable: true }, 'auto'), 'browser');
+  assert.equal(workflow.decideConnectionMode('xiaohongshu', { apiConfigured: false, browserAvailable: true }, 'auto'), 'browser');
   const capability = { minimumResults: 2, requiredFields: ['url', 'title'] };
   for (const apiResult of [
-    { error: 'authentication' }, { error: 'timeout' }, { error: 'rate_limit' },
-    { results: [] }, { results: [{ url: 'https://a.test', title: 'a' }] },
-    { results: [{ url: 'https://a.test', title: 'a' }, { url: 'https://b.test' }] }
+    { status: 'error', code: 'API_DOWN', message: 'timeout' },
+    { status: 'ok', results: [{ url: 'https://a.test', title: 'a' }] },
+    { status: 'ok', results: [{ url: 'https://a.test', title: 'a' }, { url: 'https://b.test' }] }
   ]) assert.equal(workflow.shouldFallbackToBrowser(apiResult, capability), true);
-  assert.equal(workflow.shouldFallbackToBrowser({ results: [
+  assert.equal(workflow.shouldFallbackToBrowser({ status: 'ok', results: [] }, capability), false);
+  assert.equal(workflow.shouldFallbackToBrowser({ status: 'ok', results: [
     { url: 'https://a.test', title: 'a' }, { url: 'https://b.test', title: 'b' }
   ] }, capability), false);
+  for (const apiResult of [
+    { status: 'error', code: 'RATE_LIMITED' },
+    { status: 'error', code: 'SOCIAL_API_RATE_LIMITED' },
+    { status: 'error', code: 'SOCIAL_API_AUTH_FAILED' },
+    { status: 'error', code: 'SOCIAL_API_PERMISSION_DENIED' },
+    { status: 'error', code: 'MANUAL_VERIFICATION_REQUIRED' },
+    { status: 'restricted', code: 'RESTRICTED' },
+    { status: 'error', code: 'UNSUPPORTED_PAGE' }
+  ]) assert.equal(workflow.shouldFallbackToBrowser(apiResult, capability), false);
+  assert.equal(workflow.shouldFallbackToBrowser({ status: 'error', code: 'SOCIAL_API_UNSUPPORTED_CAPABILITY' }, capability), true);
   assert.equal(workflow.shouldFallbackToBrowser({ ok: false, error: 'timeout' }, { preference: 'api' }), false);
   assert.equal(workflow.shouldFallbackToBrowser({ error: 'timeout' }, { preference: 'browser' }), false);
 });
@@ -267,4 +304,32 @@ test('工作流和提示词同时支持浏览器全局导出', () => {
     vm.runInNewContext(fs.readFileSync(require.resolve(`../prototype/${file}`), 'utf8'), context);
     assert.equal(typeof context[globalName][exportName], 'function');
   }
+});
+
+test('深读预算可逐项预占详情与页面并在耗尽时拒绝后续请求', () => {
+  const task = startPreparedTask(workflow.approveResearchPlan(makePlan({ budget: { maxDetails: 1, maxPages: 2 } })));
+  const oneContent = workflow.reserveDeepReadBudget(task, { details: 1 });
+  const onePage = workflow.reserveDeepReadBudget(oneContent, { pages: 1 });
+  const secondPage = workflow.reserveDeepReadBudget(onePage, { pages: 1 });
+  assert.equal(secondPage.usage.details, 1);
+  assert.equal(secondPage.usage.pages, 2);
+  assert.throws(() => workflow.reserveDeepReadBudget(secondPage, { details: 1 }), error => error.code === 'budget_exceeded');
+  assert.throws(() => workflow.reserveDeepReadBudget(secondPage, { pages: 1 }), error => error.code === 'budget_exceeded');
+  assert.equal(secondPage.usage.pages, 2, '拒绝预占不能修改旧预算');
+});
+
+test('重启将运行操作标为未知，重试递增尝试且跳过不改变任务预算', () => {
+  const task = schema.createResearchTask({ id: 'recover-task', status: 'searching', usage: { pages: 2, sourceRequests: 3 }, operations: [
+    { operationId: 'op-running', platform: 'bilibili', capability: 'search', state: 'running', attempt: 1 },
+    { operationId: 'op-failed', platform: 'xiaohongshu', capability: 'detail', state: 'failed', attempt: 2 }
+  ] });
+  const recovered = workflow.recoverResearchOperations(task, '2026-10-21T00:00:00.000Z');
+  assert.equal(recovered.operations[0].state, 'unknown');
+  const retried = workflow.chooseResearchOperation(recovered, 'op-running', 'retry', '2026-10-21T00:01:00.000Z', 'op-running-2');
+  assert.equal(retried.operations[0].attempt, 2);
+  assert.equal(retried.operations[0].parentOperationId, 'op-running');
+  assert.equal(retried.operations[0].state, 'waiting');
+  const skipped = workflow.chooseResearchOperation(retried, 'op-failed', 'skip');
+  assert.equal(skipped.operations[1].state, 'skipped');
+  assert.deepEqual(skipped.usage, task.usage);
 });

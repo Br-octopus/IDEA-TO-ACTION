@@ -12,6 +12,10 @@
     "dist:win": "electron-builder --win nsis portable"
   },
   "engines": { "node": ">=18" },
+  "dependencies": {
+    "yauzl": "^2.10.0",
+    "yazl": "^3.3.1"
+  },
   "devDependencies": {
     "electron": "^38.0.0",
     "electron-builder": "^26.0.0"
@@ -29,6 +33,10 @@
       "server/**/*",
       "server.js",
       "package.json"
+    ],
+    "extraResources": [
+      { "from": "vendor/mediacrawler", "to": "vendor/mediacrawler" },
+      { "from": "vendor/mediacrawler-bridge", "to": "vendor/mediacrawler-bridge" }
     ],
     "win": {
       "target": ["nsis", "portable"],

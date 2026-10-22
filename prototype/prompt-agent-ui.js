@@ -153,7 +153,7 @@
         objective,
         queries: [objective],
         sourceTypes: sourceType === "mixed" ? ["web", "social"] : [sourceType],
-        platforms: sourceType === "social" || sourceType === "mixed" ? ["reddit", "youtube"] : [],
+        platforms: sourceType === "social" || sourceType === "mixed" ? ["xiaohongshu", "bilibili", "weibo", "zhihu"] : [],
         budget: { maxQueries: 3, maxSources: 5 }
       };
       const request = coordinator.previewExternalResearch(scope);

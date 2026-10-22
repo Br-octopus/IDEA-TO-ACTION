@@ -12,11 +12,14 @@
   const EVIDENCE_STATUSES = new Set([
     "unverified", "source-reviewed", "user-confirmed", "multiple-sources", "conflicting"
   ]);
+  const XSEC_TOKEN_PARAM_NAMES = new Set(["xsec_token", "xsectoken"]);
   const CONNECTION_MODES = new Set(["api", "browser", "auto"]);
   const CONNECTION_STATUSES = new Set([
     "needs-recheck", "not-ready", "checking", "ready", "api-available", "expired",
     "manual-verification", "restricted", "failed", "partial"
   ]);
+  const LOGIN_STATES = new Set(["unknown", "logged-in", "logged-out", "login-required", "restricted"]);
+  const OPERATION_STATES = new Set(["waiting", "running", "completed", "failed", "skipped", "unknown"]);
 
   function isObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -79,13 +82,15 @@
   function normalizeBudget(input) {
     const source = isObject(input) ? input : {};
     return {
-      maxPlatforms: positiveInteger(source.maxPlatforms, 3),
-      maxQueriesPerPlatform: positiveInteger(source.maxQueriesPerPlatform, 5),
-      maxPages: positiveInteger(source.maxPages, 3),
-      maxDetails: positiveInteger(source.maxDetails, 20),
-      maxDurationMs: positiveInteger(source.maxDurationMs, 300000),
+      maxPlatforms: positiveInteger(source.maxPlatforms, 4),
+      maxQueriesPerPlatform: positiveInteger(source.maxQueriesPerPlatform, 3),
+      maxResultsPerQuery: positiveInteger(source.maxResultsPerQuery, 20),
+      maxPages: positiveInteger(source.maxPages, 24),
+      maxDetails: positiveInteger(source.maxDetails, 10),
+      maxDurationMs: positiveInteger(source.maxDurationMs, 600000),
       maxAttachmentBytes: positiveInteger(source.maxAttachmentBytes, 25 * 1024 * 1024),
-      maxAnalysisTokens: positiveInteger(source.maxAnalysisTokens, 10000)
+      maxAnalysisTokens: positiveInteger(source.maxAnalysisTokens, 10000),
+      maxSourceRequests: Math.min(100, positiveInteger(source.maxSourceRequests, 100))
     };
   }
 
@@ -146,10 +151,93 @@
     }, {});
   }
 
+  function normalizeResearchMaterial(input = {}, resultId = "") {
+    const source = isObject(input) ? input : {};
+    const sourceTypes = new Set(["platform-caption", "human-caption", "automatic-caption", "local-transcription", "unknown"]);
+    return {
+      id: makeId("material", source.id),
+      resultId: text(source.resultId || resultId),
+      kind: ["detail", "comments", "transcript"].includes(source.kind) ? source.kind : "detail",
+      contentId: text(source.contentId),
+      sourceId: text(source.sourceId, "unknown") || "unknown",
+      sourceVersion: text(source.sourceVersion, "unknown") || "unknown",
+      operationId: text(source.operationId),
+      connectionMethod: text(source.connectionMethod, "unknown") || "unknown",
+      acquisitionMethod: text(source.acquisitionMethod, "unknown") || "unknown",
+      capturedAt: text(source.capturedAt, nowIso()),
+      itemCount: nonNegativeInteger(source.itemCount),
+      sortOrder: text(source.sortOrder, "unknown") || "unknown",
+      totalCount: source.totalCount === null || source.totalCount === undefined || source.totalCount === ""
+        ? null
+        : Number.isSafeInteger(Number(source.totalCount)) && Number(source.totalCount) >= 0
+          ? Number(source.totalCount)
+          : null,
+      sourceType: sourceTypes.has(source.sourceType) ? source.sourceType : "unknown",
+      language: text(source.language, "unknown") || "unknown",
+      status: ["running", "completed", "failed", "cancelled", "skipped", "unavailable"].includes(source.status)
+        ? source.status : "failed",
+      summary: text(source.summary).slice(0, 1000),
+      truncated: booleanValue(source.truncated),
+      truncationReason: text(source.truncationReason),
+      errorCategory: text(source.errorCategory),
+      errorCode: text(source.errorCode),
+      errorMessage: text(source.errorMessage).slice(0, 500),
+      budgetReserved: booleanValue(source.budgetReserved),
+      attachmentId: text(source.attachmentId)
+    };
+  }
+
+  function resolveDomesticContentId(result = {}) {
+    const source = isObject(result) ? result : {};
+    const platform = text(source.platform).toLowerCase();
+    const rawId = text(source.contentId);
+    let url;
+    try { url = new URL(text(source.url)); } catch (error) { url = null; }
+    if (platform === "xiaohongshu") {
+      const pathId = url?.pathname.match(/\/(?:explore|discovery\/item)\/([A-Za-z0-9_-]{1,64})(?:\/|$)/)?.[1];
+      const noteId = /^[A-Za-z0-9_-]{1,64}$/.test(rawId) ? rawId : pathId;
+      if (!noteId) return null;
+      const xsecSource = url?.searchParams.get("xsec_source") || "";
+      const xsecToken = url
+        ? [...url.searchParams.entries()].find(([name, value]) => XSEC_TOKEN_PARAM_NAMES.has(name.toLowerCase()) && value)?.[1] || ""
+        : "";
+      return {
+        noteId,
+        ...(xsecSource && xsecSource.length <= 512 ? { xsecSource } : {}),
+        ...(xsecToken && xsecToken.length <= 512 ? { xsecToken } : {})
+      };
+    }
+    if (platform === "bilibili") {
+      const bvid = rawId.match(/^BV[0-9A-Za-z]{10}$/)?.[0]
+        || url?.href.match(/\b(BV[0-9A-Za-z]{10})\b/)?.[1];
+      if (bvid) return { bvid };
+      const aid = rawId.match(/^(?:av)?([1-9][0-9]{0,19})$/i)?.[1]
+        || url?.pathname.match(/\/video\/av([1-9][0-9]{0,19})(?:\/|$)/i)?.[1];
+      return aid ? { aid } : null;
+    }
+    if (platform === "weibo") {
+      if (url && !["weibo.com", "www.weibo.com"].includes(url.hostname.toLowerCase())) return null;
+      const postId = url?.pathname.match(/^\/(?:\d{1,20}\/([A-Za-z0-9]+)|detail\/(\d{1,30})|status\/([A-Za-z0-9]+))\/?$/);
+      const id = postId?.[1] || postId?.[2] || postId?.[3]
+        || rawId.match(/^[A-Za-z0-9]{1,32}$/)?.[0];
+      return id ? { postId: id } : null;
+    }
+    if (platform === "zhihu") {
+      const answer = url?.pathname.match(/^\/question\/(\d{1,30})\/answer\/(\d{1,30})\/?$/);
+      if (answer && url.hostname === "www.zhihu.com") return { questionId: answer[1], answerId: answer[2] };
+      const article = url?.hostname === "zhuanlan.zhihu.com"
+        ? url.pathname.match(/^\/p\/(\d{1,30})\/?$/) : null;
+      if (article) return { articleId: article[1] };
+      return null;
+    }
+    return null;
+  }
+
   function normalizeSocialResult(input = {}) {
     const source = isObject(input) ? input : {};
-    const url = text(source.url || source.sourceUrl);
-    if (url && !isSafeHttpUrl(url)) throw new TypeError("结果 URL 必须是 http 或 https 地址");
+    const sourceUrl = text(source.url || source.sourceUrl);
+    if (sourceUrl && !isSafeHttpUrl(sourceUrl)) throw new TypeError("结果 URL 必须是 http 或 https 地址");
+    const url = removeXsecTokenParams(sourceUrl);
     const retrievalMethod = RETRIEVAL_METHODS.has(source.retrievalMethod)
       ? source.retrievalMethod
       : "browser";
@@ -159,6 +247,7 @@
     return {
       id: makeId("result", source.id),
       platform: text(source.platform).toLowerCase(),
+      contentId: text(source.contentId),
       url,
       title: text(source.title),
       author: text(source.author),
@@ -173,8 +262,21 @@
       evidenceStatus,
       marketingRisk: text(source.marketingRisk, "unknown") || "unknown",
       needsManualReview: booleanValue(source.needsManualReview),
-      attachmentIds: listValue(source.attachmentIds)
+      attachmentIds: listValue(source.attachmentIds),
+      materials: Array.isArray(source.materials)
+        ? source.materials.map(item => normalizeResearchMaterial(item, source.id))
+        : []
     };
+  }
+
+  function removeXsecTokenParams(value) {
+    let url;
+    try { url = new URL(value); } catch (error) { return value; }
+    const tokenParamNames = [...new Set([...url.searchParams.keys()]
+      .filter(name => XSEC_TOKEN_PARAM_NAMES.has(name.toLowerCase())))];
+    if (!tokenParamNames.length) return value;
+    for (const name of tokenParamNames) url.searchParams.delete(name);
+    return url.toString();
   }
 
   function normalizePlatformCapability(input = {}) {
@@ -217,8 +319,18 @@
 
   function normalizeReport(input) {
     const source = isObject(input) ? input : {};
+    const findings = value => (Array.isArray(value) ? value : typeof value === "string" ? [value] : [])
+      .map(item => text(isObject(item) ? item.finding : item)).filter(Boolean);
+    const citations = Array.isArray(source.citations) ? source.citations.map(item => {
+      const citation = isObject(item) ? item : {};
+      return {
+        findingIndex: Number.isInteger(citation.findingIndex) && citation.findingIndex >= 0 ? citation.findingIndex : -1,
+        resultId: text(citation.resultId),
+        materialId: text(citation.materialId)
+      };
+    }).filter(item => item.findingIndex >= 0 && item.resultId && item.materialId) : [];
     return {
-      coreFindings: listValue(source.coreFindings || source.keyFindings),
+      coreFindings: findings(source.coreFindings || source.keyFindings),
       commonPoints: listValue(source.commonPoints || source.platformCommonalities),
       platformDifferences: listValue(source.platformDifferences),
       painPointsOrPatterns: listValue(source.painPointsOrPatterns),
@@ -228,6 +340,8 @@
       nextSteps: listValue(source.nextSteps),
       summary: text(source.summary),
       resultIds: listValue(source.resultIds),
+      sourceUrls: listValue(source.sourceUrls),
+      citations,
       generatedAt: text(source.generatedAt)
     };
   }
@@ -239,10 +353,26 @@
       ...capability,
       platform: capability.platform || text(platform).toLowerCase(),
       status: "needs-recheck",
+      browserStatus: "needs-recheck",
+      browserReady: false,
       connectionMode: CONNECTION_MODES.has(source.connectionMode) ? source.connectionMode : "auto",
       apiConfigured: booleanValue(source.apiConfigured),
-      browserPrepared: booleanValue(source.browserPrepared),
-      lastErrorCategory: text(source.lastErrorCategory)
+      browserPrepared: false,
+      checked: false,
+      checkedAt: text(source.checkedAt || source.lastCheckedAt),
+      lastCheckedAt: text(source.lastCheckedAt || source.checkedAt),
+      lastSuccessfulSearchAt: text(source.lastSuccessfulSearchAt),
+      loginState: LOGIN_STATES.has(source.loginState) ? source.loginState : "unknown",
+      searchVerified: source.searchVerified === true,
+      capabilities: isObject(source.capabilities) ? {
+        supportsSearch: booleanValue(source.capabilities.supportsSearch),
+        supportsDetail: booleanValue(source.capabilities.supportsDetail),
+        supportsComments: booleanValue(source.capabilities.supportsComments),
+        supportsScreenshots: booleanValue(source.capabilities.supportsScreenshots)
+      } : {},
+      lastErrorCategory: text(source.lastErrorCategory),
+      lastErrorCode: text(source.lastErrorCode || source.errorCode),
+      error: text(source.error || source.lastError)
     };
   }
 
@@ -258,11 +388,14 @@
     }).filter(Boolean);
     const resultIds = listValue(source.resultIds || results.map(result => result.id));
     const createdAt = text(source.createdAt, nowIso());
+    const operations = (Array.isArray(source.operations) ? source.operations : []).map(item => normalizeResearchOperation(item));
     return {
       id: makeId("research-task", source.id),
       topic: text(source.topic),
       template: text(source.template),
       plan: normalizeResearchPlan(source.plan),
+      planVersion: positiveInteger(source.planVersion, 1),
+      operations,
       platforms: listValue(source.platforms),
       preparedPlatforms: listValue(source.preparedPlatforms),
       profileId: text(source.profileId),
@@ -283,6 +416,9 @@
         }, {})
         : {},
       failureReason: text(source.failureReason),
+      rejectionReason: text(source.rejectionReason),
+      planError: text(source.planError),
+      planErrorCode: text(source.planErrorCode),
       reportError: text(source.reportError),
       reportErrorCode: text(source.reportErrorCode),
       budget: normalizeBudget(source.budget),
@@ -296,8 +432,10 @@
         details: nonNegativeInteger(source.usage.details),
         durationMs: Math.max(0, Number.isFinite(Number(source.usage.durationMs)) ? Number(source.usage.durationMs) : 0),
         attachmentBytes: nonNegativeInteger(source.usage.attachmentBytes),
-        analysisTokens: nonNegativeInteger(source.usage.analysisTokens)
-      } : { platforms: 0, usedPlatforms: [], queriesByPlatform: {}, pages: 0, details: 0, durationMs: 0, attachmentBytes: 0, analysisTokens: 0 },
+        analysisTokens: nonNegativeInteger(source.usage.analysisTokens),
+        analysisTokensEstimated: booleanValue(source.usage.analysisTokensEstimated),
+        sourceRequests: nonNegativeInteger(source.usage.sourceRequests)
+      } : { platforms: 0, usedPlatforms: [], queriesByPlatform: {}, pages: 0, details: 0, durationMs: 0, attachmentBytes: 0, analysisTokens: 0, analysisTokensEstimated: false, sourceRequests: 0 },
       queries: listValue(source.queries),
       resultIds,
       results,
@@ -308,6 +446,34 @@
       excludedResultIds: listValue(source.excludedResultIds),
       createdAt,
       updatedAt: text(source.updatedAt, createdAt)
+    };
+  }
+
+  function normalizeResearchOperation(input = {}) {
+    const source = isObject(input) ? input : {};
+    const state = OPERATION_STATES.has(source.state) ? source.state : "waiting";
+    return {
+      operationId: text(source.operationId) || makeId("operation"),
+      parentOperationId: text(source.parentOperationId),
+      planVersion: positiveInteger(source.planVersion, 1),
+      platform: text(source.platform).toLowerCase(),
+      profileId: text(source.profileId),
+      sourceId: text(source.sourceId),
+      sourceVersion: text(source.sourceVersion),
+      capability: text(source.capability),
+      contentId: isObject(source.contentId) ? Object.fromEntries(Object.entries(source.contentId).filter(([key, value]) => ["noteId", "bvid", "aid", "cursor"].includes(key) && (typeof value === "string" || key === "cursor" && Number.isSafeInteger(value))).map(([key, value]) => [key, String(value)])) : {},
+      query: text(source.query).slice(0, 500),
+      pageCursor: text(source.pageCursor).slice(0, 500),
+      budget: isObject(source.budget) ? Object.fromEntries(Object.entries(source.budget).filter(([, value]) => Number.isSafeInteger(value) && value >= 0)) : {},
+      state,
+      attempt: positiveInteger(source.attempt, 1),
+      createdAt: text(source.createdAt, nowIso()),
+      updatedAt: text(source.updatedAt, nowIso()),
+      resultIds: listValue(source.resultIds),
+      summary: text(source.summary).slice(0, 1000),
+      errorCode: text(source.errorCode),
+      errorMessage: text(source.errorMessage).slice(0, 500),
+      cursorInvalid: booleanValue(source.cursorInvalid)
     };
   }
 
@@ -327,6 +493,10 @@
 
   function hasStableId(value) {
     return isObject(value) && typeof value.id === "string" && Boolean(value.id.trim());
+  }
+
+  function resolveResearchProfileId(platform, profileId) {
+    return text(profileId) || `social-research-${text(platform)}`;
   }
 
   function sanitizeResearchState(state) {
@@ -354,8 +524,12 @@
     createResearchTask,
     normalizeResearchPlan,
     normalizeSocialResult,
+    normalizeResearchMaterial,
+    normalizeResearchOperation,
+    resolveDomesticContentId,
     normalizePlatformCapability,
     normalizeAttachmentMeta,
+    resolveResearchProfileId,
     sanitizeResearchState,
     isSafeHttpUrl
   };
