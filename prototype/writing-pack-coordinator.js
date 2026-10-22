@@ -14,6 +14,60 @@
   function failure(code, message, details = {}) { return Object.assign(new Error(message), { code, ...details }); }
   function isObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 
+  function downgradeVerificationStatuses(value) {
+    if (Array.isArray(value)) {
+      value.forEach(downgradeVerificationStatuses);
+      return;
+    }
+    if (!isObject(value)) return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'verificationStatus') value[key] = 'unverified';
+      else downgradeVerificationStatuses(child);
+    }
+  }
+
+  function resetChangedEntryVerification(previous, updated, fields) {
+    const stripStatuses = value => {
+      if (Array.isArray(value)) return value.map(stripStatuses);
+      if (!isObject(value)) return value;
+      return Object.fromEntries(Object.entries(value).filter(([key]) => !['verificationStatus', 'enabled'].includes(key))
+        .map(([key, child]) => [key, stripStatuses(child)]));
+    };
+    const resetNested = (oldValue, nextValue) => {
+      if (Array.isArray(nextValue)) {
+        const oldById = new Map((Array.isArray(oldValue) ? oldValue : []).map(item => [item.id, item]));
+        return nextValue.map(item => resetNested(oldById.get(item.id), item));
+      }
+      if (!isObject(nextValue)) return nextValue;
+      const result = { ...nextValue };
+      if ((!oldValue && nextValue.verificationStatus !== undefined)
+        || oldValue && JSON.stringify(stripStatuses(oldValue)) !== JSON.stringify(stripStatuses(nextValue))) {
+        result.verificationStatus = 'unverified';
+      }
+      for (const [key, value] of Object.entries(result)) {
+        if (Array.isArray(value)) result[key] = resetNested(oldValue?.[key], value);
+      }
+      return result;
+    };
+    const changedSourceIds = new Set();
+    const oldSources = new Map((previous.sources || []).map(item => [item.id, item]));
+    for (const source of updated.sources || []) {
+      const old = oldSources.get(source.id);
+      const oldContent = old && { ...old }; const newContent = { ...source };
+      if (oldContent) delete oldContent.verificationStatus;
+      delete newContent.verificationStatus;
+      if (!old || JSON.stringify(stripStatuses(oldContent)) !== JSON.stringify(stripStatuses(newContent))) changedSourceIds.add(source.id);
+    }
+    for (const field of fields) {
+      const oldById = new Map((previous[field] || []).map(item => [item.id, item]));
+      updated[field] = (updated[field] || []).map(item => {
+        const value = resetNested(oldById.get(item.id), item);
+        return changedSourceIds.size && item.sourceIds?.some(sourceId => changedSourceIds.has(sourceId))
+          ? { ...value, verificationStatus: 'unverified' } : value;
+      });
+    }
+  }
+
   // 读写写作专业基础包集合；内置包来自 builtinCatalog，不可通过本协调器改写。
   // 自定义包存于 state.writingPacks，启停设置存于 state.writingPackSettings。
   function createWritingPackCoordinator(dependencies = {}, options = {}) {
@@ -67,7 +121,9 @@
       const result = [];
       for (const builtin of builtinCatalog) {
         const setting = settings().find(s => s.id === builtin.id);
-        result.push({ ...copy(builtin), enabled: setting ? setting.enabled : builtin.enabled !== false });
+        const activeVersion = setting?.acceptedPack || builtin;
+        result.push({ ...copy(activeVersion), id: builtin.id, builtin: true, basePackId: '',
+          enabled: setting ? setting.enabled : builtin.enabled !== false });
       }
       for (const pack of customPacks()) {
         result.push(effectivePack(pack));
@@ -84,18 +140,78 @@
       return { selectedIds: listPacks().filter(p => p.enabled !== false).map(p => p.id) };
     }
 
+    function previewBuiltinUpdate(id) {
+      const builtin = builtinById(id);
+      if (!builtin) throw failure('PACK_NOT_FOUND', '内置包不存在', { packId: id });
+      const setting = settings().find(item => item.id === id);
+      const previous = setting?.acceptedPack;
+      if (!previous || builtin.version <= (setting.acceptedVersion || previous.version)) {
+        return { id, available: false, currentVersion: setting?.acceptedVersion || builtin.version, latestVersion: builtin.version, changes: [] };
+      }
+      const fields = ['clarifications', 'materials', 'requirements', 'methods', 'prompts', 'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs', 'nextSteps', 'examples', 'sources'];
+      const changes = fields.map(field => {
+        const oldItems = new Map((previous[field] || []).map(item => [item.id, item]));
+        let added = 0; let changed = 0;
+        for (const item of builtin[field] || []) {
+          const old = oldItems.get(item.id);
+          if (!old) added++;
+          else if (JSON.stringify(old) !== JSON.stringify(item)) changed++;
+          oldItems.delete(item.id);
+        }
+        const removed = oldItems.size;
+        return { field, added, changed, removed };
+      }).filter(item => item.added || item.changed || item.removed);
+      return { id, available: true, currentVersion: setting.acceptedVersion || previous.version,
+        latestVersion: builtin.version, changes };
+    }
+
+    async function initializeBuiltinBaselines() {
+      const known = new Map(settings().map(item => [item.id, item]));
+      const missing = builtinCatalog.filter(pack => !known.get(pack.id)?.acceptedPack);
+      if (!missing.length) return null;
+      return commit(next => {
+        const byId = new Map((next.writingPackSettings || []).map(item => [item.id, item]));
+        for (const pack of missing) {
+          const old = byId.get(pack.id) || { id: pack.id, enabled: pack.enabled !== false };
+          byId.set(pack.id, { ...old, acceptedVersion: pack.version, acceptedPack: copy(pack), updatedAt: nowFn() });
+        }
+        next.writingPackSettings = [...byId.values()];
+      });
+    }
+
+    async function acceptBuiltinUpdate(id) {
+      const preview = previewBuiltinUpdate(id);
+      if (!preview.available) throw failure('NO_BUILTIN_UPDATE', '该内置包没有待接受的更新', { packId: id });
+      const builtin = builtinById(id);
+      return commit(next => {
+        const settingsById = new Map((next.writingPackSettings || []).map(item => [item.id, item]));
+        const old = settingsById.get(id) || { id, enabled: true };
+        settingsById.set(id, { ...old, acceptedVersion: builtin.version, acceptedPack: copy(builtin), updatedAt: nowFn() });
+        next.writingPackSettings = [...settingsById.values()];
+      }).then(() => previewBuiltinUpdate(id));
+    }
+
     function assertMutable(id) {
       if (builtinById(id)) throw failure('BUILTIN_IMMUTABLE', '内置包不可原地修改', { packId: id });
       if (!findCustom(id)) throw failure('PACK_NOT_FOUND', '自定义包不存在', { packId: id });
     }
 
     async function selectPacks(ids) {
+      const wanted = new Set((Array.isArray(ids) ? ids : []).map(String));
+      const packs = listPacks();
+      const knownIds = new Set(packs.map(pack => pack.id));
+      const builtinIds = new Set(builtinCatalog.map(pack => pack.id));
       return commit(next => {
-        const wanted = new Set((Array.isArray(ids) ? ids : []).map(String));
-        next.writingPackSettings = listPacks()
-          .filter(p => wanted.has(p.id) ? !p.enabled : p.enabled)
-          .map(p => ({ id: p.id, enabled: wanted.has(p.id), updatedAt: nowFn() }))
-          .concat((next.writingPackSettings || []).filter(s => listPacks().some(p => p.id === s.id) && wanted.has(s.id) === (s.enabled !== false) ? false : false));
+        next.writingPacks = (next.writingPacks || []).map(input => {
+          const pack = schema.normalizeWritingPack(input);
+          return builtinIds.has(pack.id) ? pack : { ...pack, enabled: wanted.has(pack.id) };
+        });
+        const builtinSettings = builtinCatalog
+          .filter(pack => wanted.has(pack.id) !== (pack.enabled !== false))
+          .map(pack => ({ id: pack.id, enabled: wanted.has(pack.id), updatedAt: nowFn() }));
+        const unknownSettings = (next.writingPackSettings || [])
+          .filter(setting => !knownIds.has(setting.id));
+        next.writingPackSettings = [...builtinSettings, ...unknownSettings];
       });
     }
 
@@ -166,19 +282,19 @@
         builtin: false,
         updatedAt: nowFn()
       });
+      resetChangedEntryVerification(findCustom(id).pack, updated,
+        ['requirements', 'methods', 'prompts', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs', 'nextSteps', 'examples', 'sources']);
       return commit(next => {
         next.writingPacks = (next.writingPacks || []).map(p => (p.id === id ? updated : p));
       }).then(() => copy(updated));
     }
 
     async function setPackEnabled(id, enabled) {
-      const value = enabled !== false;
-      if (!builtinById(id) && !findCustom(id)) throw failure('PACK_NOT_FOUND', '包不存在', { packId: id });
-      return commit(next => {
-        const list = (next.writingPackSettings || []).filter(s => s.id !== id);
-        list.push({ id, enabled: value, updatedAt: nowFn() });
-        next.writingPackSettings = list;
-      }).then(() => getPack(id));
+      if (!listPacks().some(pack => pack.id === id)) throw failure('PACK_NOT_FOUND', '包不存在', { packId: id });
+      const selected = new Set(getSelection().selectedIds);
+      if (enabled === false) selected.delete(id);
+      else selected.add(id);
+      return selectPacks([...selected]).then(() => getPack(id));
     }
 
     async function deletePack(id) {
@@ -199,14 +315,22 @@
 
     function previewImport(packs) {
       const input = Array.isArray(packs) ? packs : [];
-      const normalized = input.map(item => schema.normalizeWritingPack(copy(item)));
+      const normalized = input.map(item => {
+        const pack = schema.normalizeWritingPack(copy(item));
+        downgradeVerificationStatuses(pack);
+        return pack;
+      });
       const collisions = normalized.map(p => p.id).filter(id => builtinById(id) || findCustom(id));
       return copy({ packs: normalized, collisions });
     }
 
     async function confirmImport(preview) {
       if (!isObject(preview) || !Array.isArray(preview.packs)) throw failure('IMPORT_INVALID', '导入预览无效');
-      const normalized = preview.packs.map(item => schema.normalizeWritingPack(copy(item)));
+      const normalized = preview.packs.map(item => {
+        const pack = schema.normalizeWritingPack(copy(item));
+        downgradeVerificationStatuses(pack);
+        return pack;
+      });
       const collisions = normalized.map(p => p.id).filter(id => builtinById(id) || findCustom(id));
       if (collisions.length) throw failure('IMPORT_COLLISION', `导入包 ID 冲突：${collisions.join(', ')}`, { collisions });
       return commit(next => {
@@ -230,7 +354,8 @@
     return {
       listPacks, getPack, getSelection, selectPacks, createPack, duplicatePack,
       updatePack, setPackEnabled, deletePack, restoreBuiltin,
-      previewImport, confirmImport, exportPacks
+      previewImport, confirmImport, exportPacks, initializeBuiltinBaselines,
+      previewBuiltinUpdate, acceptBuiltinUpdate
     };
   }
 

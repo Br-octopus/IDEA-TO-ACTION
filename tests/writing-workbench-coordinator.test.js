@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
 const schema = require('../prototype/writing-workbench-schema.js');
 
-test('协调器按配置记忆命名空间筛选本体偏好，未知文体只读通用', async () => {
+test('协调器按项目和配置命名空间筛选记忆，未知文体只读通用', async () => {
   const { readFileSync } = require('node:fs');
   const vm = require('node:vm');
   let namespace = 'article';
@@ -13,14 +13,117 @@ test('协调器按配置记忆命名空间筛选本体偏好，未知文体只�
   const c = context.WritingWorkbenchCoordinator.createWritingWorkbenchCoordinator({ getState: () => ({ writingMemories: [
     { id: 'general', scope: 'general', preference: '通用偏好' },
     { id: 'genre', scope: 'genre', genre: 'article', preference: '普通文章偏好' },
+    { id: 'project', scope: 'project', projectId: 'a', preference: '当前项目偏好' },
+    { id: 'other-project', scope: 'project', projectId: 'b', preference: '其他项目偏好' },
     { id: 'own', scope: 'article', articleId: 'a', preference: '单篇偏好' },
     { id: 'other', scope: 'article', articleId: 'b', preference: '其他篇偏好' }
   ] }) });
   const ids = genre => Array.from(c.getRelevantMemories(genre, 'a'), m => m.id);
-  assert.deepEqual(ids('article'), ['own', 'genre', 'general']);
+  assert.deepEqual(ids('article'), ['own', 'project', 'genre']);
   namespace = '不匹配现有记忆';
-  assert.deepEqual(ids('article'), ['own', 'general'], '更改配置必须改变文体偏好筛选');
+  assert.deepEqual(ids('article'), ['own', 'project', 'general'], '更改配置必须改变文体偏好筛选');
   for (const genre of ['novel', '', null, '__proto__']) assert.deepEqual(ids(genre), ['general']);
+});
+
+test('长篇项目显式关联资料、保存变更影响并将当前资料冻结到提示词版本', async () => {
+  const { c, state } = realStorageSetup();
+  const article = await c.createArticle({ genre: 'fiction', title: '雾城', draft: '主人公进入旧车站。', saveEnabled: true });
+  const unit = await c.addUnit(article.id, { type: 'chapter', title: '第一章', goal: '介绍车站', summary: '主角抵达',
+    viewpoint: '主角视角', storyTime: '午夜', location: '旧车站', purpose: '解释规则', characterIds: ['hero'] });
+  const fact = await c.saveLongformItem(article.id, 'canon', '', {
+    category: 'rule', name: '旧车站规则', text: '午夜后不能使用钟表', status: 'confirmed', unitIds: [unit.id]
+  });
+  const first = await c.build(article.id, { unitId: unit.id, taskType: 'longform-chapter-draft' });
+  const firstRound = c.readRound(article.id, first.roundId);
+  assert.match(first.prompt, /旧车站规则/);
+  assert.match(first.prompt, /本轮从已登记资料中选入/);
+  assert.match(first.prompt, /主角视角/);
+  assert.match(first.prompt, /故事内时间：午夜/);
+  assert.match(first.prompt, /场景目的\/冲突：解释规则/);
+  assert.equal(firstRound.promptVersions.at(-1).longformSnapshot.canon[0].text, '午夜后不能使用钟表');
+
+  await c.saveLongformItem(article.id, 'canon', fact.id, {
+    text: '午夜后不能使用钟表，违反者会迷路', changeReason: '明确规则后果'
+  });
+  const workspace = c.getWorkspace(article.id);
+  assert.equal(workspace.longform.changes.length, 1);
+  assert.equal(workspace.longform.changes[0].impacts[0].id, unit.id);
+  await c.reviewLongformImpact(article.id, workspace.longform.changes[0].id, unit.id, 'reviewed', '已检查章节计划');
+  assert.equal(c.getWorkspace(article.id).longform.changes[0].impacts[0].reason, '已检查章节计划');
+  const second = await c.build(article.id, { unitId: unit.id, taskType: 'longform-continuity' });
+  assert.match(second.prompt, /违反者会迷路/);
+  assert.equal(c.readRound(article.id, second.roundId).promptVersions.at(-1).longformSnapshot.canon[0].text,
+    '午夜后不能使用钟表，违反者会迷路');
+  assert.equal(state().writingArticles.find(item => item.id === article.id).longform.mode, 'fiction');
+});
+
+test('视听领域任务在生成提示词时写入本地静态初检和口播时长估算', async () => {
+  const { c } = realStorageSetup();
+  const article = await c.createArticle({
+    genre: 'spoken-script',
+    title: '口播静态初检',
+    domainInputs: { duration: '约2分钟' },
+    draft: '这是一段用于验证口播静态检查的合成稿件。'
+  });
+
+  const result = await c.build(article.id, { taskType: 'spoken-draft' });
+  assert.match(result.diagnosis, /文字量估算/);
+  assert.match(result.diagnosis, /约2分钟/);
+  assert.match(c.getWorkspace(article.id).rounds.at(-1).diagnosis, /试读/);
+});
+
+test('长篇当前轮冻结明确关联的前后摘要与未解决问题，设定变更影响可按类型逐项确认或驳回', async () => {
+  const { c } = realStorageSetup();
+  const story = await c.createArticle({ genre: 'fiction', title: '多章故事', saveEnabled: true });
+  const previous = await c.addUnit(story.id, { title: '前章', summary: '前章旧摘要' });
+  const current = await c.addUnit(story.id, { title: '当前章', priorUnitIds: [previous.id],
+    canonIds: ['fact-shared'], summary: '当前章摘要' });
+  const next = await c.addUnit(story.id, { title: '后章', summary: '后章摘要', canonIds: ['fact-shared'] });
+  await c.updateUnit(story.id, previous.id, { nextUnitIds: [current.id] });
+  await c.updateUnit(story.id, current.id, { nextUnitIds: [next.id] });
+  await c.updateUnit(story.id, next.id, { priorUnitIds: [current.id] });
+  await c.addUnit(story.id, { title: '无关章', summary: '不应进入提示词' });
+  const fact = await c.saveLongformItem(story.id, 'canon', '', {
+    id: 'fact-shared', name: '共用设定', text: '旧事实', unitIds: [current.id, next.id]
+  });
+  const openIssue = await c.addIssue(story.id, { unitId: next.id, excerpt: '摘录', observation: '后章待解决问题' });
+  const first = await c.build(story.id, { unitId: current.id, taskType: 'longform-chapter-draft' });
+  const oldRound = c.readRound(story.id, first.roundId);
+  assert.match(first.prompt, /前章旧摘要/);
+  assert.match(first.prompt, /后章摘要/);
+  assert.match(first.prompt, /后章待解决问题/);
+  assert.doesNotMatch(first.prompt, /不应进入提示词/);
+
+  const materialRound = await c.appendRound(story.id, { unitId: next.id, materials: [
+    { id: 'material-shared', title: '关联材料', excerpt: '关联材料内容', sourceLocator: 'interview.md#p3',
+      verificationStatus: 'unverified', unitIds: [next.id] }
+  ] });
+  const continuityPrompt = await c.build(story.id, { unitId: current.id, taskType: 'longform-continuity' });
+  assert.match(continuityPrompt.prompt, /关联材料内容/);
+  assert.match(continuityPrompt.prompt, /关联材料（用途 content；状态 unverified；位置 interview\.md#p3/);
+  assert.doesNotMatch(continuityPrompt.prompt, /不应进入提示词/);
+  const affectedMaterial = materialRound.round.materials[0];
+  const issue = await c.addIssue(story.id, { roundId: materialRound.round.id, unitId: next.id,
+    excerpt: '另一个摘录', observation: '另一待解决问题' });
+  const foreshadowing = await c.saveLongformItem(story.id, 'foreshadowing', '', {
+    planted: '已登记伏笔', canonIds: [fact.id], unitIds: [next.id]
+  });
+  await c.saveLongformItem(story.id, 'canon', fact.id, { text: '新事实' });
+  const change = c.getWorkspace(story.id).longform.changes.at(-1);
+  for (const [type, id] of [['unit', next.id], ['material', affectedMaterial.id], ['issue', issue.id], ['foreshadowing', foreshadowing.id]]) {
+    assert.ok(change.impacts.some(item => item.type === type && item.id === id), `${type}:${id}`);
+  }
+  const unitImpact = change.impacts.find(item => item.type === 'unit' && item.id === next.id);
+  const issueImpact = change.impacts.find(item => item.type === 'issue' && item.id === issue.id);
+  await c.reviewLongformImpact(story.id, change.id, { type: 'unit', id: unitImpact.id }, 'reviewed', '已检查后章');
+  await c.reviewLongformImpact(story.id, change.id, { type: 'issue', id: issueImpact.id }, 'deferred', '暂不处理');
+  const foreshadowImpact = change.impacts.find(item => item.type === 'foreshadowing');
+  await c.reviewLongformImpact(story.id, change.id, { type: 'foreshadowing', id: foreshadowImpact.id }, 'no-change', '确认不受影响');
+  const reviewed = c.getWorkspace(story.id).longform.changes.at(-1).impacts;
+  assert.equal(reviewed.find(item => item.type === 'unit' && item.id === next.id).status, 'reviewed');
+  assert.equal(reviewed.find(item => item.type === 'issue' && item.id === issue.id).status, 'deferred');
+  assert.equal(reviewed.find(item => item.type === 'foreshadowing').status, 'no-change');
+  assert.equal(c.readRound(story.id, oldRound.id).longformSnapshot.canon[0].text, '旧事实');
 });
 
 test('写作搜索预览零调用，批准真实 bridge 后只发固定方法和独立关键词', async () => {
@@ -488,6 +591,28 @@ test('选择资料保留手工内容和风格样本，合并来源共三条且�
   assert.deepEqual(c.getRounds(b.id)[0].sources, b.rounds[0].sources);
 });
 
+test('写作选材保留授权目录相对位置、指纹版本、摘录行和选用理由', async () => {
+  const { c } = setup({ promptAgentCoordinator: { selectMaterials: async () => [{
+    id: 'local:guide/writing.md', type: 'local-source-document', title: '写作指南',
+    location: 'guide/writing.md', relativePath: 'guide/writing.md',
+    fingerprint: 'c'.repeat(64), fragments: [{ text: '证据范围摘录', line: 24 }],
+    excerpt: '证据范围摘录', useReason: '与本轮目标相关', verificationStatus: 'unverified'
+  }] } });
+  const article = await c.createArticle({ goal: '按证据范围整理写作指南' });
+  await c.selectMaterials(article.id);
+  const source = c.getRounds(article.id)[0].sources[0];
+
+  assert.equal(source.title, '写作指南');
+  assert.equal(source.sourceId, 'local:guide/writing.md');
+  assert.equal(source.sourceLocator, 'guide/writing.md');
+  assert.equal(source.sourceVersion, `sha256:${'c'.repeat(64)}`);
+  assert.equal(source.excerptLocator, '第 24 行');
+  assert.equal(source.selectionReason, '与本轮目标相关');
+  assert.equal(source.origin, 'authorized-directory');
+  assert.equal(source.attachmentRequired, true);
+  assert.match(source.excerpt, /证据范围摘录/);
+});
+
 test('改变目标和维度刷新已保存初检，显式初检替换模型结果，失败保留当前初检', async () => {
   let fail = false;
   const { c, state } = setup({ requestModel: async () => { if (fail) throw new Error('断网'); return '旧目标下的模型诊断'; } });
@@ -856,4 +981,392 @@ test('多个基础包引用同名来源时，历史提示词保留每个包的�
   assert.equal(round.packSnapshot.sources.length, 3);
   assert.match(round.prompt, /包A来源哨兵/);
   assert.match(round.prompt, /包B来源哨兵/);
+});
+
+test('任务单元可新增、编辑、归档，轮次保存单元快照且材料关联生效', async () => {
+  const { c } = setup();
+  const article = await c.createArticle({ draft: '整篇初稿' });
+  const first = await c.addUnit(article.id, {
+    type: 'chapter', title: '第一章', goal: '介绍背景', completionCriteria: ['说明概念']
+  });
+  const second = await c.addUnit(article.id, { type: 'chapter', title: '第二章' });
+  await c.updateUnit(article.id, first.id, { goal: '解释研究背景', completionCriteria: ['说明关键概念'] });
+
+  const result = await c.appendRound(article.id, {
+    draft: '第一章稿件', unitId: first.id,
+    materials: [
+      { id: 'whole-material', title: '全文共用', purpose: 'content', excerpt: '全文依据' },
+      { id: 'unit-material', title: '章节材料', purpose: 'content', excerpt: '章节依据', unitIds: [first.id] },
+      { id: 'other-material', title: '另一章材料', purpose: 'content', excerpt: '另一章哨兵', unitIds: [second.id] }
+    ]
+  });
+  assert.equal(result.round.unitId, first.id);
+  assert.equal(result.round.unitSnapshot.goal, '解释研究背景');
+  assert.ok(result.round.prompt.includes('章节依据'));
+  assert.ok(!result.round.prompt.includes('另一章哨兵'));
+
+  const materials = await c.setMaterialUnits(article.id, result.round.id, 'unit-material', [second.id]);
+  assert.deepEqual(materials.materials.find(item => item.id === 'unit-material').unitIds, [second.id]);
+  const regenerated = await c.build(article.id, { roundId: result.round.id });
+  assert.ok(!regenerated.prompt.includes('章节依据'));
+
+  await c.archiveUnit(article.id, first.id);
+  assert.equal(c.getWorkspace(article.id).units.find(item => item.id === first.id).archived, true);
+  await assert.rejects(c.appendRound(article.id, { unitId: first.id }), { code: 'UNIT_ARCHIVED' });
+});
+
+test('路线只从当前选用且适用的基础包读取，推进必须经过显式用户确认', async () => {
+  const selectedPack = {
+    id: 'selected-route-pack', name: '来源路线包', layer: 'task', genre: 'article', taskType: 'revision', version: 4,
+    enabled: true, checks: [{ id: 'route-check', statement: '保留包用于路线选择' }],
+    sources: [{ id: 'route-source', title: '已审阅方法来源', verificationStatus: 'source-reviewed' }],
+    routes: [{
+      id: 'revision-route', title: '逐项核对', taskTypes: ['revision'], sourceIds: ['route-source'],
+      verificationStatus: 'source-reviewed', stages: [{
+        id: 'verify-evidence', title: '核对证据', inputs: ['当前稿件'], outputs: ['证据表'], checks: ['来源可定位'],
+        sourceIds: ['route-source'], verificationStatus: 'source-reviewed', skippable: false,
+        returnWhenMissing: ['补充来源后重做']
+      }]
+    }]
+  };
+  const otherPack = { ...selectedPack, id: 'unselected-route-pack', routes: [{
+    ...selectedPack.routes[0], id: 'unselected-route', title: '不可见路线'
+  }] };
+  const { c, state } = setup({ writingPacks: [selectedPack, otherPack] });
+  const article = await c.createArticle({ draft: '需要核对的文章', packSelections: ['selected-route-pack'], saveEnabled: true });
+
+  const routes = c.listRoutes(article.id, 'revision');
+  assert.deepEqual(routes.map(route => route.routeId), ['revision-route']);
+  assert.equal(routes[0].verificationStatus, 'source-reviewed');
+  assert.equal(routes[0].sources[0].verificationStatus, 'source-reviewed');
+  assert.equal(c.listRoutes(article.id, 'diagnosis').length, 0);
+
+  const selected = await c.selectRoute(article.id, 'revision-route');
+  assert.equal(selected.routeProgress.packVersion, 4);
+  assert.equal(selected.routeProgress.stages[0].status, 'not-started');
+  assert.equal(selected.round.routeSnapshot.verificationStatus, 'source-reviewed');
+  assert.match(selected.round.prompt, /核对证据/);
+  assert.match(selected.round.prompt, /已审阅方法来源/);
+  await assert.rejects(c.advanceRoute(article.id, 'verify-evidence', 'skip'), { code: 'ROUTE_STEP_NOT_SKIPPABLE' });
+  await assert.rejects(c.advanceRoute(article.id, 'verify-evidence', 'complete'), { code: 'ROUTE_CONFIRMATION_REQUIRED' });
+
+  await c.advanceRoute(article.id, 'verify-evidence', 'start');
+  const blocked = await c.advanceRoute(article.id, 'verify-evidence', 'block', { reason: '缺少原始来源' });
+  assert.equal(blocked.routeProgress.stages[0].status, 'blocked');
+  assert.equal(blocked.routeProgress.stages[0].statusReason, '缺少原始来源');
+  await c.advanceRoute(article.id, 'verify-evidence', 'start');
+  const completed = await c.advanceRoute(article.id, 'verify-evidence', 'complete', {
+    confirmed: true, result: '来源已定位', evidence: 'https://example.test/source'
+  });
+  assert.equal(completed.routeProgress.stages[0].status, 'user-confirmed-complete');
+  assert.equal(completed.routeProgress.stages[0].evidence, 'https://example.test/source');
+  assert.equal(completed.routeProgress.stages[0].verificationStatus, 'source-reviewed',
+    '用户确认完成不得改写专业来源核验状态');
+  assert.equal(state().writingArticles[0].routeProgress.stages[0].status, 'user-confirmed-complete');
+});
+
+test('长篇领域路线按当前任务类型选择而非普通文章改稿任务', async () => {
+  const { c } = setup();
+  const story = await c.createArticle({ genre: 'fiction', title: '路线任务隔离' });
+  const taskType = c.getWorkspace(story.id).rounds[0].taskType;
+  const route = c.listRoutes(story.id, taskType)[0];
+  assert.ok(route, '小说基础包应提供当前任务适用路线');
+  const selected = await c.selectRoute(story.id, route.routeId, route.packId);
+  assert.equal(selected.routeProgress.routeId, route.routeId);
+  assert.equal(selected.round.routeSnapshot.routeId, route.routeId);
+});
+
+test('路线受阻退回后允许重做此前已确认的步骤，再回到受阻步骤', async () => {
+  const pack = {
+    id: 'route-return-pack', name: '退回路线', layer: 'task', genre: 'article', taskType: 'revision', version: 1,
+    enabled: true, checks: [], sources: [], routes: [{
+      id: 'two-step-return', title: '两步核对', taskTypes: ['revision'], sourceIds: [], verificationStatus: 'unverified',
+      stages: [
+        { id: 'gather', title: '补充材料', inputs: [], outputs: ['材料记录'], checks: ['材料可读'], sourceIds: [], verificationStatus: 'unverified', skippable: false, returnWhenMissing: [] },
+        { id: 'assess', title: '评估材料', inputs: ['材料记录'], outputs: ['评估结论'], checks: ['结论可追溯'], sourceIds: [], verificationStatus: 'unverified', skippable: false, returnWhenMissing: ['补充材料后重做'] }
+      ]
+    }]
+  };
+  const { c } = setup({ writingPacks: [pack] });
+  const article = await c.createArticle({ draft: '待核对稿件', packSelections: [pack.id] });
+  await c.selectRoute(article.id, 'two-step-return');
+  await c.advanceRoute(article.id, 'gather', 'start');
+  await c.advanceRoute(article.id, 'gather', 'complete', { confirmed: true, result: '材料已整理' });
+  await c.advanceRoute(article.id, 'assess', 'start');
+  const blocked = await c.advanceRoute(article.id, 'assess', 'block', { reason: '还缺一份来源', returnToStageId: 'gather' });
+  assert.equal(blocked.routeProgress.currentStageId, 'gather');
+
+  const restarted = await c.advanceRoute(article.id, 'gather', 'start');
+  assert.equal(restarted.routeProgress.stages[0].status, 'in-progress');
+  await c.advanceRoute(article.id, 'gather', 'complete', { confirmed: true, result: '已补来源' });
+  assert.equal(c.getWorkspace(article.id).routeProgress.currentStageId, 'assess');
+  await c.advanceRoute(article.id, 'assess', 'start');
+  const completed = await c.advanceRoute(article.id, 'assess', 'complete', { confirmed: true, result: '评估完成' });
+  assert.equal(completed.routeProgress.stages[1].status, 'user-confirmed-complete');
+});
+
+test('有效诊断 JSON 只新增候选问题并关联实际提示词，原始诊断保持原样', async () => {
+  const raw = JSON.stringify({ issues: [{
+    location: '第二段第 2 句', excerpt: '样本只覆盖两名参与者', observation: '结论写成普遍规律',
+    impact: '证据范围与结论范围不一致', evidenceCategory: 'source', evidenceDescription: '核对样本方法',
+    packId: '', sourceId: '', suggestion: '限定结论范围并补充依据', priority: 'high'
+  }] });
+  const { c } = setup({ requestModel: async () => raw });
+  const article = await c.createArticle({ draft: '待诊断稿件', saveEnabled: true });
+  const roundId = article.rounds.at(-1).id;
+  await c.runModelDiagnosis(article.id, { roundId });
+
+  const workspace = c.getWorkspace(article.id);
+  const round = workspace.rounds.find(item => item.id === roundId);
+  const issue = workspace.issues[0];
+  assert.equal(round.diagnosis, raw);
+  assert.equal(round.diagnosisParseStatus, 'parsed');
+  assert.equal(issue.roundId, roundId);
+  assert.equal(issue.promptVersionId, round.promptVersions.find(item => item.id === issue.promptVersionId).id);
+  assert.equal(issue.judgment, 'candidate');
+  assert.equal(issue.status, 'pending-user');
+  assert.equal(issue.excerpt, '样本只覆盖两名参与者');
+  assert.equal(round.promptVersions.find(item => item.id === issue.promptVersionId).taskType, 'diagnosis');
+  assert.equal(round.promptVersions.find(item => item.id === issue.promptVersionId).copied, false);
+});
+
+test('无效 JSON 原文仍保留且可手动录入；新轮复核只由用户显式更新', async () => {
+  const raw = '{"issues":[{"excerpt":"未完成字段"}]}';
+  const { c } = setup({ requestModel: async () => raw });
+  const article = await c.createArticle({ draft: '旧稿' });
+  const originalRound = article.rounds.at(-1);
+  await c.runModelDiagnosis(article.id, { roundId: originalRound.id });
+
+  let workspace = c.getWorkspace(article.id);
+  const diagnosed = workspace.rounds.find(item => item.id === originalRound.id);
+  assert.equal(diagnosed.diagnosis, raw);
+  assert.equal(diagnosed.diagnosisParseStatus, 'unparsed');
+  assert.equal(workspace.issues.length, 0);
+
+  const issue = await c.addIssue(article.id, {
+    roundId: originalRound.id, location: '第一段', excerpt: '原始摘录', observation: '缺少依据',
+    impact: '读者无法复核', evidenceCategory: 'source', suggestion: '补充来源', priority: 'medium'
+  });
+  assert.equal(issue.status, 'pending-user');
+  await assert.rejects(c.updateIssue(article.id, issue.id, { status: 'review-passed' }), { code: 'ISSUE_REVIEW_ROUND_REQUIRED' });
+  const next = await c.appendRound(article.id, { draft: '修改后新稿' });
+  workspace = c.getWorkspace(article.id);
+  assert.equal(workspace.issues[0].status, 'pending-user', '新稿到达不能自动关闭原问题');
+  const reviewed = await c.updateIssue(article.id, issue.id, {
+    judgment: 'needs-verification', status: 'review-passed', reviewedRoundId: next.round.id,
+    statusReason: '用户确认新稿已补充可定位来源'
+  });
+  assert.equal(reviewed.roundId, originalRound.id);
+  assert.equal(reviewed.excerpt, '原始摘录');
+  assert.equal(reviewed.reviewedRoundId, next.round.id);
+  assert.equal(reviewed.status, 'review-passed');
+  assert.equal(c.getWorkspace(article.id).issues.length, 1);
+  assert.equal(c.getWorkspace(article.id).rounds.find(item => item.id === originalRound.id).diagnosis, raw);
+});
+
+test('提示词编辑保存与复制分别记录版本状态，历史比较和分支继续不覆盖已有轮次', async () => {
+  const { c } = setup();
+  const article = await c.createArticle({ draft: '最初稿', saveEnabled: true });
+  const first = article.rounds.at(-1);
+  const savedPrompt = await c.recordPromptVersion(article.id, first.id, '用户编辑的首版提示词');
+  const copiedPrompt = await c.recordPromptVersion(article.id, first.id, '用户明确复制的提示词', { copied: true });
+  assert.equal(savedPrompt.copied, false);
+  assert.equal(savedPrompt.generated, false);
+  assert.equal(copiedPrompt.copied, true);
+  assert.equal(copiedPrompt.parentVersionId, savedPrompt.id);
+
+  const second = await c.appendRound(article.id, { draft: '第二轮稿', feedback: '保留第二轮反馈' });
+  const third = await c.appendRound(article.id, { draft: '第三轮稿' });
+  const comparison = c.compareRounds(article.id, third.round.id, first.id);
+  assert.equal(comparison.left.draft, '第三轮稿');
+  assert.equal(comparison.right.draft, '最初稿');
+  assert.equal(comparison.changes.draft.changed, true);
+  assert.ok(comparison.changes.draft.removed.length);
+  assert.ok(comparison.changes.draft.added.length);
+
+  const fork = await c.continueFromRound(article.id, first.id, { contexts: ['draft'] });
+  const rounds = c.getWorkspace(article.id).rounds;
+  assert.equal(rounds.length, 4);
+  assert.equal(rounds[1].id, second.round.id);
+  assert.equal(rounds[2].id, third.round.id);
+  assert.equal(fork.round.draft, '最初稿');
+  assert.equal(fork.round.parentRoundId, first.id);
+  assert.equal(fork.round.restoredFromRoundId, first.id);
+  assert.equal(rounds.find(item => item.id === second.round.id).draft, '第二轮稿');
+  assert.equal(rounds.find(item => item.id === third.round.id).draft, '第三轮稿');
+});
+
+test('单轮提示词版本超过旧上限仍完整保留且历史 ID 可关联问题', async () => {
+  const { c } = setup();
+  const article = await c.createArticle({ draft: '初稿', saveEnabled: true });
+  const round = article.rounds.at(-1);
+  let last;
+  for (let index = 0; index < 105; index++) {
+    last = await c.recordPromptVersion(article.id, round.id, `提示词版本${index}`);
+  }
+  const saved = c.getWorkspace(article.id).rounds[0].promptVersions;
+  assert.equal(saved.length, 106);
+  assert.equal(saved[0].id, round.promptVersions[0].id);
+  assert.equal(saved.at(-1).id, last.id);
+  const issue = await c.addIssue(article.id, { roundId: round.id, promptVersionId: round.promptVersions[0].id,
+    excerpt: '旧版本关联仍有效', observation: '测试引用' });
+  assert.equal(issue.promptVersionId, round.promptVersions[0].id);
+});
+
+test('带回结果只关联用户选择的提示词版本，未知来源保持未关联', async () => {
+  const { c } = setup();
+  const article = await c.createArticle({ draft: '初稿', saveEnabled: true });
+  const first = article.rounds.at(-1);
+  const promptVersion = await c.recordPromptVersion(article.id, first.id, '确认已复制的提示词', { copied: true });
+
+  const linked = await c.appendRound(article.id, { draft: '外部结果', sourcePromptVersionId: promptVersion.id });
+  assert.equal(linked.round.sourcePromptVersionId, promptVersion.id);
+  const unlinked = await c.appendRound(article.id, { draft: '来源不明的结果', sourcePromptVersionId: 'missing-version' });
+  assert.equal(unlinked.round.sourcePromptVersionId, '');
+});
+
+test('学术工作区可直接创建，任务提示词与章节单元进入独立历史版本', async () => {
+  const { c, state } = realStorageSetup();
+  const workspace = await c.createArticle({ genre: 'academic-paper', title: '学位论文',
+    academicTarget: { paperType: 'dissertation', discipline: '教育学', institution: '示例大学' },
+    goal: '研究生学习体验', saveEnabled: true, draft: '已有研究材料，尚无统计结果。' });
+
+  assert.equal(workspace.article.genre, 'academic-paper');
+  assert.equal(workspace.article.academicTarget.institution, '示例大学');
+  assert.match(workspace.rounds[0].prompt, /研究规划|研究问题/);
+  assert.equal(workspace.rounds[0].promptVersions.at(-1).taskType, 'academic-planning');
+  assert.equal(state().writingArticles[0].article.genre, 'academic-paper');
+
+  const chapter = await c.addUnit(workspace.id, { type: 'chapter', title: '结果章节', goal: '报告已提供结果' });
+  const next = await c.appendRound(workspace.id, { taskType: 'academic-chapter-draft', unitId: chapter.id,
+    materials: [{ id: 'evidence', title: '结果记录', purpose: 'content', excerpt: '仅保留已提供数据。', unitIds: [chapter.id] }] });
+  assert.equal(next.round.unitSnapshot.title, '结果章节');
+  assert.equal(next.round.promptVersions.at(-1).taskType, 'academic-chapter-draft');
+  assert.match(next.round.prompt, /仅保留已提供数据/);
+
+  const outline = await c.build(workspace.id, { taskType: 'academic-outline', roundId: next.round.id });
+  assert.equal(outline.taskType, 'academic-outline');
+  assert.equal(c.getWorkspace(workspace.id).rounds.at(-1).promptVersions.at(-1).taskType, 'academic-outline');
+  assert.deepEqual(c.getWorkspace(workspace.id).rounds.at(-1).promptVersions.at(-1).packVersions,
+    [{ id: 'builtin-academic-paper', version: 1 }]);
+  assert.equal(c.getWorkspace(workspace.id).rounds.at(-1).promptVersions.at(-1).unitId, chapter.id);
+});
+
+test('结构化文体默认加载专属内置包，任务切换保留来源并生成领域提示词', async () => {
+  const { c } = realStorageSetup();
+  const workspace = await c.createArticle({ genre: 'technical-document', title: '部署手册',
+    goal: '说明服务部署和故障恢复', audience: '值班工程师', platform: 'Windows Server',
+    constraints: '不得声称未验证的命令已执行',
+    materials: [{ id: 'ops', title: '部署记录', purpose: 'content', excerpt: '服务端口为4173。', sourceLocator: 'runbook.md#L12', verificationStatus: 'user-confirmed' }],
+    sources: [{ id: 'style', title: '语气样本', purpose: 'style', excerpt: '欢迎查看我们的方案。' }] });
+  assert.equal(workspace.rounds[0].taskType, 'technical-procedure');
+  assert.match(workspace.rounds[0].prompt, /技术文档/);
+  assert.match(workspace.rounds[0].prompt, /部署记录/);
+  assert.match(workspace.rounds[0].prompt, /runbook\.md#L12/);
+  assert.doesNotMatch(workspace.rounds[0].prompt, /欢迎查看我们的方案/);
+  assert.deepEqual(workspace.rounds[0].packSnapshot.packs.map(pack => pack.id), ['builtin-technical-document']);
+  const next = await c.build(workspace.id, { taskType: 'technical-troubleshooting', roundId: workspace.rounds[0].id });
+  assert.equal(next.taskType, 'technical-troubleshooting');
+  assert.match(next.prompt, /故障排查/);
+  assert.equal(c.getWorkspace(workspace.id).rounds[0].promptVersions.at(-1).taskType, 'technical-troubleshooting');
+  await assert.rejects(c.build(workspace.id, { taskType: 'email-draft', roundId: workspace.rounds[0].id }), /不支持该专属任务/);
+});
+
+test('结构化文档模型诊断与后续修订保留领域任务和专业包上下文', async () => {
+  let diagnosisRequest = '';
+  const { c } = realStorageSetup({ requestModel: async request => {
+    diagnosisRequest = request.messages[0].content;
+    return JSON.stringify({ issues: [{
+      location: '第 2 步', excerpt: '执行部署命令', observation: '缺少执行结果', impact: '读者无法判断是否成功',
+      evidenceCategory: 'requirement', evidenceDescription: '技术文档需要可观察的预期结果',
+      suggestion: '补充验证命令及其预期输出', priority: 'high'
+    }] });
+  } });
+  const workspace = await c.createArticle({ genre: 'technical-document', title: '部署手册',
+    goal: '说明服务部署和故障恢复', audience: '值班工程师', platform: 'Windows Server',
+    constraints: '不得声称未验证的命令已执行', draft: '第 2 步：执行部署命令。' });
+  const taskType = workspace.rounds[0].taskType;
+  const result = await c.runModelDiagnosis(workspace.id);
+  const updated = c.getWorkspace(workspace.id).rounds[0];
+
+  assert.match(diagnosisRequest, /技术文档/);
+  assert.match(diagnosisRequest, /前置条件和预期结果/);
+  assert.match(diagnosisRequest, /诊断/);
+  assert.equal(result.diagnosisParseStatus, 'parsed');
+  assert.match(result.prompt, /技术文档/);
+  assert.match(result.prompt, /故障恢复/);
+  assert.match(result.prompt, /缺少执行结果/);
+  assert.match(result.prompt, /补充验证命令及其预期输出/);
+  assert.equal(updated.taskType, taskType);
+  assert.equal(updated.promptVersions.at(-1).taskType, taskType);
+  assert.equal(updated.promptVersions.at(-1).content, result.prompt);
+});
+
+test('学术文体记忆使用独立命名空间，不写入普通文章偏好', async () => {
+  const { c } = setup();
+  const workspace = await c.createArticle({ genre: 'academic-paper', title: '学术项目' });
+  const memory = await c.rememberPreference(workspace.id, { scope: 'genre', preference: '保留证据来源位置' });
+  assert.equal(memory.genre, 'academic-paper');
+  assert.ok(c.getRelevantMemories('academic-paper', workspace.id).some(item => item.id === memory.id));
+  assert.ok(!c.getRelevantMemories('article', workspace.id).some(item => item.id === memory.id));
+});
+
+test('通用资料覆盖批次生成有界提示词并仅在显式确认后计入完成', async () => {
+  const { c, state } = realStorageSetup();
+  const article = await c.createArticle({ title: '全库批次验收', goal: '逐项比较合成资料', saveEnabled: true });
+  await c.setMaterialCoverage(article.id, {
+    id: 'coverage-library-1', sourceKind: 'knowledge-library', inventoryComplete: true, knownTotal: 2,
+    items: [
+      { id: 'entry-1', title: '资料一', sourceVersion: 'v1' },
+      { id: 'entry-2', title: '资料二', sourceVersion: 'v1' }
+    ]
+  });
+  const batch = await c.startMaterialBatch(article.id, { batchSize: 2, materials: [
+    { id: 'entry-1', sourceVersion: 'v1', excerpt: '合成摘录甲' },
+    { id: 'entry-2', sourceVersion: 'v1', excerpt: '合成摘录乙' }
+  ] });
+  assert.match(batch.promptVersion.content, /合成摘录甲/);
+  assert.match(batch.promptVersion.content, /不得声称阅读未列出的原文件/);
+  assert.equal(batch.batch.promptVersionId, batch.promptVersion.id);
+  assert.equal(state().writingArticles[0].materialCoverage.items[0].status, 'in-progress');
+
+  const returned = await c.recordMaterialBatchOutcome(article.id, batch.batch.id, {
+    kind: 'returned', promptVersionId: batch.promptVersion.id, resultSummary: '固定合成回带'
+  });
+  assert.equal(returned.summary.processed, 0);
+  assert.equal(returned.summary.returned, 2);
+  const confirmed = await c.confirmMaterialBatch(article.id, batch.batch.id, { evidence: '用户确认本批外部处理已完成' });
+  assert.equal(confirmed.summary.processed, 2);
+  assert.equal(confirmed.summary.coveragePercent, 100);
+  assert.equal(c.getWorkspace(article.id).materialCoverage.batches[0].status, 'confirmed');
+});
+
+test('资料来源版本变化时拒绝启动覆盖批次并保留待处理状态', async () => {
+  const { c } = realStorageSetup();
+  const article = await c.createArticle({ title: '来源版本校验', saveEnabled: true });
+  await c.setMaterialCoverage(article.id, {
+    id: 'coverage-version-1', sourceKind: 'knowledge-library', inventoryComplete: true, knownTotal: 1,
+    items: [{ id: 'entry-1', title: '资料一', sourceVersion: 'v1' }]
+  });
+  await assert.rejects(c.startMaterialBatch(article.id, {
+    materials: [{ id: 'entry-1', sourceVersion: 'v2', excerpt: '旧版本不可混用' }]
+  }), /版本已变化/);
+  assert.equal(c.getMaterialCoverage(article.id).items[0].status, 'pending');
+});
+
+test('替换资料范围时保留旧范围的逐项状态和批次历史', async () => {
+  const { c } = realStorageSetup();
+  const article = await c.createArticle({ title: '范围历史', saveEnabled: true });
+  await c.setMaterialCoverage(article.id, { id: 'scope-old', sourceKind: 'knowledge-library', inventoryComplete: true,
+    knownTotal: 1, items: [{ id: 'old-item', title: '旧范围材料', sourceVersion: 'v1' }] });
+  const batch = await c.startMaterialBatch(article.id, { materials: [{ id: 'old-item', sourceVersion: 'v1', excerpt: '旧范围摘录' }] });
+  await c.recordMaterialBatchOutcome(article.id, batch.batch.id, { kind: 'returned', resultSummary: '旧范围结果' });
+  await c.confirmMaterialBatch(article.id, batch.batch.id, { evidence: '旧范围已核对', confirmedAt: '2026-10-22' });
+  await c.setMaterialCoverage(article.id, { id: 'scope-new', sourceKind: 'knowledge-library', inventoryComplete: true,
+    knownTotal: 1, items: [{ id: 'new-item', title: '新范围材料', sourceVersion: 'v2' }] });
+  const coverage = c.getMaterialCoverage(article.id);
+  assert.equal(coverage.id, 'scope-new');
+  assert.equal(coverage.history.length, 1);
+  assert.equal(coverage.history[0].items[0].status, 'processed');
+  assert.equal(coverage.history[0].batches[0].confirmation, '旧范围已核对');
 });

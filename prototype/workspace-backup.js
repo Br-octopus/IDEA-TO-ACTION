@@ -11,15 +11,17 @@
   const SCOPES = new Set(["workspace", "knowledge-base"]);
   const WORKSPACE_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
   const OPTIONAL_WORKSPACE_COLLECTIONS = [
-    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories", "writingPacks", "writingPackSettings"
+    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories", "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects"
   ];
   const WRITING_PACK_COLLECTIONS = ["writingPacks", "writingPackSettings"];
+  const WRITING_REVIEW_COLLECTION = "writingReviews";
+  const ACADEMIC_PUBLISHING_COLLECTION = "academicResponseProjects";
   const KNOWLEDGE_COLLECTIONS = ["knowledgeEntries", "cases"];
   const WORKSPACE_DATA_FIELDS = [
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata",
     "researchTasks", "platformConnections", "researchAttachments", "promptAgentTasks", "promptAgentSources",
-    "writingArticles", "writingMemories", "writingPacks", "writingPackSettings"
+    "writingArticles", "writingMemories", "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeMetadata"
@@ -216,7 +218,30 @@
     linkedProjectId: SCALAR,
     linkedCaseId: SCALAR,
     createdAt: SCALAR,
-    updatedAt: SCALAR
+    updatedAt: SCALAR,
+    literature: object({
+      authors: LIST,
+      year: SCALAR,
+      publication: SCALAR,
+      volume: SCALAR,
+      issue: SCALAR,
+      pages: SCALAR,
+      doi: SCALAR,
+      pmid: SCALAR,
+      itemType: SCALAR,
+      metadataProvider: SCALAR,
+      queriedAt: SCALAR,
+      metadataStatus: SCALAR,
+      readingStatus: SCALAR,
+      abstractExcerpt: SCALAR,
+      excerptLocation: SCALAR,
+      claimRelations: array(object({
+        claim: SCALAR,
+        relation: SCALAR,
+        location: SCALAR,
+        rationale: SCALAR
+      }))
+    })
   };
 
   const KNOWLEDGE_METADATA_FIELDS = {
@@ -324,16 +349,19 @@
       throw new Error("备份依赖的写作数据清洗模块未加载");
     }
     Object.assign(sanitized, storage.sanitizeWritingState(source));
+    if (typeof storage.sanitizeAcademicPublishingState === "function") {
+      Object.assign(sanitized, storage.sanitizeAcademicPublishingState(source));
+    }
     return sanitized;
   }
 
   function sanitizeBackupData(scope, data) {
     const source = isObject(data) ? clone(data) : {};
-    const sanitizedState = sanitizeState(source);
+    const sanitizedState = sanitizeState(scope === "workspace" ? sanitizeResearchBackupData(source) : source);
     const allowedFields = scope === "workspace" ? WORKSPACE_DATA_FIELDS : KNOWLEDGE_DATA_FIELDS;
     return allowedFields.reduce((result, field) => {
       if (Object.hasOwn(source, field)
-        || (scope === "workspace" && ["writingArticles", "writingMemories", "writingPacks", "writingPackSettings"].includes(field))) {
+        || (scope === "workspace" && ["writingArticles", "writingMemories", "writingPacks", "writingPackSettings", WRITING_REVIEW_COLLECTION, ACADEMIC_PUBLISHING_COLLECTION].includes(field))) {
         result[field] = clone(sanitizedState[field]);
       }
       return result;
@@ -374,7 +402,9 @@
     data.writingMemories = Array.isArray(state.writingMemories) ? clone(state.writingMemories) : [];
     data.writingPacks = Array.isArray(state.writingPacks) ? clone(state.writingPacks) : [];
     data.writingPackSettings = Array.isArray(state.writingPackSettings) ? clone(state.writingPackSettings) : [];
-    return data;
+    data.writingReviews = Array.isArray(state.writingReviews) ? clone(state.writingReviews) : [];
+    data.academicResponseProjects = Array.isArray(state.academicResponseProjects) ? clone(state.academicResponseProjects) : [];
+    return sanitizeResearchBackupData(data);
   }
 
   function countData(data) {
@@ -415,10 +445,10 @@
         ? item.article.id.trim().slice(0, 100) : "";
       const outerId = typeof item?.id === "string" ? item.id.trim() : "";
       const id = field === "writingArticles" ? (outerId || articleId).slice(0, 100)
-        : WRITING_PACK_COLLECTIONS.includes(field) ? outerId.slice(0, 120) : outerId;
-      const requiresExactPackId = WRITING_PACK_COLLECTIONS.includes(field);
+        : WRITING_PACK_COLLECTIONS.includes(field) || field === WRITING_REVIEW_COLLECTION || field === ACADEMIC_PUBLISHING_COLLECTION ? outerId.slice(0, 120) : outerId;
+      const requiresExactId = WRITING_PACK_COLLECTIONS.includes(field) || field === WRITING_REVIEW_COLLECTION || field === ACADEMIC_PUBLISHING_COLLECTION;
       if (!isObject(item) || !id || (field === "writingArticles" && id !== articleId)
-        || (requiresExactPackId && id !== outerId)) {
+        || (requiresExactId && id !== outerId)) {
         throw new TypeError(`备份集合条目稳定 id 无效：${field}[${index}]`);
       }
       if (ids.has(id)) throw new TypeError(`备份集合 id 重复：${field}[${index}]`);
@@ -475,10 +505,21 @@
       for (const field of OPTIONAL_WORKSPACE_COLLECTIONS) {
         if (Object.hasOwn(value.data, field)) {
           validateCollection(value.data, field);
+          if ([WRITING_REVIEW_COLLECTION, ACADEMIC_PUBLISHING_COLLECTION].includes(field) && value.data[field].length > 0
+            && !Object.hasOwn(value.counts, field)) {
+            throw new TypeError(`备份统计无效：${field}`);
+          }
           if (Object.hasOwn(value.counts, field)
             && (!Number.isInteger(value.counts[field]) || value.counts[field] !== value.data[field].length)) {
             throw new TypeError(`备份统计无效：${field}`);
           }
+        }
+      }
+      for (const field of [WRITING_REVIEW_COLLECTION, ACADEMIC_PUBLISHING_COLLECTION]) {
+        if (!Object.hasOwn(value.data, field)
+          && Object.hasOwn(value.counts, field)
+          && (!Number.isInteger(value.counts[field]) || value.counts[field] !== 0)) {
+          throw new TypeError(`备份统计无效：${field}`);
         }
       }
       if (Object.hasOwn(value.data, "platformConnections") && !isObject(value.data.platformConnections)) {
@@ -515,6 +556,16 @@
     for (const field of ["researchTasks", "platformConnections", "researchAttachments"]) {
       if (Object.hasOwn(data, field)) result[field] = sanitized[field];
     }
+    result.researchTasks = (result.researchTasks || []).map(task => ({
+      ...task,
+      operations: (task.operations || []).map(operation => operation.state === "running" ? {
+        ...operation,
+        state: "unknown",
+        updatedAt: new Date().toISOString(),
+        errorCode: "INTERRUPTED",
+        errorMessage: "导入的备份中该操作仍在运行，结果未知；请选择重试或跳过。"
+      } : operation)
+    }));
     return result;
   }
 
@@ -566,16 +617,6 @@
         continue;
       }
       if (importedIds.has(id)) {
-    result.researchTasks = (result.researchTasks || []).map(task => ({
-      ...task,
-      operations: (task.operations || []).map(operation => operation.state === "running" ? {
-        ...operation,
-        state: "unknown",
-        updatedAt: new Date().toISOString(),
-        errorCode: "INTERRUPTED",
-        errorMessage: "导入的备份中该操作仍在运行，结果未知；请选择重试或跳过。"
-      } : operation)
-    }));
         addReport(report, "skipped", collection, `duplicate:${id}`, {
           collection, index, id, reason: "duplicate-id"
         });
@@ -597,59 +638,6 @@
     return isObject(item) && Object.hasOwn(item, "id") ? item.id : null;
   }
 
-  function addReport(report, category, collection, key, value) {
-    const reportKey = `${collection}:${key}`;
-    if (report.seen[category].has(reportKey)) return;
-    report.seen[category].add(reportKey);
-    report[category].push(value);
-  }
-
-  function mergeState(currentState, backup) {
-    // 先校验备份顶层契约；条目内容复用同一 schema 白名单清洗。
-    // 被 schema 判定为非法并丢弃的研究条目不会进入 mergeCollection，也不应被报告为成功新增。
-    const collections = validateBackupStructure(backup);
-    const state = sanitizeState(currentState);
-    const data = sanitizeBackupData(backup.scope, backup.data);
-    const report = {
-      added: [],
-      skipped: [],
-      conflicts: [],
-      seen: {
-        added: new Set(),
-        skipped: new Set(),
-        conflicts: new Set()
-      }
-    };
-
-    for (const field of collections) {
-      if (Array.isArray(data[field])) {
-        state[field] = mergeCollection(state[field], data[field], report, field);
-      }
-    }
-    for (const field of [...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS]) {
-      if (Array.isArray(data[field])) {
-        state[field] = mergeCollection(state[field], data[field], report, field);
-      }
-    }
-
-    return {
-      state,
-      added: report.added,
-      skipped: report.skipped,
-      conflicts: report.conflicts
-    };
-  }
-
-  return {
-    BackupSerializationError,
-    createBackup,
-    validateBackup,
-    getBackupSummary,
-    replaceState,
-    mergeState,
-    remapResearchAttachmentIds,
-    retainResearchAttachments
-  };
   function remapResearchAttachmentIds(data, attachments, unavailableIds, createId) {
     if (!isObject(data) || !Array.isArray(data.researchAttachments) || !Array.isArray(attachments)
       || !Array.isArray(unavailableIds) || typeof createId !== "function") {
@@ -722,4 +710,57 @@
     return { data: result, removed: [...indexed].filter(id => !available.has(id)).length };
   }
 
+  function addReport(report, category, collection, key, value) {
+    const reportKey = `${collection}:${key}`;
+    if (report.seen[category].has(reportKey)) return;
+    report.seen[category].add(reportKey);
+    report[category].push(value);
+  }
+
+  function mergeState(currentState, backup) {
+    // 先校验备份顶层契约；条目内容复用同一 schema 白名单清洗。
+    // 被 schema 判定为非法并丢弃的研究条目不会进入 mergeCollection，也不应被报告为成功新增。
+    const collections = validateBackupStructure(backup);
+    const state = sanitizeState(currentState);
+    const data = sanitizeBackupData(backup.scope, backup.data);
+    const report = {
+      added: [],
+      skipped: [],
+      conflicts: [],
+      seen: {
+        added: new Set(),
+        skipped: new Set(),
+        conflicts: new Set()
+      }
+    };
+
+    for (const field of collections) {
+      if (Array.isArray(data[field])) {
+        state[field] = mergeCollection(state[field], data[field], report, field);
+      }
+    }
+    for (const field of [...RESEARCH_COLLECTIONS, ...OPTIONAL_WORKSPACE_COLLECTIONS]) {
+      if (Array.isArray(data[field])) {
+        state[field] = mergeCollection(state[field], data[field], report, field);
+      }
+    }
+
+    return {
+      state,
+      added: report.added,
+      skipped: report.skipped,
+      conflicts: report.conflicts
+    };
+  }
+
+  return {
+    BackupSerializationError,
+    createBackup,
+    validateBackup,
+    getBackupSummary,
+    replaceState,
+    mergeState,
+    remapResearchAttachmentIds,
+    retainResearchAttachments
+  };
 });

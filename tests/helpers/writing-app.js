@@ -7,6 +7,8 @@ const coordinatorAPI = require('../../prototype/writing-workbench-coordinator.js
 
 function createWritingApp(options = {}) {
   const dom = createWritingDOM();
+  const academicReviewDOM = createWritingDOM('academic-review-root');
+  const academicPublishingDOM = createWritingDOM('academic-publishing-root');
   const elements = new Map();
   const listeners = new Map();
   const clicks = [];
@@ -29,7 +31,7 @@ function createWritingApp(options = {}) {
   const scenes = ['task', 'writing', 'ppt'].map(scene => Object.assign(element(`scene-${scene}`), { dataset: { agentScene: scene } }));
   const nav = ['article', 'prompt-agent'].map(view => Object.assign(element(`nav-${view}`), { dataset: { view } }));
   const document = {
-    getElementById(id) { return dom.document.getElementById(id) || element(id); },
+    getElementById(id) { return dom.document.getElementById(id) || academicReviewDOM.document.getElementById(id) || academicPublishingDOM.document.getElementById(id) || element(id); },
     querySelectorAll(selector) { return selector === '[data-agent-scene]' ? scenes : selector === '[data-view]' ? nav : []; },
     createElement() { return makeElement('created'); }, body: { append() {} }, execCommand() { return true; }
   };
@@ -40,7 +42,7 @@ function createWritingApp(options = {}) {
   const exports = [];
   const disk = new Map();
   let state = options.initialState || storage.createEmptyState();
-  let coordinator; let packCoordinator;
+  let coordinator; let packCoordinator; let academicReviewCoordinator; let academicPublishingCoordinator;
   let backupRaw;
   const localStorage = { getItem: key => disk.get(key) || null, setItem(key, value) { if (failSave || writes === failWriteAt) throw new Error('磁盘已满'); disk.set(key, value); } };
   const window = {
@@ -51,25 +53,36 @@ function createWritingApp(options = {}) {
     ForwardStepSendSafety: require('../../prototype/send-safety.js'),
     ForwardStepWorkspaceBackup: require('../../prototype/workspace-backup.js'),
     ForwardStepKnowledgeSchema: require('../../prototype/knowledge-schema.js'),
+    ForwardStepAcademicLiterature: require('../../prototype/academic-literature.js'),
+    ForwardStepAcademicLiteratureUI: require('../../prototype/academic-literature-ui.js'),
+    ForwardStepAcademicReview: require('../../prototype/academic-review.js'),
+    ForwardStepAcademicReviewCoordinator: { createAcademicReviewCoordinator(deps) { academicReviewCoordinator = require('../../prototype/academic-review-coordinator.js').createAcademicReviewCoordinator(deps); return academicReviewCoordinator; } },
+    ForwardStepAcademicReviewUI: require('../../prototype/academic-review-ui.js'),
+    ForwardStepAcademicPublishing: require('../../prototype/academic-publishing.js'),
+    ForwardStepAcademicPublishingCoordinator: { createAcademicPublishingCoordinator(deps) { academicPublishingCoordinator = require('../../prototype/academic-publishing-coordinator.js').createAcademicPublishingCoordinator(deps); return academicPublishingCoordinator; } },
+    ForwardStepAcademicPublishingUI: require('../../prototype/academic-publishing-ui.js'),
     ForwardStepPromptAgentCoordinator: options.realMaterials ? require('../../prototype/prompt-agent-coordinator.js') : { createPromptAgentCoordinator: () => ({ selectMaterials: async () => [] }) },
     ForwardStepPromptAgentUI: { createPromptAgentUI: () => ({ render() {} }), createPromptAgentScenes: promptUI.createPromptAgentScenes },
     WritingWorkbenchCoordinator: { createWritingWorkbenchCoordinator(deps) { coordinator = coordinatorAPI.createWritingWorkbenchCoordinator(deps); return coordinator; } },
     WritingPackCatalog: require('../../prototype/writing-pack-catalog.js'),
     WritingPackCoordinator: { createWritingPackCoordinator(deps) { packCoordinator = require('../../prototype/writing-pack-coordinator.js').createWritingPackCoordinator(deps); return packCoordinator; } },
     WritingPackUI: require('../../prototype/writing-pack-ui.js'),
+    WritingWorkbenchSchema: require('../../prototype/writing-workbench-schema.js'),
     WritingWorkbenchUI: require('../../prototype/writing-workbench-ui.js'),
     desktopApi: { getConfig: async () => ({ model: { configured: true, name: '测试模型' }, search: {} }), requestModel: async () => { requests++; return { text: '真实预览确认后的模型诊断' }; }, importBackup: async () => backupRaw, exportBackup: async content => {
-      exports.push(JSON.parse(content));
+      exports.push(JSON.parse(typeof content === 'string' ? content : content.content));
       return options.exportBackup ? options.exportBackup(content) : { canceled: false, filePath: 'C:/backups/workspace.json' };
     } },
     prompt: message => options.prompt ? options.prompt(message) : "", confirm: message => options.confirm ? options.confirm(message) : true,
     scrollTo() {}
   };
   const context = { window, document, localStorage, navigator: { clipboard: { writeText: async () => {} } }, crypto: globalThis.crypto,
-    fetch: async () => ({ ok: true, json: async () => ({}) }), setTimeout: () => 1, clearTimeout() {}, Date, console, URL, Blob };
+    fetch: options.fetch || (async () => ({ ok: true, json: async () => ({}) })),
+    btoa: value => Buffer.from(value, 'binary').toString('base64'), AbortController,
+    setTimeout: () => 1, clearTimeout() {}, Date, console, URL, Blob };
   if (options.browser) delete window.desktopApi;
   vm.runInNewContext(fs.readFileSync(require.resolve('../../prototype/app.js'), 'utf8'), context);
-  return { ...dom, window, element, listeners, exports, clicks, pageHTML, knowledgeForms, get coordinator() { return coordinator; }, get packCoordinator() { return packCoordinator; }, get state() { return state; }, get diskState() { return JSON.parse(disk.get(storage.STORAGE_KEY) || 'null'); }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, set failWriteAt(value) { failWriteAt = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
+  return { ...dom, academicReviewDOM, academicPublishingDOM, window, element, listeners, exports, clicks, pageHTML, knowledgeForms, get coordinator() { return coordinator; }, get packCoordinator() { return packCoordinator; }, get academicReviewCoordinator() { return academicReviewCoordinator; }, get academicPublishingCoordinator() { return academicPublishingCoordinator; }, get state() { return state; }, get diskState() { return JSON.parse(disk.get(storage.STORAGE_KEY) || 'null'); }, get requests() { return requests; }, get writes() { return writes; }, set failSave(value) { failSave = value; }, set failWriteAt(value) { failWriteAt = value; }, async settle() { await new Promise(resolve => setImmediate(resolve)); },
     async import(backup) { backupRaw = JSON.stringify(backup); await listeners.get('knowledge-import-open:click')(); },
     event(id, type = 'click', event = {}) { return listeners.get(`${id}:${type}`)?.({ target: element(id), preventDefault() {}, ...event }); } };
 }

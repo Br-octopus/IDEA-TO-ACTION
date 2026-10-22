@@ -8,13 +8,11 @@
     "start": "node server.js",
     "desktop": "electron .",
     "test": "node --test",
-    "check": "node --check server.js && node --check server/model-client.js && node --check server/search-client.js && node --check electron/settings-store.js && node --check electron/backup-store.js && node --check electron/prompt-agent-sources.js && node --check electron/main.js && node --check electron/preload.js && node --check prototype/workspace-backup.js && node --check prototype/backup-manager.js && node --check prototype/search-dictionary.js && node --check prototype/send-safety.js && node --check prototype/knowledge-search.js && node --check prototype/retriever.js && node --check prototype/social-research-prompts.js && node --check prototype/social-research-schema.js && node --check prototype/social-research-ui.js && node --check prototype/social-research-workflow.js && node --check prototype/prompt-agent-schema.js && node --check prototype/prompt-agent-workflow.js && node --check prototype/prompt-agent-prompts.js && node --check prototype/local-source-index.js && node --check prototype/prompt-agent-research-bridge.js && node --check prototype/prompt-agent-coordinator.js && node --check prototype/prompt-agent-ui.js && node --check prototype/ppt-scene-schema.js && node --check prototype/ppt-scene-workflow.js && node --check prototype/ppt-scene-prompts.js && node --check prototype/ppt-scene-coordinator.js && node --check prototype/writing-workbench-schema.js && node --check prototype/writing-workbench-prompts.js && node --check prototype/writing-workbench-coordinator.js && node --check prototype/writing-workbench-ui.js && node --check prototype/app.js",
+    "check": "node --check server.js && node --check server/web-page-reader.js && node --check server/writing-material-parser.js && node --check server/model-client.js && node --check server/search-client.js && node --check server/academic-literature-client.js && node --check electron/settings-store.js && node --check electron/backup-store.js && node --check electron/prompt-agent-sources.js && node --check electron/main.js && node --check electron/preload.js && node --check prototype/workspace-backup.js && node --check prototype/backup-manager.js && node --check prototype/search-dictionary.js && node --check prototype/send-safety.js && node --check prototype/knowledge-search.js && node --check prototype/academic-literature.js && node --check prototype/academic-literature-ui.js && node --check prototype/academic-review.js && node --check prototype/academic-review-coordinator.js && node --check prototype/academic-review-ui.js && node --check prototype/academic-publishing.js && node --check prototype/academic-publishing-coordinator.js && node --check prototype/academic-publishing-ui.js && node --check prototype/retriever.js && node --check prototype/social-research-prompts.js && node --check prototype/social-research-schema.js && node --check prototype/social-research-ui.js && node --check prototype/social-research-workflow.js && node --check prototype/prompt-agent-schema.js && node --check prototype/prompt-agent-workflow.js && node --check prototype/prompt-agent-prompts.js && node --check prototype/local-source-index.js && node --check prototype/prompt-agent-research-bridge.js && node --check prototype/prompt-agent-coordinator.js && node --check prototype/prompt-agent-ui.js && node --check prototype/ppt-scene-schema.js && node --check prototype/ppt-scene-workflow.js && node --check prototype/ppt-scene-prompts.js && node --check prototype/ppt-scene-coordinator.js && node --check prototype/writing-pack-schema.js && node --check prototype/writing-pack-catalog.js && node --check prototype/writing-pack-coordinator.js && node --check prototype/writing-pack-ui.js && node --check prototype/writing-workbench-schema.js && node --check prototype/writing-workbench-prompts.js && node --check prototype/writing-workbench-coordinator.js && node --check prototype/writing-workbench-ui.js && node --check prototype/app.js",
     "dist:win": "electron-builder --win nsis portable"
   },
-  "engines": { "node": ">=18" },
-  "dependencies": {
-    "yauzl": "^2.10.0",
-    "yazl": "^3.3.1"
+  "engines": {
+    "node": ">=22.13.0"
   },
   "devDependencies": {
     "electron": "^38.0.0",
@@ -35,11 +33,28 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "vendor/mediacrawler", "to": "vendor/mediacrawler" },
-      { "from": "vendor/mediacrawler-bridge", "to": "vendor/mediacrawler-bridge" }
+      {
+        "from": "vendor/mediacrawler-bridge",
+        "to": "vendor/mediacrawler-bridge",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "vendor/mediacrawler",
+        "to": "vendor/mediacrawler",
+        "filter": [
+          "LICENSE",
+          "requirements.lock",
+          "mediacrawler_lite/**/*.py"
+        ]
+      }
     ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "build/icon.ico"
     },
     "nsis": {
@@ -60,5 +75,14 @@
       "requestExecutionLevel": "user",
       "artifactName": "ForwardStep-${version}-portable.${ext}"
     }
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "1.0.13",
+    "@tesseract.js-data/chi_sim": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "pdfjs-dist": "6.4.299",
+    "tesseract.js": "7.0.0",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
   }
 }

@@ -25,19 +25,23 @@
   const ITEM_FIELDS = {
     clarifications: new Set(['id', 'question', 'required', 'when']),
     materials: new Set(['id', 'purpose', 'required', 'acceptedTypes']),
-    requirements: new Set(['id', 'statement', 'sourceIds', 'verificationStatus']),
-    methods: new Set(['id', 'title', 'guidance', 'applicability', 'sourceIds', 'verificationStatus']),
-    prompts: new Set(['id', 'taskType', 'content', 'sourceIds', 'verificationStatus']),
-    structures: new Set(['id', 'taskType', 'sections']),
-    style: new Set(['id', 'statement', 'sourceIds', 'verificationStatus']),
-    terminology: new Set(['id', 'term', 'definition', 'sourceIds', 'verificationStatus']),
-    evidenceRules: new Set(['id', 'statement', 'sourceIds', 'verificationStatus']),
-    checks: new Set(['id', 'statement', 'sourceIds', 'verificationStatus']),
-    repairs: new Set(['id', 'issue', 'action', 'sourceIds', 'verificationStatus']),
-    nextSteps: new Set(['id', 'when', 'action', 'sourceIds', 'verificationStatus']),
-    examples: new Set(['id', 'kind', 'taskType', 'input', 'prompt', 'result', 'notes', 'verificationStatus']),
-    sources: new Set(['id', 'title', 'url', 'locator', 'version', 'license', 'checkedAt', 'applicability', 'limitations', 'verificationStatus'])
+    requirements: new Set(['id', 'enabled', 'statement', 'sourceIds', 'verificationStatus']),
+    methods: new Set(['id', 'enabled', 'title', 'guidance', 'applicability', 'inputs', 'outputs', 'checks', 'skippable', 'returnWhenMissing', 'sourceIds', 'verificationStatus']),
+    prompts: new Set(['id', 'enabled', 'taskType', 'content', 'sourceIds', 'verificationStatus']),
+    structures: new Set(['id', 'enabled', 'taskType', 'sections']),
+    style: new Set(['id', 'enabled', 'statement', 'sourceIds', 'verificationStatus']),
+    terminology: new Set(['id', 'enabled', 'term', 'definition', 'sourceIds', 'verificationStatus']),
+    evidenceRules: new Set(['id', 'enabled', 'statement', 'sourceIds', 'verificationStatus']),
+    checks: new Set(['id', 'enabled', 'statement', 'sourceIds', 'verificationStatus']),
+    repairs: new Set(['id', 'enabled', 'issue', 'action', 'sourceIds', 'verificationStatus']),
+    nextSteps: new Set(['id', 'enabled', 'when', 'action', 'sourceIds', 'verificationStatus']),
+    examples: new Set(['id', 'enabled', 'kind', 'taskType', 'input', 'prompt', 'result', 'notes', 'verificationStatus']),
+    sources: new Set(['id', 'title', 'url', 'locator', 'version', 'versionHash', 'readAt', 'license', 'adoptionReason', 'reviewRecord', 'checkedAt', 'applicability', 'limitations', 'verificationStatus'])
   };
+  const ROUTE_STAGE_FIELDS = new Set([
+    'id', 'title', 'enabled', 'methodCardIds', 'inputs', 'outputs', 'checks', 'sourceIds', 'verificationStatus',
+    'skippable', 'returnWhenMissing'
+  ]);
 
   function isObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -77,6 +81,12 @@
     return items;
   }
 
+  function uniqueSourceIds(value, field) {
+    const ids = sourceIds(value);
+    if (new Set(ids).size !== ids.length) throw new TypeError(`${field}存在重复来源 ID`);
+    return ids;
+  }
+
   function normalizeApplicability(input) {
     const source = isObject(input) ? input : {};
     return {
@@ -113,7 +123,15 @@
       if (field === 'id') continue;
       if (field === 'sourceIds') output[field] = sourceIds(source[field]);
       else if (field === 'verificationStatus') output[field] = verificationStatus(source[field]);
+      else if (field === 'enabled') output[field] = source.enabled !== false;
       else if (field === 'required') output[field] = source[field] === true;
+      else if (['inputs', 'outputs', 'checks', 'returnWhenMissing', 'methodCardIds'].includes(field)) output[field] = list(source[field]);
+      else if (field === 'skippable') output[field] = source[field] === true;
+      else if (field === 'applicability' && kind === 'sources') {
+        output[field] = Array.isArray(source[field])
+          ? list(source[field]).join('；')
+          : text(source[field]);
+      }
       else if (field === 'acceptedTypes' || field === 'applicability' || field === 'sections') output[field] = list(source[field]);
       else output[field] = text(source[field]);
     }
@@ -124,14 +142,20 @@
     if (!Array.isArray(value)) return [];
     const stages = value.slice(0, WRITING_PACK_LIMITS.stagesPerRoute).map(input => {
       const source = isObject(input) ? input : {};
-      return {
+      const stage = {
         id: requiredId(source.id, 'routes.stages.id'),
+        title: text(source.title),
+        enabled: source.enabled !== false,
         inputs: list(source.inputs),
         outputs: list(source.outputs),
         checks: list(source.checks),
+        methodCardIds: list(source.methodCardIds),
+        sourceIds: uniqueSourceIds(source.sourceIds, 'routes.stages.sourceIds'),
+        verificationStatus: verificationStatus(source.verificationStatus),
         skippable: source.skippable === true,
         returnWhenMissing: list(source.returnWhenMissing)
       };
+      return Object.fromEntries(Object.entries(stage).filter(([key]) => ROUTE_STAGE_FIELDS.has(key)));
     });
     return uniqueIds(stages, 'routes.stages');
   }
@@ -140,7 +164,15 @@
     if (!Array.isArray(value)) return [];
     const routes = value.slice(0, WRITING_PACK_LIMITS.itemsPerCollection).map(input => {
       const source = isObject(input) ? input : {};
-      return { id: requiredId(source.id, 'routes.id'), stages: normalizeStages(source.stages) };
+      return {
+        id: requiredId(source.id, 'routes.id'),
+        title: text(source.title),
+        enabled: source.enabled !== false,
+        taskTypes: [...new Set(list(source.taskTypes))],
+        sourceIds: uniqueSourceIds(source.sourceIds, 'routes.sourceIds'),
+        verificationStatus: verificationStatus(source.verificationStatus),
+        stages: normalizeStages(source.stages)
+      };
     });
     return uniqueIds(routes, 'routes');
   }
@@ -202,7 +234,9 @@
     return {
       id: requiredId(source.id, 'settings.id'),
       enabled: source.enabled !== false,
-      updatedAt: text(source.updatedAt, 80)
+      updatedAt: text(source.updatedAt, 80),
+      ...(Number.isSafeInteger(source.acceptedVersion) && source.acceptedVersion > 0 ? { acceptedVersion: source.acceptedVersion } : {}),
+      ...(isObject(source.acceptedPack) ? { acceptedPack: normalizeWritingPack(source.acceptedPack) } : {})
     };
   }
 

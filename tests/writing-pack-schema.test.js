@@ -40,6 +40,17 @@ test('写作包规范化保留完整契约并过滤所有嵌套未知字段和�
   assert.deepEqual(schema.normalizeWritingPack(pack), pack);
 });
 
+test('来源适用范围保留文本，方法适用范围仍按列表规范化', () => {
+  const pack = schema.normalizeWritingPack({
+    id: 'source-applicability-pack',
+    methods: [{ id: 'method', title: '方法', guidance: '指导', applicability: ['改稿', '论文'] }],
+    sources: [{ id: 'source', title: '来源', applicability: '仅适用于中文论文改稿' }]
+  });
+
+  assert.deepEqual(pack.methods[0].applicability, ['改稿', '论文']);
+  assert.equal(pack.sources[0].applicability, '仅适用于中文论文改稿');
+});
+
 test('拒绝无效层级、验证状态和非正整数版本', () => {
   for (const layer of ['core', 'genre', 'task']) assert.equal(schema.normalizeWritingPack({ ...packInput, layer }).layer, layer);
   for (const layer of ['other', '', null]) assert.throws(() => schema.normalizeWritingPack({ ...packInput, layer }), /layer|层级/);
@@ -114,4 +125,78 @@ test('schema 以 WritingPackSchema 名称提供 UMD 全局导出', () => {
   vm.runInContext(readFileSync(require.resolve('../prototype/writing-pack-schema.js'), 'utf8'), context);
   assert.equal(typeof context.WritingPackSchema.normalizeWritingPack, 'function');
   assert.equal(JSON.stringify(context.WritingPackSchema.normalizeWritingPack(packInput)), JSON.stringify(schema.normalizeWritingPack(packInput)));
+});
+
+test('专业路线保留标题、适用任务、来源及步骤核验状态，并兼容旧路线', () => {
+  const pack = schema.normalizeWritingPack({
+    id: 'route-pack',
+    sources: [{ id: 'source-1', title: '方法来源', url: 'https://example.test/method' }],
+    routes: [{
+      id: 'route-1', title: '逐项核对路线', taskTypes: ['review', 'revision'],
+      sourceIds: ['source-1'], verificationStatus: 'source-reviewed',
+      stages: [{
+        id: 'stage-1', title: '核查论据', inputs: ['当前稿件'], outputs: ['证据清单'], checks: ['来源可定位'],
+        sourceIds: ['source-1'], verificationStatus: 'case-validated', skippable: false,
+        returnWhenMissing: ['补交来源'], apiKey: 'secret'
+      }]
+    }, {
+      id: 'legacy-route', stages: [{ id: 'legacy-stage', inputs: ['草稿'], outputs: ['检查结果'] }]
+    }]
+  });
+
+  assert.equal(pack.routes[0].title, '逐项核对路线');
+  assert.deepEqual(pack.routes[0].taskTypes, ['review', 'revision']);
+  assert.deepEqual(pack.routes[0].sourceIds, ['source-1']);
+  assert.equal(pack.routes[0].verificationStatus, 'source-reviewed');
+  assert.equal(pack.routes[0].stages[0].title, '核查论据');
+  assert.equal(pack.routes[0].stages[0].verificationStatus, 'case-validated');
+  assert.equal(pack.routes[1].verificationStatus, 'unverified');
+  assert.equal(pack.routes[1].title, '');
+  assert.equal(pack.routes[1].stages[0].verificationStatus, 'unverified');
+  assert.doesNotMatch(JSON.stringify(pack.routes), /secret|apiKey/);
+  assert.deepEqual(schema.normalizeWritingPack(pack).routes, pack.routes);
+});
+
+test('路线和步骤来源字段限长、唯一并使用受限状态', () => {
+  assert.throws(() => schema.normalizeWritingPack({
+    id: 'duplicate-route-sources',
+    routes: [{ id: 'r', sourceIds: ['s1', 's1'], stages: [] }]
+  }), /唯一|重复/);
+  assert.throws(() => schema.normalizeWritingPack({
+    id: 'invalid-route-status',
+    routes: [{ id: 'r', verificationStatus: 'verified', stages: [] }]
+  }), /verificationStatus|验证状态/);
+  assert.throws(() => schema.normalizeWritingPack({
+    id: 'duplicate-step-sources',
+    routes: [{ id: 'r', stages: [{ id: 's', sourceIds: ['x', 'x'] }] }]
+  }), /唯一|重复/);
+
+  const pack = schema.normalizeWritingPack({
+    id: 'bounded-route', routes: [{
+      id: 'r', title: '路线'.repeat(500), taskTypes: ['review', 'review'],
+      sourceIds: ['s1'], stages: [{ id: 's', title: '步骤'.repeat(500), sourceIds: ['s1'] }]
+    }]
+  });
+  assert.ok(pack.routes[0].title.length <= schema.WRITING_PACK_LIMITS.text);
+  assert.deepEqual(pack.routes[0].taskTypes, ['review']);
+  assert.ok(pack.routes[0].stages[0].title.length <= schema.WRITING_PACK_LIMITS.text);
+});
+
+test('方法卡结构字段、路线关联与来源追溯字段经过白名单规范化', () => {
+  const pack = schema.normalizeWritingPack({
+    id: 'structured-method-pack',
+    methods: [{ id: 'method-a', title: '检查方法', inputs: ['草稿'], outputs: ['问题列表'],
+      checks: ['每项有位置'], skippable: true, returnWhenMissing: ['缺原稿时返回'], enabled: false }],
+    routes: [{ id: 'route-a', stages: [{ id: 'stage-a', methodCardIds: ['method-a'], inputs: ['草稿'] }] }],
+    sources: [{ id: 'source-a', versionHash: 'sha256:abc', readAt: '2026-10-22', adoptionReason: '方法来源',
+      reviewRecord: '人工待核', password: 'must-drop' }]
+  });
+  assert.deepEqual(pack.methods[0].inputs, ['草稿']);
+  assert.equal(pack.methods[0].enabled, false);
+  assert.deepEqual(pack.routes[0].stages[0].methodCardIds, ['method-a']);
+  assert.equal(pack.sources[0].versionHash, 'sha256:abc');
+  assert.equal(pack.sources[0].readAt, '2026-10-22');
+  assert.equal(pack.sources[0].adoptionReason, '方法来源');
+  assert.equal(pack.sources[0].reviewRecord, '人工待核');
+  assert.doesNotMatch(JSON.stringify(pack), /must-drop/);
 });

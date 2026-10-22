@@ -9,6 +9,92 @@ const { buildWritingDiagnosisPrompt: diagnose, buildWritingRevisionPrompt: revis
   selectWritingPacks } = api;
 const material = (purpose, excerpt, id = purpose) => ({ id, sourceArticleId: `source-${id}`, purpose, excerpt });
 
+test('小说与剧本任务仅带入显式关联的前后单元摘要和未解决问题', () => {
+  const prompt = api.buildDomainWritingPrompt({
+    article: { id: 'story-a', genre: 'fiction', goal: '写当前章节' },
+    units: [
+      { id: 'before', title: '前章', summary: '前章摘要哨兵', nextUnitIds: ['current'] },
+      { id: 'current', title: '当前章', priorUnitIds: ['before'], nextUnitIds: ['after'] },
+      { id: 'after', title: '后章', summary: '后章摘要哨兵', priorUnitIds: ['current'] },
+      { id: 'unrelated', title: '无关章', summary: '无关单元泄漏哨兵' }
+    ],
+    round: { id: 'round-a', unitId: 'current', taskType: 'longform-chapter-draft',
+      unitSnapshot: { id: 'current', title: '当前章', priorUnitIds: ['before'], nextUnitIds: ['after'] },
+      longformSnapshot: { mode: 'fiction', canon: [], characters: [], timeline: [], foreshadowing: [],
+        contextNote: '前后单元摘要\n前章[before]：前章摘要哨兵\n后章[after]：后章摘要哨兵\n当前未解决问题\n[issue-current] 当前章问题哨兵' },
+      materials: [] },
+    issues: [
+      { id: 'issue-current', articleId: 'story-a', unitId: 'current', status: 'pending-user', observation: '当前章问题哨兵' },
+      { id: 'issue-other', articleId: 'story-a', unitId: 'unrelated', status: 'pending-user', observation: '无关问题泄漏哨兵' },
+      { id: 'issue-foreign', articleId: 'story-b', unitId: 'before', status: 'pending-user', observation: '其他作品泄漏哨兵' }
+    ]
+  }, 'longform-chapter-draft');
+  assert.match(prompt, /前章摘要哨兵/);
+  assert.match(prompt, /后章摘要哨兵/);
+  assert.match(prompt, /当前章问题哨兵/);
+  assert.doesNotMatch(prompt, /无关单元泄漏哨兵|无关问题泄漏哨兵|其他作品泄漏哨兵/);
+  assert.match(prompt, /用户目标与专业规则冲突处理/);
+  assert.match(prompt, /未核验规则不得作为权威要求/);
+});
+
+test('长篇研究文章提示词使用章节关系上下文，不混入故事连续性字段', () => {
+  const prompt = api.buildDomainWritingPrompt({
+    article: { id: 'research-a', genre: 'longform-research-article', goal: '追踪章节论点和证据' },
+    units: [{ id: 'section-2', title: '第二节：证据分析', summary: '比较两组证据范围', priorUnitIds: ['section-1'], nextUnitIds: ['section-3'] }],
+    round: { id: 'round-research', unitId: 'section-2', taskType: 'section-plan',
+      unitSnapshot: { id: 'section-2', type: 'chapter', title: '第二节：证据分析', goal: '整理证据关系',
+        completionCriteria: ['每个论点可回到材料'], summary: '比较两组证据范围', priorUnitIds: ['section-1'], nextUnitIds: ['section-3'] },
+      materials: [] }
+  }, 'section-plan');
+
+  assert.match(prompt, /研究文章章节上下文/);
+  assert.match(prompt, /第二节：证据分析/);
+  assert.match(prompt, /比较两组证据范围/);
+  assert.match(prompt, /前序章节 section-1/);
+  assert.match(prompt, /后续章节 section-3/);
+  assert.doesNotMatch(prompt, /章节\/场景上下文|故事内时间|人物出场|设定 ID|伏笔/);
+});
+
+test('领域提示词使用适用范围内的记忆并显式处理偏好冲突', () => {
+  const prompt = api.buildDomainWritingPrompt({
+    id: 'project-a',
+    article: { id: 'project-a', genre: 'business-document', goal: '只写已确认的客户数量' },
+    memories: [
+      { id: 'project-memory', scope: 'project', projectId: 'project-a', preference: '缺少依据的指标标为待核实' },
+      { id: 'other-project', scope: 'project', projectId: 'project-b', preference: '其他项目偏好哨兵' },
+      { id: 'global-memory', scope: 'general', preference: '句子尽量简洁' }
+    ],
+    round: { id: 'round-project', taskType: 'business-proposal', materials: [] }
+  }, 'business-proposal');
+
+  assert.match(prompt, /用户偏好与专业规则冲突处理/);
+  assert.match(prompt, /项目范围：缺少依据的指标标为待核实/);
+  assert.match(prompt, /通用范围：句子尽量简洁/);
+  assert.doesNotMatch(prompt, /其他项目偏好哨兵/);
+  assert.match(prompt, /适用记忆是用户偏好，不是事实、证据或专业规则/);
+  assert.match(prompt, /当前目标、成功标准、保留项或限制条件冲突时/);
+  assert.match(prompt, /与专业规则冲突时，列出双方依据、规则条目、来源与核验状态/);
+});
+
+test('结构化领域提示词将事实和规则材料的来源元数据带入实际提示词', () => {
+  const metadata = {
+    provider: '播客来源发布方哨兵', accessedAt: '2026-10-22', license: '播客来源许可哨兵',
+    applicability: '播客来源适用范围哨兵', limitations: '播客来源限制哨兵'
+  };
+  const prompt = api.buildDomainWritingPrompt({
+    article: { id: 'podcast-metadata', genre: 'podcast', goal: '用可追溯材料整理播客提纲' },
+    round: { id: 'round-podcast-metadata', taskType: 'podcast-script', materials: [
+      { id: 'podcast-fact', title: '事实材料', purpose: 'content', excerpt: '合成事实摘录', ...metadata },
+      { id: 'podcast-rule', title: '要求材料', purpose: 'requirement', excerpt: '合成要求摘录', ...metadata }
+    ] }
+  }, 'podcast-script');
+
+  for (const value of Object.values(metadata)) assert.ok(prompt.includes(value), value);
+  assert.match(prompt, /未核验/);
+  assert.match(prompt, /合成事实摘录/);
+  assert.match(prompt, /合成要求摘录/);
+});
+
 test('提示词和本地初检实际消费文体配置，保留用户要求与风格优先级', () => {
   const schema = require('../prototype/writing-workbench-schema.js');
   const config = {
@@ -87,6 +173,67 @@ test('优先级、具体诊断和边界完整，八维可选择子集', () => {
   for (const name of ['目标读者', '事实依据', '逻辑结构', '语言表达', '风格修辞', '术语一致', '格式排版', '约束风险']) assert.ok(all.includes(name));
 });
 
+test('选择任务单元后只采用全文和当前单元材料，并显示目标、材料长度与未采用范围', () => {
+  const prompt = revise({
+    units: [{ id: 'unit-1', type: 'chapter', title: '第一章', goal: '解释研究背景', completionCriteria: ['说明关键概念'] }],
+    article: { goal: '完成文章', draft: '当前稿件' },
+    round: {
+      unitId: 'unit-1', unitSnapshot: { id: 'unit-1', type: 'chapter', title: '第一章', goal: '解释研究背景', completionCriteria: ['说明关键概念'] },
+      materials: [
+        { id: 'whole', title: '全文共用', purpose: 'content', excerpt: '全文证据' },
+        { id: 'current', title: '第一章资料', purpose: 'content', excerpt: '本章专用依据', unitIds: ['unit-1'] },
+        { id: 'other', title: '第二章资料', purpose: 'content', excerpt: '跨章污染哨兵', unitIds: ['unit-2'] }
+      ]
+    }
+  });
+
+  for (const value of ['第一章', '解释研究背景', '说明关键概念', '全文证据', '本章专用依据', '第二章资料', '未采用', '实际嵌入']) {
+    assert.ok(prompt.includes(value), value);
+  }
+  assert.ok(!prompt.includes('跨章污染哨兵'));
+  assert.match(prompt, /全文材料与当前单元材料/);
+  assert.match(prompt, /材料\d+字|材料.*字/);
+  assert.ok(prompt.length <= 8000);
+});
+
+test('没有任务单元时保留原有全文材料行为', () => {
+  const prompt = revise({ round: { materials: [
+    { id: 'a', title: '资料甲', purpose: 'content', excerpt: '全文上下文甲' },
+    { id: 'b', title: '资料乙', purpose: 'content', excerpt: '全文上下文乙', unitIds: ['unit-other'] }
+  ] } });
+  assert.ok(prompt.includes('全文上下文甲'));
+  assert.ok(prompt.includes('全文上下文乙'));
+});
+
+test('提示词只读取轮次路线快照并明确来源状态、步骤和非认证边界', () => {
+  const prompt = revise({ round: {
+    routeSnapshot: {
+      packId: 'pack-1', packVersion: 2, routeId: 'route-1', title: '逐项核对路线',
+      sourceIds: ['source-1'], verificationStatus: 'unverified', currentStageId: 'stage-1',
+      sources: [{ id: 'source-1', title: '路线参考来源', verificationStatus: 'unverified' }],
+      stages: [{
+        id: 'stage-1', title: '核对论据', inputs: ['稿件'], outputs: ['证据表'], checks: ['能定位'],
+        sourceIds: ['source-1'], verificationStatus: 'unverified', status: 'in-progress'
+      }]
+    }
+  } });
+  for (const value of ['逐项核对路线', '路线参考来源', '核对论据', '证据表', 'in-progress', '用户确认完成不等于专业认证']) {
+    assert.ok(prompt.includes(value), value);
+  }
+  assert.match(prompt, /路线来源.*未核验|未核验.*路线来源/);
+
+  const direct = revise({ round: { draft: '普通全文' } });
+  assert.match(direct, /直接模式.*当前选用的基础包没有适用路线/);
+});
+
+test('模型诊断要求严格 JSON 问题候选，不允许替用户确认或改变状态', () => {
+  const prompt = diagnose({ round: { draft: '待诊断稿件' } });
+  for (const value of ['结构化问题候选 JSON', '"issues"', '"location"', '"excerpt"', '"observation"',
+    '"impact"', '"evidenceCategory"', '"evidenceDescription"', '"suggestion"', '"priority"',
+    '候选问题', '不得改变问题处理状态']) assert.ok(prompt.includes(value), value);
+  assert.match(prompt, /无法输出有效 JSON.*原始诊断仍可查看|原始诊断仍保留/);
+});
+
 test('离线风格统计具有来源关联和低中置信度，纠正优先且不修改输入', () => {
   const materials = [material('style', '# 标题\n短句。\n但是这是一句明显更长的句子，用来解释为什么。难道不是吗？', 'm1')];
   const original = JSON.stringify(materials);
@@ -148,7 +295,7 @@ test('超限上下文预算保留最新反馈与约束，全部标准与保留�
     assert.ok(prompt.includes(input.round.userFeedback));
     for (let i = 0; i < 20; i++) assert.ok(prompt.includes(`标准${i}：`), `标准${i}`);
     for (let i = 0; i < 30; i++) assert.ok(prompt.includes(`保留${i}：`), `保留${i}`);
-    assert.match(prompt, /摘要/);
+    assert.match(prompt, /前缀节选；未作摘要/);
     assert.match(prompt, /8000/);
     assert.match(prompt, /省略|未纳入/);
     assert.match(prompt, /当前用户要求 > 样本/);
@@ -167,9 +314,62 @@ test('本地初检只给具体线索，八维未确定项待核实，不冒充�
   assert.equal(local({ article: { dimensions: ['事实依据'], draft: '普通句子。' } }).dimensions.length, 1);
 });
 
+test('口播本地初检只估算文字时长并标出过长句段供试读，不冒充真实测时', () => {
+  const draft = '夜间通勤需要提前查看班次和站点信息遇到临时调整时先核对官方通知再选择安全的替代路线'.repeat(5);
+  const result = local({ article: { genre: 'spoken-script', domainInputs: { duration: '约2分钟' } }, round: { draft } });
+  const serialized = JSON.stringify(result);
+  assert.match(serialized, /文字量估算/);
+  assert.match(serialized, /每分钟220–280字/);
+  assert.match(serialized, /试读并确认自然停顿/);
+  assert.match(serialized, /不等同于实际朗读时长/);
+  assert.match(serialized, /目标时长.*约2分钟/);
+});
+
+test('短视频初检只按显式分段时长求和并提示分轨缺项，不假定实拍时长', () => {
+  const result = local({ article: { genre: 'short-video', domainInputs: { duration: '30秒', tracks: '口播、画面、字幕' } }, round: {
+    taskType: 'video-script', draft: '[5秒] 口播：先看清站点。\n[10秒] 口播：再确认班次。画面：公交站牌。字幕：核对信息。'
+  } });
+  const serialized = JSON.stringify(result);
+  assert.match(serialized, /显式标注的分段时长合计15秒/);
+  assert.match(serialized, /目标时长30秒/);
+  assert.match(serialized, /不代表实拍或剪辑后的实际时长/);
+  assert.match(serialized, /第1段未识别到用户要求的画面、字幕轨道/);
+});
+
+test('社媒轮播初检仅在能识别页码时核对页面数，不判定内容完整性', () => {
+  const result = local({ article: { genre: 'social-post', domainInputs: { cardCount: '3页' } }, round: {
+    taskType: 'social-carousel', draft: '第1页：问题\n第2页：做法'
+  } });
+  const serialized = JSON.stringify(result);
+  assert.match(serialized, /识别到2页/);
+  assert.match(serialized, /目标为3页/);
+  assert.match(serialized, /静态页码检查不代表内容完整或符合平台规则/);
+});
+
+test('多人播客初检提示缺少说话人标签但不推断嘉宾回答是否真实', () => {
+  const result = local({ article: { genre: 'podcast', domainInputs: { format: '多人采访', speakers: '主持人、嘉宾' } }, round: {
+    taskType: 'podcast-script', draft: '开场：欢迎收听。\n问题：你如何看待这个主题？'
+  } });
+  const serialized = JSON.stringify(result);
+  assert.match(serialized, /未发现明确的主持人\/嘉宾说话人标签/);
+  assert.match(serialized, /人工确认发言归属/);
+  assert.match(serialized, /不判断回答真实性/);
+});
+
+test('演讲本地初检估算文字时长并提示个人经历需本人确认', () => {
+  const draft = '个人经历：我曾经服务过一万名学员。'.repeat(80);
+  const result = local({ article: { genre: 'speech', domainInputs: { duration: '约5分钟', personalFacts: '演讲者经历待确认' } }, round: { taskType: 'speech-draft', draft } });
+  const serialized = JSON.stringify(result);
+  assert.match(serialized, /文字量估算/);
+  assert.match(serialized, /不等同于实际演讲时长/);
+  assert.match(serialized, /个人经历或承诺，但稿件中未发现明显占位提示/);
+});
+
 test('UMD 浏览器与 CommonJS 一致，非法输入稳定且纯函数不联网', () => {
   const context = vm.createContext({});
   vm.runInContext(readFileSync(require.resolve('../prototype/writing-workbench-schema.js'), 'utf8'), context);
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-pack-schema.js'), 'utf8'), context);
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-pack-catalog.js'), 'utf8'), context);
   vm.runInContext(readFileSync(require.resolve('../prototype/writing-workbench-prompts.js'), 'utf8'), context);
   for (const name of Object.keys(api)) {
     assert.equal(typeof context.WritingWorkbenchPrompts[name], 'function');
@@ -187,9 +387,13 @@ test('页面脚本 schema 早于 storage，prompts 早于 coordinator，移除 N
   const html = readFileSync(require.resolve('../prototype/index.html'), 'utf8');
   assert.ok(html.indexOf('/prototype/writing-workbench-schema.js') >= 0);
   assert.ok(html.indexOf('/prototype/writing-workbench-schema.js') < html.indexOf('/prototype/storage.js'));
-  assert.ok(html.indexOf('/prototype/writing-workbench-prompts.js') > html.indexOf('/prototype/writing-workbench-schema.js'));
+  const packSchema = html.indexOf('/prototype/writing-pack-schema.js');
+  const packCatalog = html.indexOf('/prototype/writing-pack-catalog.js');
+  const prompts = html.indexOf('/prototype/writing-workbench-prompts.js');
+  assert.ok(packSchema >= 0 && packSchema < packCatalog && packCatalog < prompts,
+    '包 schema 和 catalog 必须先于提示词模块加载');
   const coordinator = html.indexOf('/prototype/writing-workbench-coordinator.js');
-  if (coordinator >= 0) assert.ok(html.indexOf('/prototype/writing-workbench-prompts.js') < coordinator);
+  if (coordinator >= 0) assert.ok(prompts < coordinator);
   assert.doesNotMatch(html, /<script[^>]+src=["']\/prototype\/local-source-index\.js/);
 });
 
@@ -228,6 +432,40 @@ test('两种指令保留轮次来源的标题、HTTP(S) URL 与状态局限，�
     input.round.sources[0].verificationStatus = 'source-reviewed';
     assert.match(build(input), /source-reviewed.*来源已审阅/);
   }
+});
+
+test('两种提示词消费与材料卡片一致的来源位置、版本、摘录行、选用理由和失败状态', () => {
+  for (const build of [diagnose, revise]) {
+    const prompt = build({ round: { sources: [{
+      id: 'local:guides/writing.md', title: '授权目录指南', excerpt: '只采用这段已展示摘录',
+      sourceType: 'authorized-directory', origin: 'authorized-directory',
+      sourceId: 'local:guides/writing.md', sourceLocator: 'guides/writing.md',
+      sourceVersion: `sha256:${'b'.repeat(64)}`, excerptLocator: '第 24 行',
+      selectionReason: '命中当前目标', verificationStatus: 'unverified',
+      contentStatus: 'embedded', attachmentRequired: true
+    }, {
+      id: 'failed-file', title: '无法读取的资料', excerpt: '',
+      sourceType: 'unread-file-reference', contentStatus: 'failed', contentError: '拒绝访问',
+      attachmentRequired: true
+    }, {
+      id: 'style-only', title: '风格样本', excerpt: '不能变成事实的风格观点',
+      purpose: 'style', contentStatus: 'embedded'
+    }] } });
+
+    for (const value of ['local:guides/writing.md', 'guides/writing.md', 'sha256:', '第 24 行',
+      '命中当前目标', '只采用这段已展示摘录', '拒绝访问', '附件需另行提供']) assert.ok(prompt.includes(value), value);
+    assert.doesNotMatch(prompt, /不能变成事实的风格观点/);
+    assert.doesNotMatch(prompt, /[A-Za-z]:[\\/]|\\\\Users/);
+  }
+});
+
+test('来源元数据预算截取使用前缀标签，不伪称语义摘要', () => {
+  const prompt = diagnose({ sources: [{
+    id: 'long-source', title: '长来源标题'.repeat(30), excerpt: '供测试选择的摘录', purpose: 'content',
+    selectedForPrompt: true, contentStatus: 'embedded'
+  }] });
+  assert.match(prompt, /〔前缀节选；余下省略〕/);
+  assert.doesNotMatch(prompt, /〔摘要，余下省略〕/);
 });
 
 test('风格来源与顶层来源保留可追溯元数据，原句隔离并拒绝非HTTP(S) URL', () => {
@@ -342,6 +580,29 @@ test('只选择启用且适用的基础包条目，并把来源和跳过原因�
   assert.equal(selection.snapshot.entries.some(entry => entry.id === 'rule-revision'), true);
 });
 
+test('单项停用不进入快照，方法卡按任务适用范围筛选并冻结结构字段', () => {
+  const pack = {
+    id: 'method-scope-pack', name: '方法卡包', layer: 'core', version: 4,
+    methods: [
+      { id: 'revision-method', title: '改稿方法', guidance: '逐项比对', applicability: ['revision'],
+        inputs: ['原稿', '反馈'], outputs: ['修改指令'], checks: ['位置可回指'], skippable: true,
+        returnWhenMissing: ['缺原稿时退回'] },
+      { id: 'diagnosis-method', title: '诊断方法', guidance: '发现问题', applicability: ['diagnosis'] }
+    ],
+    checks: [{ id: 'disabled-rule', statement: '不注入', enabled: false }]
+  };
+  const selection = selectWritingPacks({
+    workspace: schema.normalizeWritingWorkspace({ article: { id: 'method-workspace', genre: 'article' } }),
+    packs: [pack], selectedIds: [pack.id], taskType: 'revision'
+  });
+  const packageEntries = selection.entries.filter(entry => entry.packId === pack.id);
+  assert.deepEqual(packageEntries.map(entry => entry.id), ['revision-method']);
+  assert.deepEqual(packageEntries[0].inputs, ['原稿', '反馈']);
+  assert.deepEqual(packageEntries[0].returnWhenMissing, ['缺原稿时退回']);
+  assert.ok(selection.skipped.some(item => item.id === 'diagnosis-method' && item.reason === 'task-mismatch'));
+  assert.ok(selection.skipped.some(item => item.id === 'disabled-rule' && item.reason === 'disabled'));
+});
+
 test('提示词只消费选中包和历史快照，保留普通文章基线与用户临时修正', () => {
   const customPack = {
     id: 'pack-current', name: '当前专业包', layer: 'task', genre: 'article', taskType: 'revision', version: 1,
@@ -368,4 +629,92 @@ test('提示词只消费选中包和历史快照，保留普通文章基线与�
   assert.match(prompt, /事实、数据和引用需核对来源/);
   assert.match(prompt, /用户当前约束哨兵/);
   assert.match(prompt, /临时修正哨兵/);
+});
+
+test('合并所有适用基础包提示词，不让内置提示词遮住核心包指令', () => {
+  const prompt = revise({
+    article: { id: 'article-prompt-composition', genre: 'article' },
+    round: { draft: '当前稿件', diagnosis: '当前诊断', packSelections: ['core-prompt-pack'] },
+    writingPacks: [{
+      id: 'core-prompt-pack', name: '通用核心包', layer: 'core', version: 1,
+      prompts: [{ id: 'core-prompt', taskType: 'article', content: '核心包提示词哨兵：保留证据边界。' }]
+    }],
+    writingPackSettings: []
+  });
+
+  assert.match(prompt, /交给外部 AI 的下一轮写作指令/);
+  assert.match(prompt, /核心包提示词哨兵：保留证据边界/);
+});
+
+test('学术规划提示词区分研究证据、目标要求和风格，且只纳入当前章节材料', () => {
+  const prompt = api.buildAcademicWritingPrompt({
+    id: 'academic-workspace', genre: 'academic-paper',
+    article: { id: 'academic-workspace', genre: 'academic-paper', title: '论文', goal: '研究问题',
+      academicTarget: { paperType: 'dissertation', discipline: '教育学', researchType: 'observational',
+        institution: '示例大学', requirements: [{ id: 'req-1', title: '学位要求', text: '结果章节报告研究对象', verificationStatus: 'user-confirmed' }] } },
+    units: [{ id: 'chapter-1', type: 'chapter', title: '第一章', goal: '说明研究背景', completionCriteria: ['提出研究缺口'], order: 0 }],
+    round: { id: 'academic-round', unitId: 'chapter-1', unitSnapshot: { id: 'chapter-1', type: 'chapter', title: '第一章', goal: '说明研究背景' },
+      materials: [
+        { id: 'evidence', title: '访谈摘录', purpose: 'content', excerpt: '三名参与者提到使用成本', unitIds: ['chapter-1'] },
+        { id: 'other-chapter', title: '其他章节材料', purpose: 'content', excerpt: '章节隔离哨兵材料', unitIds: ['chapter-2'] },
+        { id: 'requirement', title: '学院要求', purpose: 'requirement', excerpt: '提交时附研究伦理说明', unitIds: ['chapter-1'] },
+        { id: 'style', title: '风格样本', purpose: 'style', excerpt: '风格原文观点隔离哨兵' }
+      ] }
+  }, 'academic-chapter-draft');
+
+  assert.match(prompt, /academic-chapter-draft|章节起草/);
+  assert.match(prompt, /示例大学/);
+  assert.match(prompt, /三名参与者提到使用成本/);
+  assert.match(prompt, /提交时附研究伦理说明/);
+  assert.doesNotMatch(prompt, /章节隔离哨兵材料|风格原文观点隔离哨兵/);
+  assert.match(prompt, /不得虚构|不补造/);
+});
+
+test('同一份风格摘录既在本轮材料又在工作区档案时只输出一次特征', () => {
+  const styleMaterial = { id: 'style-sample', title: '风格样本', purpose: 'style', excerpt: '先交代观察范围，再区分事实和解释。' };
+  const profile = derive([styleMaterial]);
+  const prompt = api.buildAcademicWritingPrompt({
+    id: 'academic-style-dedup', genre: 'academic-paper',
+    article: { id: 'academic-style-dedup', genre: 'academic-paper', title: '论文', goal: '研究问题' },
+    styleProfile: {
+      id: 'style-profile', scope: 'genre', genre: 'academic-paper', source: 'sample',
+      confidence: profile.confidence, traits: profile.traits, samples: profile.samples
+    },
+    round: { id: 'academic-style-round', materials: [styleMaterial] }
+  }, 'academic-outline');
+
+  assert.equal(prompt.split(profile.traits[0]).length - 1, 1);
+});
+
+test('提示词来源摘要包含来源元数据并明确未核验，轮次快照保留原字段', () => {
+  const metadata = {
+    provider: '来源发布方哨兵', accessedAt: '2026-10-20', license: '来源许可哨兵',
+    applicability: '来源适用范围哨兵', limitations: '来源限制哨兵'
+  };
+  const round = schema.normalizeWritingRound({
+    materials: [{ id: 'material-meta', title: '材料元数据', excerpt: '材料摘录', ...metadata }],
+    sources: [{ id: 'source-meta', title: '来源元数据', excerpt: '来源摘录', ...metadata }]
+  });
+  const prompt = api.buildWritingDiagnosisPrompt({
+    article: { id: 'metadata-article', genre: 'article', goal: '核对来源' }, round
+  });
+  for (const text of Object.values(metadata)) assert.ok(prompt.includes(text), text);
+  assert.match(prompt, /未核验/);
+  assert.equal(round.materials[0].provider, metadata.provider);
+  assert.equal(round.sources[0].limitations, metadata.limitations);
+});
+
+test('超出材料上限时按任务关键词推荐并说明理由，未匹配材料不进入提示词', () => {
+  const prompt = api.buildWritingRevisionPrompt({
+    article: { id: 'material-rank', genre: 'article', goal: '核对预算依据' },
+    round: { id: 'material-rank-round', materials: [
+      { id: 'unrelated-a', title: '园艺随笔', purpose: 'content', excerpt: '栽培植物的日常观察。' },
+      { id: 'budget-source', title: '预算基准', purpose: 'content', excerpt: '预算依据与金额边界。' },
+      { id: 'unrelated-b', title: '旅行见闻', purpose: 'content', excerpt: '旅途风景记录。' },
+      { id: 'style-source', title: '语气样本', purpose: 'style', excerpt: '句子短，先列数据再说结论。' }
+    ] }
+  });
+  assert.match(prompt, /预算基准/);
+  assert.match(prompt, /关键词建议/);
+  assert.doesNotMatch(prompt, /园艺随笔|旅行见闻|语气样本/);
 });

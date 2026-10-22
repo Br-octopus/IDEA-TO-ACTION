@@ -119,6 +119,85 @@
     #writing-workbench-root input, #writing-workbench-root select, #writing-workbench-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
     #writing-workbench-root textarea { width: 100%; min-height: 100px; }
     #writing-workbench-root .social-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .academic-literature-manager { max-width: 1000px; margin: 18px 0; }
+    .academic-literature-manager label { display: grid; gap: 6px; min-width: 0; color: #53645d; font-size: 12px; }
+    .academic-literature-manager label.check-row { display: flex; align-items: center; gap: 8px; }
+    .academic-literature-manager label.check-row input[type="checkbox"] { width: auto; padding: 0; margin: 0; }
+    .academic-literature-manager input, .academic-literature-manager select, .academic-literature-manager textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px 10px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; color: #253832; }
+    .academic-literature-manager textarea { min-height: 80px; }
+    .academic-literature-card { min-width: 0; overflow-wrap: anywhere; }
+    .academic-literature-card .extra-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #academic-review-root, #academic-publishing-root { max-width: 1000px; min-width: 0; margin: 18px 0; overflow-wrap: anywhere; }
+    #academic-review-root input, #academic-review-root select, #academic-review-root textarea, #academic-publishing-root input, #academic-publishing-root select, #academic-publishing-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+    #academic-review-root label, #academic-publishing-root label { display: grid; gap: 6px; min-width: 0; color: #53645d; font-size: 12px; }
+    #academic-review-root label.check-row, #academic-publishing-root label.check-row { display: flex; align-items: flex-start; gap: 8px; }
+    #academic-review-root label.check-row input[type="checkbox"], #academic-publishing-root label.check-row input[type="checkbox"] { width: auto; flex: 0 0 auto; margin: 3px 0 0; }
+    #academic-review-root input:not([type="checkbox"]), #academic-review-root select, #academic-review-root textarea, #academic-publishing-root input:not([type="checkbox"]), #academic-publishing-root select, #academic-publishing-root textarea { width: 100%; padding: 9px 10px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; color: #253832; }
+    #academic-review-root textarea, #academic-publishing-root textarea { min-height: 76px; resize: vertical; }
+    .academic-publishing-card, .academic-publishing-item, .academic-review-create, .academic-review-sources, .academic-review-workspace, .academic-review-coverage, .academic-review-record, .academic-review-batches { min-width: 0; margin-top: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow-wrap: anywhere; }
+    .academic-publishing-manager .extra-grid, .academic-review-manager .extra-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .academic-publishing-manager .extra-grid > .wide, .academic-review-manager .extra-grid > .wide { grid-column: 1 / -1; }
+    .academic-review-project-list, .academic-review-literature-list, .academic-review-records, .academic-publishing-projects, .academic-publishing-list { display: grid; gap: 8px; margin-top: 12px; }
+    .academic-review-project-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .academic-review-project-list button, .academic-publishing-projects button { display: grid; min-width: 0; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; overflow-wrap: anywhere; }
+    .academic-review-project-list button.active, .academic-publishing-projects button.active { border-color: var(--green); background: var(--green-soft); }
+    .academic-publishing-projects span, .academic-publishing-card .library-meta, .academic-review-project-list span, .academic-review-sources small { color: var(--muted); font-size: 11px; }
+    .academic-review-coverage dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 8px 0; }
+    .academic-review-coverage dl > div { min-width: 0; padding: 8px; border-radius: 7px; background: #f5f8f5; }
+    .academic-review-coverage dt { color: var(--muted); font-size: 11px; }
+    .academic-review-coverage dd { margin: 2px 0 0; font-weight: 650; }
+    .academic-review-sources ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .academic-review-field-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto auto auto auto; align-items: end; gap: 7px; margin: 8px 0; }
+    .academic-review-extraction { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .academic-review-extraction > strong, .academic-review-extraction > label:nth-of-type(2) { grid-column: 1 / -1; }
+    .academic-review-candidates article, .academic-review-round { min-width: 0; margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+    .academic-review-record { overflow: hidden; }
+    .academic-review-record blockquote { margin: 8px 0; padding: 9px 12px; border-left: 3px solid #d5e2d8; background: #f8faf8; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .academic-review-status, .academic-publishing-status, .academic-publishing-confidentiality { padding: 8px 10px; border-radius: 7px; background: var(--green-soft); color: var(--green-dark); }
+    .academic-publishing-source { min-width: 0; margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; }
+    .academic-publishing-result { padding: 10px; border-left: 3px solid var(--orange); background: var(--orange-soft); overflow-wrap: anywhere; }
+    .writing-pack-manager { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .writing-pack-manager > h2 { margin-bottom: 12px; }
+    .pack-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+    .pack-editor h3, .pack-editor label, .pack-editor textarea { grid-column: 1 / -1; }
+    .pack-editor input, .pack-editor textarea { width: 100%; min-width: 0; padding: 10px 11px; font-size: 12px; }
+    .pack-editor textarea { min-height: 92px; }
+    .pack-import { min-width: 0; display: grid; gap: 9px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .pack-import textarea { width: 100%; min-height: 150px; min-width: 0; padding: 10px 11px; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .pack-import-preview { display: grid; gap: 10px; min-width: 0; }
+    .pack-import-item { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); overflow-wrap: anywhere; }
+    .pack-import-item h4 { margin: 0 0 8px; }
+    .pack-import-item p, .pack-import-item li { font-size: 12px; }
+    .pack-import-item small { color: var(--muted); font-weight: 400; }
+    .pack-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 14px; align-items: start; padding: 13px 0; border-top: 1px solid var(--line); }
+    .pack-row > strong { min-width: 0; overflow-wrap: anywhere; }
+    .pack-row > span { grid-column: 1; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .pack-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .pack-actions button, .pack-editor button { padding: 6px 9px; border: 1px solid #d8e3dc; border-radius: 7px; color: var(--green-dark); background: #fff; font-size: 11px; }
+    .pack-actions button:hover, .pack-editor button:hover { background: #f4f8f4; border-color: #a8c3b0; }
+    .pack-detail { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid #e8ede8; border-radius: 8px; background: #f8faf8; font-size: 11px; overflow-wrap: anywhere; }
+    .pack-detail p { margin-bottom: 7px; color: var(--muted); }
+    .pack-detail ul { margin-bottom: 0; padding-left: 19px; }
+    .writing-pack-selection { min-width: 0; margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+    .writing-pack-selection legend { padding: 0 5px; color: #30423e; font-size: 12px; font-weight: 650; }
+    .writing-material-coverage { min-width: 0; }
+    .writing-material-coverage ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .writing-material-coverage li { margin: 8px 0; overflow-wrap: anywhere; }
+    .writing-coverage-batch { min-width: 0; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+    .writing-coverage-batch textarea, .writing-material-coverage textarea, .writing-material-coverage input { box-sizing: border-box; max-width: 100%; }
+    @media (max-width: 760px) {
+      #writing-workbench-root .social-form-grid { grid-template-columns: 1fr; }
+      #writing-workbench-root .social-panel { padding: 14px; }
+      #writing-workbench-root button, #academic-review-root button, #academic-publishing-root button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+      .writing-pack-manager { padding: 14px; }
+      .pack-editor, .academic-publishing-manager .extra-grid, .academic-review-manager .extra-grid, .academic-review-project-list, .academic-review-extraction { grid-template-columns: minmax(0, 1fr); }
+      .pack-row { grid-template-columns: minmax(0, 1fr); }
+      .pack-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; }
+      .academic-review-coverage dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .academic-review-field-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+      .academic-review-field-row button { min-height: 36px; }
+      #academic-review-root .academic-review-workspace, #academic-publishing-root .academic-publishing-card { padding: 11px; }
+    }
     .writing-dimensions { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); margin: 14px 0; padding: 12px; }
     .writing-material, .writing-memory { border-top: 1px solid var(--line); padding: 14px 0; }
     #writing-error { color: #a32929; white-space: pre-wrap; }
@@ -140,6 +219,7 @@
     .social-progress { height: 5px; background: #e8eee9; border-radius: 4px; overflow: hidden; }
     .social-progress span { display: block; height: 100%; width: 0; background: var(--green); }
     .social-inline-check { display: inline-flex; align-items: center; gap: 6px; }
+    .writing-material-coverage ul { padding-left: 20px; overflow-wrap: anywhere; }
     @media (max-width: 760px) { .social-grid { grid-template-columns: 1fr; } .social-form-grid { grid-template-columns: 1fr; } }
     .notice strong { color: #304c3a; }
     .plan-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -481,6 +561,9 @@
           <div class="social-tools" role="group" aria-label="Agent 场景"><button type="button" class="button-secondary" data-agent-scene="task">任务梳理</button><button type="button" class="button-secondary" data-agent-scene="writing">写作工作台</button><button type="button" class="button-secondary" data-agent-scene="ppt">PPT 规划</button></div>
           <div id="prompt-agent-root" class="social-layout"></div>
           <section id="writing-workbench-root" class="social-layout" aria-label="统一写作工作台" hidden></section>
+          <div id="academic-literature-root"></div>
+          <div id="academic-review-root"></div>
+          <div id="academic-publishing-root"></div>
           <section class="social-layout" id="ppt-scene-root" aria-label="PPT 规划工作台" hidden></section>
         </section>
 
@@ -666,6 +749,7 @@
     </section>
   </div>
   <script src="/prototype/knowledge-schema.js"></script>
+  <script src="/prototype/academic-literature.js"></script>
   <script src="/prototype/method-cards.js"></script>
   <script src="/prototype/research-catalog.js"></script>
   <script src="/prototype/search-dictionary.js"></script>
@@ -676,7 +760,13 @@
   <script src="/prototype/social-research-prompts.js"></script>
   <script src="/prototype/prompt-agent-schema.js"></script>
   <script src="/prototype/ppt-scene-schema.js"></script>
+  <script src="/prototype/writing-material-coverage.js"></script>
   <script src="/prototype/writing-workbench-schema.js"></script>
+  <script src="/prototype/writing-pack-schema.js"></script>
+  <script src="/prototype/academic-review.js"></script>
+  <script src="/prototype/academic-review-coordinator.js"></script>
+  <script src="/prototype/academic-publishing.js"></script>
+  <script src="/prototype/writing-pack-catalog.js"></script>
   <script src="/prototype/writing-workbench-prompts.js"></script>
   <script src="/prototype/storage.js"></script>
   <script src="/prototype/social-research-ui.js"></script>
@@ -697,6 +787,10 @@
   <script src="/prototype/writing-pack-ui.js"></script>
   <script src="/prototype/writing-workbench-coordinator.js"></script>
   <script src="/prototype/writing-workbench-ui.js"></script>
+  <script src="/prototype/academic-literature-ui.js"></script>
+  <script src="/prototype/academic-review-ui.js"></script>
+  <script src="/prototype/academic-publishing-coordinator.js"></script>
+  <script src="/prototype/academic-publishing-ui.js"></script>
   <script src="/prototype/app.js"></script>
 </body>
 </html>
