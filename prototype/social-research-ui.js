@@ -22,7 +22,7 @@
     });
   }
 
-  function createSocialResearchUI({ document, desktopApi, coordinator, getState, persistState,
+  function createSocialResearchUI({ document, desktopApi, coordinator, getState, persistState, navigate, getPromptAgentController,
     confirmAction = message => typeof root.confirm === "function" && root.confirm(message) }) {
     if (!document || !desktopApi?.social || !coordinator) throw new TypeError("研究 UI 需要 document、desktopApi.social 和 coordinator");
     const $ = id => document.getElementById(id);
@@ -252,7 +252,7 @@
         return;
       }
       const findings = [...(report.coreFindings || []), ...(report.commonPoints || []), ...(report.platformDifferences || []), ...(report.painPointsOrPatterns || []), ...(report.representativeCases || []), ...(report.conflicts || []), ...(report.needsVerification || []), ...(report.nextSteps || [])];
-      $("social-research-report-content").innerHTML = `<p>${escape(report.summary || "研究报告")}</p>${findings.map((finding, index) => { const citation = (report.citations || []).find(item => item.findingIndex === index); const resultId = citation?.resultId || report.resultIds?.[index] || report.resultIds?.[0]; const result = task.results.find(item => item.id === resultId); const material = citation && result?.materials?.find(item => item.id === citation.materialId); const href = material ? `#social-material-${escape(material.id)}` : result ? `#social-result-${escape(result.id)}` : ""; return `<div class="social-report-item"><span>${escape(finding)}</span>${href ? `<a href="${href}" data-report-result="${escape(resultId)}" ${material ? `data-report-material="${escape(material.id)}"` : ""}>来源：${escape(material ? `${result.title || resultId} · ${material.kind} · ${material.id}` : result.title || resultId)}</a>` : `<span class="social-muted">来源待核验</span>`}</div>`; }).join("")}`;
+      $("social-research-report-content").innerHTML = `<p>${escape(report.summary || "研究报告")}</p>${findings.map((finding, index) => { const citation = (report.citations || []).find(item => item.findingIndex === index); const resultId = citation?.resultId || report.resultIds?.[index] || report.resultIds?.[0]; const result = task.results.find(item => item.id === resultId); const material = citation && result?.materials?.find(item => item.id === citation.materialId); const href = material ? `#social-material-${escape(material.id)}` : result ? `#social-result-${escape(result.id)}` : ""; return `<div class="social-report-item"><span>${escape(finding)}</span>${href ? `<a href="${href}" data-report-result="${escape(resultId)}" ${material ? `data-report-material="${escape(material.id)}"` : ""}>来源：${escape(material ? `${result.title || resultId} · ${material.kind} · ${material.id}` : result.title || resultId)}</a>` : `<span class="social-muted">来源待核验</span>`}</div>`; }).join("")}<div class="social-tools"><button class="button-secondary" type="button" data-report-to-agent>带研究结论去提示词 Agent</button></div>`;
     }
 
     function sourceStageLabel(progress) {
@@ -900,6 +900,25 @@
       renderResults(currentTask());
     });
     $("social-research-report-content").addEventListener("click", event => {
+      const handoff = event.target.closest("[data-report-to-agent]");
+      if (handoff) {
+        const task = currentTask();
+        if (!task?.report) return;
+        if (typeof navigate === "function") navigate("prompt-agent");
+        getPromptAgentController?.()?.applyIncomingContext?.({
+          topic: task.topic || task.report.summary || "",
+          summary: [
+            task.report.summary,
+            ...(task.report.coreFindings || []),
+            ...(task.report.commonPoints || []),
+            ...(task.report.platformDifferences || []),
+            ...(task.results || [])
+              .filter(result => selectedResultIds.has(result.id) || task.selectedResultIds?.includes(result.id))
+              .map(result => `参考资料：${result.title || "无标题"}。${result.summary || result.discussionSummary || ""}`)
+          ].filter(Boolean).join("\n").slice(0, 8000)
+        });
+        return;
+      }
       const link = event.target.closest("[data-report-result]");
       if (link) {
         const materialTarget = link.dataset.reportMaterial && document.getElementById(`social-material-${link.dataset.reportMaterial}`);

@@ -1647,24 +1647,54 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     state = saveState(localStorage, nextState, options);
     return state;
   }
+  function renderFlowStrip() {
+    const project = getActiveProject();
+    const hasResearch = (state.researchTasks || []).length > 0;
+    const hasPromptTask = (state.promptAgentTasks || []).length > 0;
+    const statuses = {
+      idea: project ? "done" : "active",
+      plan: project ? "done" : "not-started",
+      research: hasResearch ? "done" : project ? "active" : "not-started",
+      prompt: hasPromptTask ? "done" : hasResearch ? "active" : "not-started",
+      review: hasPromptTask ? "active" : "not-started"
+    };
+    document.querySelectorAll("[data-flow-step]").forEach(node => {
+      const status = statuses[node.dataset.flowStep] || "not-started";
+      node.classList.toggle("done", status === "done");
+      node.classList.toggle("active", status === "active");
+      node.setAttribute("aria-label", `${node.textContent.trim()}：${({ done: "已完成", active: "进行中", "not-started": "未开始" })[status]}`);
+    });
+  }
   function go(view) {
     const writingAlias = view === "article";
     if (writingAlias) view = "prompt-agent";
     activeView = view;
     document.querySelectorAll(".view").forEach(node => node.classList.toggle("active", node.id === `view-${view}`));
-    document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === view));
-    const labels = { home: "新建规划", plans: "我的计划", "prompt-agent": "提示词 Agent", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
-    document.getElementById("breadcrumb").textContent = `工作台　/　${labels[view] || "新建规划"}`;
+    document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === (writingAlias ? "article" : view)));
+    const labels = { home: "新建规划", plans: "我的计划", article: "文章改写", "prompt-agent": "提示词 Agent", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
+    document.getElementById("breadcrumb").textContent = `工作台　/　${labels[writingAlias ? "article" : view] || "新建规划"}`;
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (view === "plans") renderPlans();
     if (view === "library") renderLibrary();
     if (view === "references") refreshKnowledgeView();
+    if (view === "home") renderFlowStrip();
     if (view === "prompt-agent") {
       if (writingAlias) agentScenes?.selectScene("writing");
       else agentScenes?.selectScene(agentScenes.getScene());
     }
+    document.querySelectorAll(".mobile-more").forEach(menu => { menu.open = false; });
   }
   document.querySelectorAll("[data-view]").forEach(node => node.addEventListener("click", () => go(node.dataset.view)));
+  const flowDestinations = { idea: "home", plan: "plans", research: "social-research", prompt: "prompt-agent", review: "project" };
+  document.querySelectorAll("[data-flow-step]").forEach(node => node.addEventListener("click", () => {
+    const destination = flowDestinations[node.dataset.flowStep];
+    if (destination === "project" && !getActiveProject()) {
+      toast("先创建或打开一份计划，再进入复盘");
+      return;
+    }
+    if (destination === "project") renderProject(getActiveProject());
+    else go(destination);
+  }));
   if (window.ForwardStepSocialResearchCoordinator && window.ForwardStepSocialResearchUI && desktopApi?.social) {
     const coordinator = window.ForwardStepSocialResearchCoordinator.createSocialResearchCoordinator({
       desktopApi,
@@ -1673,7 +1703,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     });
     socialResearchUI = window.ForwardStepSocialResearchUI.createSocialResearchUI({
       document, desktopApi, coordinator, getState: () => state,
-      persistState: persistWorkbenchState
+      persistState: persistWorkbenchState,
+      navigate: go,
+      getPromptAgentController: () => window.ForwardStepPromptAgentUIController
     });
   }
   if (window.ForwardStepPromptAgentCoordinator && window.ForwardStepPromptAgentUI) {
@@ -2015,6 +2047,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     toast("本次梳理已保存，目标指令已更新");
   });
   document.getElementById("copy-master").addEventListener("click", () => { const p = getActiveProject(); if (p) copyText(withSelectedReferences(p.masterPrompt)); });
+  document.getElementById("to-social-research").addEventListener("click", () => {
+    const project = getActiveProject();
+    if (!project) return;
+    const topic = document.getElementById("social-research-topic");
+    topic.value = String(document.getElementById("project-goal-summary").value.trim() || project.goalSummary || project.idea).slice(0, 120);
+    go("social-research");
+    toast("计划目标已带入；请检查研究方向和平台后继续");
+  });
   async function requestModel(prompt, onSuccess, onFailure) {
     const result = document.getElementById("model-result");
     const output = document.getElementById("model-result-text");
