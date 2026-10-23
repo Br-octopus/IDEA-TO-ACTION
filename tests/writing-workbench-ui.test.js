@@ -5,6 +5,7 @@ const { createWritingApp } = require('./helpers/writing-app.js');
 const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
 const storage = require('../prototype/storage.js');
 const { createWritingWorkbenchUI } = require('../prototype/writing-workbench-ui.js');
+const writingPackCatalog = require('../prototype/writing-pack-catalog.js');
 
 test('UMD界面从schema配置读取名称、目标标签、维度和说明，选择维度实际进入诊断', async () => {
   const vm = require('node:vm');
@@ -75,6 +76,14 @@ function fixture(options = {}) {
   return { ...dom, ui, coordinator, copied, get state() { return state; }, get requests() { return requests; }, set failSave(value) { failSave = value; } };
 }
 
+test('软著内容包在普通文章中可选，且不会自动用于无关文章', () => {
+  const packs = writingPackCatalog.getBuiltinWritingPacks();
+  const f = fixture({ writingPacks: packs });
+  const checkbox = f.node('writing-pack-selection-builtin-softcopyright-content');
+  assert.ok(checkbox, '软著内容包显示在专业基础包选择区');
+  assert.equal(checkbox.checked, false, '普通文章默认不自动套用软著规则');
+  assert.match(f.mount.innerHTML, /软著内容/);
+});
 test('通用核心包可在普通文章任务中选择并进入实际提示词', async () => {
   const app = createWritingApp();
   await app.settle();

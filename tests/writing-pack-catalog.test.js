@@ -43,6 +43,27 @@ test('catalog 的普通文章内置包等价于现有 article 配置并含完整
   assert.ok([...pack.checks, ...pack.style, ...pack.repairs, ...pack.prompts].every(item => item.verificationStatus === 'unverified'));
 });
 
+test('软著内容包可用于普通文章诊断与改写提示词，并区分官方要求和社区参考', () => {
+  const pack = catalog.getBuiltinWritingPacks().find(item => item.id === 'builtin-softcopyright-content');
+  assert.ok(pack);
+  assert.equal(pack.name, '软著内容');
+  assert.equal(pack.layer, 'task');
+  assert.equal(pack.genre, 'article');
+  assert.deepEqual(pack.applicability.tasks, ['article', 'diagnosis', 'revision']);
+  assert.deepEqual(pack.prompts.map(item => item.taskType).sort(), ['diagnosis', 'revision']);
+  assert.ok(pack.methods.some(item => /功能—证据—手册段落/.test(item.title)));
+  assert.ok(pack.structures.some(item => /操作步骤/.test(item.sections.join(''))));
+  assert.ok(pack.checks.some(item => /官方提交要求与社区写作建议分开/.test(item.statement)));
+  assert.match(pack.requirements.find(item => item.id === 'softcopyright-document-pages')?.statement || '', /前、后各连续30页.*不足60页时提交全文.*每页不少于30行/);
+  assert.match(pack.requirements.find(item => item.id === 'softcopyright-document-kind')?.statement || '', /没有规定操作手册必须使用固定目录/);
+  assert.ok(pack.evidenceRules.some(item => /证据位置/.test(item.statement)));
+  assert.equal(pack.sources.find(item => item.id === 'software-registration-measures')?.verificationStatus, 'source-reviewed');
+  for (const id of ['softcopyright-yuefan', 'softcopyright-fanbuz', 'softcopyright-rodert', 'softcopyright-suling', 'user-docs-writing-skill']) {
+    assert.ok(pack.sources.some(item => item.id === id), `缺少参考来源 ${id}`);
+  }
+  assert.ok(pack.prompts.every(item => item.sourceIds.every(id => pack.sources.some(source => source.id === id))));
+});
+
 test('catalog 提供三类综述路线和可追溯的官方报告来源', () => {
   const pack = catalog.getBuiltinWritingPacks().find(item => item.id === 'builtin-academic-review');
   assert.ok(pack, '综述工作台应能取得专用内置包');
@@ -320,7 +341,7 @@ test('catalog 增加八个视听社媒与长篇创作包，任务与 schema 一�
 
   assert.equal(newPacks.length, 8);
   assert.equal(new Set(newPacks.map(pack => pack.genre)).size, 8);
-  assert.equal(packs.length, 23, '在原有 21 个领域包外补充核心层与任务层包');
+  assert.equal(packs.length, 24, '包含原有包和新增软著内容包');
 });
 
 test('视听社媒与长篇包的提示词按文体及专属任务隔离', () => {

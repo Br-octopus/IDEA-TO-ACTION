@@ -887,6 +887,152 @@
     });
   }
 
+  function createSoftCopyrightContentPack() {
+    const officialSourceIds = ['software-registration-measures', 'beijing-software-registration-guide'];
+    const sources = [
+      {
+        id: 'software-registration-measures', title: '《计算机软件著作权登记办法》',
+        url: 'https://www.mofcom.gov.cn/wggjk/art/2003/art_8ec93505d99b48b392e52ac38278c34d.html',
+        locator: '文档类型及鉴别材料页数、行数要求', version: '现行公开文本',
+        license: '规范性文件公开文本', checkedAt: '2026-10-23',
+        applicability: '登记鉴别材料的国家层面要求',
+        limitations: '未规定手册固定目录；提交前核对当期指南。',
+        verificationStatus: 'source-reviewed'
+      },
+      {
+        id: 'beijing-software-registration-guide', title: '北京市政务服务：计算机软件著作权登记办事指南',
+        url: 'https://banshi.beijing.gov.cn/pubtask/task/1/110000000000/3e283672-76be-4c8c-98e8-0bebe9bd06bf.html?locationCode=110000000000&serverType=1002',
+        locator: '申请材料与文件格式说明', version: '在线指南；以申请地当期页面为准',
+        license: '仅保留官方链接和自拟摘要', checkedAt: '2026-10-23',
+        applicability: '北京材料格式与版本核对参考',
+        limitations: '地方指南，不代表其他地区要求。',
+        verificationStatus: 'source-reviewed'
+      },
+      {
+        id: 'softcopyright-yuefan', title: 'Yuefan/software_copyright_skill',
+        url: 'https://github.com/Yuefan/software_copyright_skill', locator: '材料字段、流程和核对项',
+        version: '在线仓库', license: '链接与自拟摘要；许可待核',
+        checkedAt: '2026-10-23', applicability: '材料字段和流程参考',
+        limitations: '社区参考；要求回到官方来源核实。', verificationStatus: 'unverified'
+      },
+      {
+        id: 'softcopyright-fanbuz', title: 'fanbuz/software-copyright-generator-skill',
+        url: 'https://github.com/fanbuz/software-copyright-generator-skill', locator: '分阶段确认、功能/源码/说明书一致性',
+        version: '在线仓库', license: '链接与自拟摘要；许可待核',
+        checkedAt: '2026-10-23', applicability: '分步流程与证据一致性参考',
+        limitations: '社区参考；按实际项目调整。', verificationStatus: 'unverified'
+      },
+      {
+        id: 'softcopyright-rodert', title: 'Rodert/copyright-forge-skill',
+        url: 'https://github.com/Rodert/copyright-forge-skill', locator: '证据约束和防止虚构的提示词原则',
+        version: '在线仓库', license: '链接与自拟摘要；许可待核',
+        checkedAt: '2026-10-23', applicability: '证据回指和防虚构参考',
+        limitations: '社区参考；不代表审核结论。', verificationStatus: 'unverified'
+      },
+      {
+        id: 'softcopyright-suling', title: 'suling-fun/software-copyright-materials-skill',
+        url: 'https://github.com/suling-fun/software-copyright-materials-skill', locator: '代码核实、操作手册和材料一致性流程',
+        version: '在线仓库', license: '链接与自拟摘要；许可待核',
+        checkedAt: '2026-10-23', applicability: '材料流程与手册依据参考',
+        limitations: '社区参考；手册以实际软件和官方要求为准。', verificationStatus: 'unverified'
+      },
+      {
+        id: 'user-docs-writing-skill', title: 'Callstack Agent Skills: writing-user-docs',
+        url: 'https://github.com/callstackincubator/agent-skills/tree/main/skills/writing-user-docs',
+        locator: '面向最终用户的任务型说明文档', version: '在线仓库',
+        license: '链接与自拟摘要；许可待核', checkedAt: '2026-10-23',
+        applicability: '面向用户的步骤写作参考',
+        limitations: '通用手册写作参考，不提供登记规则。', verificationStatus: 'unverified'
+      }
+    ];
+    const checks = [
+      { id: 'softcopyright-evidence-grounding', statement: '功能和操作步骤回指真实项目证据；缺证据时列为待补。', sourceIds: ['softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified' },
+      { id: 'softcopyright-doc-consistency', statement: '申请表、功能说明和手册中的软件名称、版本及功能名称保持一致。', sourceIds: ['softcopyright-fanbuz', 'softcopyright-suling'], verificationStatus: 'unverified' },
+      { id: 'softcopyright-manual-steps', statement: '步骤写清入口、前置条件、用户动作和可见结果；只说明真实存在的异常。', sourceIds: ['user-docs-writing-skill', 'softcopyright-suling'], verificationStatus: 'unverified' },
+      { id: 'softcopyright-requirements-vs-advice', statement: '官方提交要求与社区写作建议分开；要求附来源和适用范围。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' }
+    ];
+    const methods = [
+      {
+        id: 'softcopyright-function-evidence-map', title: '功能—证据—手册段落映射',
+        guidance: '用功能清单和项目证据建立条目，再关联手册章节；无法映射的内容列为待补。',
+        applicability: ['diagnosis', 'revision'], inputs: ['软件名称/版本', '功能清单', '源码、界面或操作证据', '现有材料'],
+        outputs: ['功能—证据—文档位置对照', '待确认项'],
+        checks: ['功能可回指证据', '名称和版本一致', '未知事实不补造'],
+        skippable: false, returnWhenMissing: ['缺少软件版本或实际功能证据时，保留对应章节为待补，不生成具体操作事实。'],
+        sourceIds: ['softcopyright-fanbuz', 'softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified'
+      },
+      {
+        id: 'softcopyright-manual-task-flow', title: '按用户任务编写操作步骤',
+        guidance: '按用户任务组织章节；每步写入口、前置条件、动作和界面反馈，补充证据支持的异常处理。',
+        applicability: ['diagnosis', 'revision'], inputs: ['真实界面', '逐步操作记录'],
+        outputs: ['任务型操作步骤', '待补截图/信息'],
+        checks: ['步骤可复现', '截图对应当前版本'],
+        skippable: true, returnWhenMissing: ['入口或预期结果无法从材料确认时，将该步骤标为待确认。'],
+        sourceIds: ['user-docs-writing-skill', 'softcopyright-suling'], verificationStatus: 'unverified'
+      }
+    ];
+    const promptContent = {
+      diagnosis: '检查软著文章或操作手册，生成下一步写作提示词。核对文档用途、软件版本、功能证据、操作步骤和材料一致性，引用问题位置；区分官方提交要求与社区建议，缺项标为待确认，不直接改写成稿。',
+      revision: '生成软著材料定向改写提示词。只改结构和表达；功能、界面、环境及操作结果须有用户提供的项目证据。每步写清入口、前置条件、动作和可见结果；未知内容列为待补，不虚构功能或测试。保持软件名称和版本一致，区分官方要求与社区建议并保留来源范围。'
+    };
+    return {
+      id: 'builtin-softcopyright-content', name: '软著内容', layer: 'task', genre: 'article', taskType: '',
+      version: 1, builtin: false, basePackId: '', enabled: true,
+      applicability: {
+        description: '用于生成软著材料相关的文章诊断提示词和定向改写提示词，重点覆盖软件操作手册、功能描述与证据一致性。',
+        tasks: ['article', 'diagnosis', 'revision'], languages: ['zh'],
+        exclusions: ['适用于软著材料相关写作，不代替申请地当前官方指南。', '没有用户提供的项目证据时，不补造软件行为或功能。']
+      },
+      targetFields: { title: '软件全称与版本', goal: '材料用途与本轮写作目标', audience: '目标读者/审核场景', successCriteria: '用户提供的官方要求与交付条件', preserveItems: '已确认的功能事实和术语', constraints: '证据范围、格式要求及待确认项' },
+      memoryNamespace: 'softcopyright-content',
+      checkDimensions: checks.map(item => item.statement),
+      outputRequirements: {
+        diagnosis: promptContent.diagnosis,
+        revision: promptContent.revision
+      },
+      riskReminders: ['社区仓库只作写作参考；提交要求以申请地当前官方指南为准。', '无证据的功能、界面和测试结果不得写成事实。'],
+      styleBaseline: ['用面向用户的动作句和可观察结果；术语、按钮名称与真实界面一致。'],
+      clarifications: [
+        { id: 'softcopyright-clarify-version', question: '申报软件的全称、版本号和实际运行版本是否已确认？', required: false, when: '开始生成或改写前' },
+        { id: 'softcopyright-clarify-evidence', question: '当前功能描述能否关联到源码、实际界面或操作记录？', required: false, when: '撰写操作步骤前' }
+      ],
+      materials: [
+        { id: 'softcopyright-project-facts', purpose: '软件全称、版本、功能清单及实际运行环境', required: false, acceptedTypes: ['text', 'json'] },
+        { id: 'softcopyright-manual-evidence', purpose: '真实界面截图、逐步操作记录、源码位置或测试记录', required: false, acceptedTypes: ['text', 'image', 'json'] },
+        { id: 'softcopyright-current-requirements', purpose: '申请地官方页面或用户提供的当前材料要求', required: false, acceptedTypes: ['text', 'link', 'pdf'] }
+      ],
+      requirements: [
+        { id: 'softcopyright-document-kind', statement: '用户手册可作为软件文档类型提交；登记办法没有规定操作手册必须使用固定目录。', sourceIds: ['software-registration-measures'], verificationStatus: 'source-reviewed' },
+        { id: 'softcopyright-document-pages', statement: '文档鉴别材料按规定提交前、后各连续30页；总页数不足60页时提交全文。除特殊情况外，每页不少于30行。此为鉴别材料提交要求，不等于手册必须扩写到60页。', sourceIds: ['software-registration-measures'], verificationStatus: 'source-reviewed' },
+        { id: 'softcopyright-document-paper', statement: '纸质材料按A4规格准备；其余格式按申请地当前官方指南核对。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' }
+      ],
+      methods,
+      prompts: Object.entries(promptContent).map(([taskType, content], index) => ({
+        id: `softcopyright-prompt-${index + 1}`, taskType, content,
+        sourceIds: taskType === 'diagnosis'
+          ? ['software-registration-measures', 'softcopyright-yuefan', 'softcopyright-fanbuz', 'softcopyright-suling']
+          : ['software-registration-measures', 'beijing-software-registration-guide', 'softcopyright-rodert', 'softcopyright-suling', 'user-docs-writing-skill'],
+        verificationStatus: 'unverified'
+      })),
+      structures: [
+        { id: 'softcopyright-operation-manual-structure', taskType: 'article', sections: ['软件名称、版本与适用范围', '运行环境及启动方式（有证据时）', '主界面与导航', '按用户任务组织的功能操作步骤', '可见结果与实际限制', '异常处理（仅列真实存在的情况）'] },
+        { id: 'softcopyright-evidence-ledger-structure', taskType: 'article', sections: ['功能名称', '项目证据与位置', '手册章节/页码', '申请材料对应表述', '一致性状态', '待确认项'] }
+      ],
+      style: [], terminology: [],
+      evidenceRules: [
+        { id: 'softcopyright-evidence-location', statement: '功能、步骤和结果需标明项目证据位置；社区示例不能代替本软件证据。', sourceIds: ['softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified' }
+      ],
+      routes: [], checks, repairs: [
+        { id: 'softcopyright-fabricated-operation', issue: '步骤或功能缺少项目证据', action: '删除无依据的细节，保留待补字段，并请求真实界面、源码位置或操作记录。', sourceIds: ['softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified' },
+        { id: 'softcopyright-rule-mixed-with-advice', issue: '把社区建议写成官方硬性要求', action: '拆分为“官方提交要求”和“手册写作建议”，分别附来源与适用范围；无法核验时标为待确认。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' }
+      ],
+      nextSteps: [
+        { id: 'softcopyright-next-missing-evidence', when: '关键操作、功能或版本缺少证据', action: '先补充可核实的项目资料，再生成对应章节的改写提示词。', sourceIds: ['softcopyright-suling'], verificationStatus: 'unverified' }
+      ],
+      examples: [], sources, createdAt: '2026-10-23', updatedAt: '2026-10-23'
+    };
+  }
+
   function createSharedWritingPacks() {
     const sourceId = 'writing-core-original-guidance';
     const source = { id: sourceId, title: '项目原创通用写作工作法', locator: '项目内置自拟内容', version: '1',
@@ -928,7 +1074,7 @@
   }
 
   function getBuiltinWritingPacks() {
-    const packs = [createArticlePack(), createAcademicReviewPack(), createAcademicPaperPack(), createAcademicPublishingPack(), ...createStructuredDocumentPacks(), ...createAudiovisualAndLongformPacks(), ...createSharedWritingPacks()].map(pack => {
+    const packs = [createArticlePack(), createSoftCopyrightContentPack(), createAcademicReviewPack(), createAcademicPaperPack(), createAcademicPublishingPack(), ...createStructuredDocumentPacks(), ...createAudiovisualAndLongformPacks(), ...createSharedWritingPacks()].map(pack => {
       const normalized = schema && typeof schema.normalizeWritingPack === 'function'
         ? schema.normalizeWritingPack(pack)
         : pack;

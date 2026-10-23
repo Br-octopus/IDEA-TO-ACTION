@@ -81,7 +81,7 @@
         const genre = w?.article.genre || 'article';
         const academicTarget = a.academicTarget || {};
         const recommendedSelections = availablePacks
-          .filter(pack => !['builtin-article', 'builtin-academic-paper'].includes(pack.id) && isSelectablePack(pack, genre) && enabledIds.has(pack.id))
+          .filter(pack => !['builtin-article', 'builtin-academic-paper', 'builtin-softcopyright-content'].includes(pack.id) && isSelectablePack(pack, genre) && enabledIds.has(pack.id))
           .map(pack => pack.id);
         drafts.set(id, {
           title: a.title || '', genre: w ? schema.getWritingGenreConfig(a.genre)?.name || a.genre || '未支持文体' : articleConfig.name,
