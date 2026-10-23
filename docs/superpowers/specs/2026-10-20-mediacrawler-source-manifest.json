@@ -1,0 +1,80 @@
+{
+  "repository": "https://github.com/NanmiCoder/MediaCrawler",
+  "commit": "8f583999006d5b692272c608440e193ca282e73b",
+  "purpose": "阶段二裁剪前的原始源码摘要；不是已导入清单",
+  "hashMethod": {
+    "algorithm": "SHA-256",
+    "sha256Input": "固定 commit 的 Git blob 原始 UTF-8 字节（无 BOM、LF）逐个 LF 转为 CRLF 后的 Windows 工作树字节；保留已有 sha256 以便复现候选清单原值。",
+    "sourceBytes": "originalBytes 是固定 commit 的 Git blob 原始字节长度；gitBlobSha1 按 Git 对象格式（blob 前缀、原始字节长度、NUL 字节、原始字节）计算。与导入清单重叠的文件同时核对其长度和 Git blob SHA1。"
+  },
+  "candidateReason": "这是裁剪前候选源清单，覆盖最终导入与未导入的源文件；实际进入 vendor 的文件及其本地改动以 import manifest 为准。",
+  "imported": false,
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "9a2eed2fd5410cc59cfceae5d965c2a13d36907caa8bc6316d71e67391bbd5aa",
+      "originalBytes": 4775,
+      "gitBlobSha1": "78408f6201d46f746850c039ae5754b8fcc4b6c1"
+    },
+    {
+      "path": "media_platform/xhs/client.py",
+      "sha256": "1ea596c268322571fc97ab552344646610938818063ab04bd598b4e8e3c1f0c4",
+      "originalBytes": 25936,
+      "gitBlobSha1": "f9d5193718990af65b5f705cdf845944d13d77c4"
+    },
+    {
+      "path": "media_platform/xhs/extractor.py",
+      "sha256": "2de59daf333a4584a8537bba0a23db0874ec63cb3b5f27114b0a39e284ec3944",
+      "originalBytes": 2294,
+      "gitBlobSha1": "044baf5ecee5a73812a74dbbc93ff9f5351c6cb8"
+    },
+    {
+      "path": "media_platform/xhs/playwright_sign.py",
+      "sha256": "17c1a6b03c44bbb6f1002905e56ea5c00bc0c4eb193d847db5c5e2fbe78d9dc5",
+      "originalBytes": 2495,
+      "gitBlobSha1": "0815d3e40183c6966aa795517b9243f81c8ce3b0"
+    },
+    {
+      "path": "media_platform/xhs/xhs_sign.py",
+      "sha256": "7168a8a4272ae27c4c54a2d44f69aeefcee79aa3c0ff2ad749cc457b57581aba",
+      "originalBytes": 6760,
+      "gitBlobSha1": "0ec107727d7aa6f473cb34256c58275f71987880"
+    },
+    {
+      "path": "media_platform/xhs/field.py",
+      "sha256": "ddb9bd52962508c66c6a841ea9887cccd215d635cac7a798c65ef6c08219e0ff",
+      "originalBytes": 2230,
+      "gitBlobSha1": "718735fce2356f4de3878375154a467a4c9b5871"
+    },
+    {
+      "path": "media_platform/xhs/exception.py",
+      "sha256": "863850ee593abfd9df2e69e0d83cf791b91e693f92683b8dcf2bc64a2ed1fd71",
+      "originalBytes": 1258,
+      "gitBlobSha1": "8d9bfd353948f0dc890b7476a71aa5cc75a14a86"
+    },
+    {
+      "path": "media_platform/bilibili/client.py",
+      "sha256": "ecb6589d5e24429166ce7f225dbc2836782abf9f67f8d77ccdab923739c8d8c8",
+      "originalBytes": 22695,
+      "gitBlobSha1": "4ff7948c6b6f37f66da4016d384a05007582075f"
+    },
+    {
+      "path": "media_platform/bilibili/help.py",
+      "sha256": "ca9d99d07226c60da720f5c2e52ab9b578c4ca1312530463226401bd186c68ad",
+      "originalBytes": 5438,
+      "gitBlobSha1": "74fdfa24d43c086a62c4aceb2d3688a1c9f16949"
+    },
+    {
+      "path": "media_platform/bilibili/field.py",
+      "sha256": "62a433ab26cde6c256371cf8244f1a0ea03bec6290edce61717c2fa73b1178ec",
+      "originalBytes": 1399,
+      "gitBlobSha1": "4a4ec751b86678fba5e9e7479405bb37c0027681"
+    },
+    {
+      "path": "media_platform/bilibili/exception.py",
+      "sha256": "9cae1fe8fa08f5577e6400b5ef4f793b1bc5b89945647708261627c6d5793ba2",
+      "originalBytes": 1163,
+      "gitBlobSha1": "b4b706584d2568898736629c45a6ea5cf5370e7a"
+    }
+  ]
+}

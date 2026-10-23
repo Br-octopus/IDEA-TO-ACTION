@@ -30,7 +30,6 @@
     let processingMaterials = false;
     let activeMaterialJob = null;
     let articleId = '';
-    let writingStage = 1;
     let managerOpen = false;
     let focusAfterRenderId = '';
     const memoryDrafts = new Map();
@@ -82,8 +81,7 @@
         const genre = w?.article.genre || 'article';
         const academicTarget = a.academicTarget || {};
         const recommendedSelections = availablePacks
-          .filter(pack => !['builtin-article', 'builtin-academic-paper', 'builtin-softcopyright-content'].includes(pack.id)
-            && isSelectablePack(pack, genre) && enabledIds.has(pack.id))
+          .filter(pack => !['builtin-article', 'builtin-academic-paper', 'builtin-softcopyright-content'].includes(pack.id) && isSelectablePack(pack, genre) && enabledIds.has(pack.id))
           .map(pack => pack.id);
         drafts.set(id, {
           title: a.title || '', genre: w ? schema.getWritingGenreConfig(a.genre)?.name || a.genre || '未支持文体' : articleConfig.name,
@@ -331,19 +329,14 @@
           : `<p>暂无适用于${escape(config?.name || '当前文体')}的自定义包，可在专业基础包管理中新增或启用。</p>`}
       </fieldset>`;
       const packManager = packUI?.renderManager?.() || '';
-      const hasPromptVersion = !!(w?.rounds || []).some(round => (round.promptVersions || []).length);
-      if (!w) writingStage = 1;
-      else if (writingStage === 4 && !hasPromptVersion) writingStage = 3;
-      const stepButton = (step, label, available) => `<button type="button" class="social-wizard-step" data-writing-action="wizard-stage" data-stage="${step}" ${!available || processingMaterials ? 'disabled aria-disabled="true"' : ''} ${writingStage === step ? 'aria-current="step"' : ''}><span class="social-wizard-number">${step}</span><span>${label}</span>${step === 4 && hasPromptVersion ? '<span class="social-wizard-badge">就绪</span>' : ''}</button>`;
       const domainFields = Object.entries(config?.domainFields || {});
       const domainInputs = domainFields.length ? `<details class="writing-domain-inputs"><summary>${escape(config.name)}专属信息（可选）</summary>
         <p class="social-muted">只填写当前任务需要的信息；空项会在提示词中标为“未提供”。</p>
         ${domainFields.map(([key, label]) => `<label class="field" for="writing-domain-${escape(key)}"><span class="field-label">${escape(label)}</span>
           <textarea id="writing-domain-${escape(key)}" aria-label="${escape(label)}" data-writing-domain-field="${escape(key)}">${escape(f.domainInputs?.[key] || '')}</textarea></label>`).join('')}</details>` : '';
       packUI?.connectWorkbenchRenderer?.(render);
-      mount.innerHTML = `<h2>写作工作台</h2><p class="social-muted">按步骤完成文章目标、准备材料、生成提示词，再带回外部结果。</p><nav class="social-wizard-steps" aria-label="写作流程">${stepButton(1, '文章目标', true)}${stepButton(2, '参考材料', !!w)}${stepButton(3, '初检与提示词', !!w)}${stepButton(4, '带回结果', !!w && hasPromptVersion)}</nav>${processingMaterials ? `<p role="status">正在读取所选材料，请稍候…</p>${button('cancel-material-parse', '取消读取')}` : ''}
-      <div class="social-wizard-panel" id="writing-wizard-stage-1" ${writingStage !== 1 ? 'hidden' : ''}><section class="social-panel">
-        <div class="social-tools"><h2>文章目标</h2>${button('new', '新建文章')}</div>
+      mount.innerHTML = `<section class="social-panel">
+        <div class="social-tools"><h2>写作工作台</h2>${button('new', '新建文章')}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}${button('manage-packs', '专业基础包')}</div>
         <label class="field" for="writing-article-list"><span class="field-label">文章列表</span><select id="writing-article-list"><option value="">新文章</option>${articles.map(a => `<option value="${escape(a.id)}" ${a.id === articleId ? 'selected' : ''}>${escape(a.title || a.goal || '未命名文章')}</option>`).join('')}</select></label>
         <div class="social-form-grid">${field('title', escape(labels.title), f.title, { input: true })}<label class="field" for="writing-genre"><span class="field-label">文体</span><input id="writing-genre" data-writing-field="genre" list="writing-genre-options" value="${escape(f.genre)}" ${w ? 'disabled' : ''}><datalist id="writing-genre-options">${schema.WRITING_GENRES.map(id => `<option value="${escape(schema.getWritingGenreConfig(id)?.name || id)}">`).join('')}</datalist></label></div>
         ${renderAcademicTarget(f, genre, locked)}
@@ -355,13 +348,18 @@
         ${packSelectionSection}
         ${renderUnits(w, f, locked)}
         ${renderLongform(w, f, genre, locked)}
+      ${renderMaterialCoverage(w, locked)}
         ${field('draft', w ? '当前稿件（只读；新稿从下方带回）' : '初稿（可选）', f.draft, { readOnly: !!w })}
         <div class="social-tools">${button(w ? 'update' : 'create', w ? '更新目标并本地初检' : '新建并本地初检', '', locked)}${w ? button('build', '重新本地初检', '', locked) : ''}</div>
-        <p id="writing-error" role="alert" tabindex="-1">${escape(f.error)}</p>${busy.has(articleId) ? '<p role="status">正在处理当前文章…</p>' : ''}
+        <label class="check-row"><input id="writing-save" type="checkbox" ${f.saveEnabled ? 'checked' : ''} ${!w || locked ? 'disabled' : ''}>开启本机保存</label>
+        <p class="social-muted">默认不保存正文。开启后稿件、反馈和轮次保存在本机；发送模型仍须查看发送预览并确认。</p>
+        <p id="writing-save-status" role="status">${escape(persistenceStatus(w))}</p>${processingMaterials ? `<p role="status">正在读取材料，结果只暂存在当前页面。</p>${button('cancel-material-parse', '取消读取')}` : ''}
+        <p id="writing-error" role="alert" tabindex="-1">${escape(f.error)}</p>${processingMaterials ? '<p role="status">正在读取所选材料，请稍候…</p>' : busy.has(articleId) ? '<p role="status">正在处理当前文章…</p>' : ''}
+        ${w ? button('delete-article', '删除整篇及所有轮次', '', locked) : ''}
       </section>
       ${renderAcademicTasks(w, f, genre, locked)}
         ${renderDomainTasks(w, f, genre, locked)}
-      </div><div class="social-wizard-panel" id="writing-wizard-stage-2" ${writingStage !== 2 ? 'hidden' : ''}><section class="social-panel"><h2>参考材料</h2><p class="social-muted">添加本轮要用的内容、风格样本和要求；内容 / 风格 / 要求合计最多3份。</p>
+      <section class="social-panel"><h2>参考材料与风格</h2><p class="social-muted">内容 / 风格 / 要求合计最多3份。学术项目会把三种用途分开展示；风格样本不作事实证据。材料编辑在新建或下一轮时应用。</p>
         ${renderMaterials(f, w, genre)}<div class="social-tools">${button('add-material', '粘贴/填写材料', '', f.materials.length >= 3 || processingMaterials)}${button('import-material-files', '导入文件', '', f.materials.length >= 3 || processingMaterials)}${button('select-materials', '从资料库/授权目录选择', '', !w || locked)}</div>
         <input id="writing-material-files" type="file" aria-label="导入写作参考材料" accept=".txt,.md,.csv,.json,.pdf,.docx,.png,.jpg,.jpeg,.webp" multiple hidden __COND__>
         <details><summary>添加公开链接并按需读取正文</summary>
@@ -370,24 +368,23 @@
           ${button('add-material-link', '加入链接', '', f.materials.length >= 3 || processingMaterials)}
         </details>
         <p class="social-muted">读取公开网页会向该网站发送链接请求并暴露你的网络地址；含查询参数的链接也会发送给该网站。不会携带登录状态或工作区内容。读取文本只暂存在当前页面，选摘后才进入本轮提示词；来源仍未核验。不可访问或需要登录时，请粘贴可读摘录。目录需先在本地资料设置中授权。</p>
-        ${renderMaterialCoverage(w, locked)}${renderStyle(w)}${field('style-corrections', '用户纠正（最多2000字）', f.corrections, { name: 'corrections' })}${button('correct-style', '应用风格纠正', '', !w || locked)}
+        ${renderStyle(w)}${field('style-corrections', '用户纠正（最多2000字）', f.corrections, { name: 'corrections' })}${button('correct-style', '应用风格纠正', '', !w || locked)}
         ${renderResearch(w, f, locked)}
-      </section></div><div class="social-wizard-panel" id="writing-wizard-stage-3" ${writingStage !== 3 ? 'hidden' : ''}>
+      </section>
       ${renderRoute(w, f, locked)}
       <section class="social-panel"><h2>本轮初检与下一轮提示词</h2><p class="social-muted">可编辑后保存为版本或复制；复制记录只表示本机复制操作，不表示外部模型已接收。模型诊断只分析并给提示词，不直接改写文章。正文和反馈可能离开本机，发送前仍需确认。</p>
         ${field('diagnosis', '具体诊断（本地初检不等于模型判断）', f.diagnosis)}${button('copy-diagnosis', '复制诊断')}
-        ${field('prompt', '下一轮提示词', f.prompt)}<div class="social-tools">${button('save-prompt-version', '保存提示词版本', '', !w || locked)}${button('copy-prompt', '复制并记录提示词版本', '', processingMaterials)}${button('model', '预览并请求模型诊断', '', !w || locked)}</div>${(w?.rounds.at(-1)?.promptVersions?.length || 0) >= 80 ? '<p role="status">本轮提示词历史已接近100条。历史会继续完整保留；建议导出备份。</p>' : ''}<p role="status">${escape(f.promptNotice)}</p>
+        ${field('prompt', '下一轮提示词', f.prompt)}<div class="social-tools">${button('save-prompt-version', '保存提示词版本', '', !w || locked)}${button('copy-prompt', '复制并记录提示词版本', '', processingMaterials)}${button('export-prompt-history', '导出本轮提示词历史')}${button('model', '预览并请求模型诊断', '', !w || locked)}</div>${(w?.rounds.at(-1)?.promptVersions?.length || 0) >= 80 ? '<p role="status">本轮提示词历史已接近100条。历史会继续完整保留；建议导出备份。</p>' : ''}<p role="status">${escape(f.promptNotice)}</p>
       </section>
-      ${renderIssues(w, f, locked)}</div><div class="social-wizard-panel" id="writing-wizard-stage-4" ${writingStage !== 4 ? 'hidden' : ''}>
+      ${renderIssues(w, f, locked)}
       <section class="social-panel"><h2>带回外部新稿与反馈</h2>${field('new-draft', '外部 AI 新稿', f.newDraft, { name: 'newDraft' })}<label class="field" for="writing-source-prompt-version"><span class="field-label">此结果使用的提示词版本</span><select id="writing-source-prompt-version" data-writing-field="sourcePromptVersionId"><option value="" ${f.sourcePromptVersionId ? '' : 'selected'}>来源提示词未关联</option>${promptVersionOptions}</select></label>${field('feedback', '本轮反馈（不会自动变成长久偏好）', f.feedback)}
         <h3>可选偏好候选</h3><p class="social-muted">只统计你在下方明确填写的候选；两篇不同文章重复时可晋升，并提供撤销。</p>
         ${field('preference', '偏好候选（可编辑）', f.preference)}<div class="social-form-grid">${field('example', '例句', f.example)}${field('counterexample', '反例', f.counterexample)}</div>
         ${button('append', '回带并新增同篇一轮', '', !w || locked)}
-        ${renderNotifications(f)}<p><a href="#writing-history" data-writing-action="open-history">打开高级区中的历史轮次</a></p>
-      </section></div><details class="social-panel" id="writing-advanced"><summary>高级设置与历史</summary>
-        <label class="check-row"><input id="writing-save" type="checkbox" ${f.saveEnabled ? 'checked' : ''} ${!w || locked ? 'disabled' : ''}>开启本机保存</label><p class="social-muted">默认不保存正文。开启后稿件、反馈和轮次保存在本机。</p><p id="writing-save-status" role="status">${escape(persistenceStatus(w))}</p>
-        ${w ? button('delete-article', '删除整篇及所有轮次', '', locked) : ''}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}${button('manage-packs', '专业基础包')}<label class="field" for="writing-memory-scope"><span class="field-label">显式记忆范围</span><select id="writing-memory-scope" data-writing-field="scope">${Object.entries(scopeLabels).map(([value, label]) => `<option value="${value}" ${f.scope === value ? 'selected' : ''}>${escape(label)}</option>`).join('')}</select></label>${button('remember', '记住这个偏好', '', !w || locked)}${button('export-prompt-history', '导出本轮提示词历史', '', !w)}
-        ${renderHistory(w, f)}${renderMemories(w)}${packManager}</details>`;
+        <label class="field" for="writing-memory-scope"><span class="field-label">显式记忆范围</span><select id="writing-memory-scope" data-writing-field="scope">${Object.entries(scopeLabels).map(([value, label]) => `<option value="${value}" ${f.scope === value ? 'selected' : ''}>${escape(label)}</option>`).join('')}</select></label>
+        ${button('remember', '记住这个偏好', '', !w || locked)}${renderNotifications(f)}
+      </section>
+      ${renderHistory(w, f)}${renderMemories(w)}${packManager}`;
       if (focusAfterRenderId) {
         document.getElementById(focusAfterRenderId)?.focus?.();
         focusAfterRenderId = '';
@@ -517,7 +514,7 @@
       const forkControls = round ? `<fieldset class="writing-fork-contexts"><legend>从此轮继续时复制的内容</legend>${contexts.map(([key, label]) =>
         `<label class="check-row"><input type="checkbox" data-writing-fork-context="${key}" ${f.forkContexts.includes(key) ? 'checked' : ''}>${label}</label>`).join('')}
         ${button('continue-from-round', '从此轮继续', `data-round-id="${escape(round.id)}"`)}</fieldset>` : '';
-      return `<section class="social-panel" id="writing-history"><h2>轮次回看与比较</h2><div class="social-tools">${w.rounds.map((r, i) => button('round', `第${i + 1}轮`, `data-round-id="${escape(r.id)}"`)).join('')}</div>${round ? `<label class="field">历史原稿<textarea id="writing-history-draft" readonly>${escape(round.draft)}</textarea></label><label class="field">历史反馈<textarea readonly>${escape(round.feedback || round.userFeedback)}</textarea></label><label class="field">历史诊断<textarea readonly>${escape(round.diagnosis)}</textarea></label><label class="field">历史提示词<textarea readonly>${escape(round.prompt)}</textarea></label>
+      return `<section class="social-panel"><h2>轮次回看与比较</h2><div class="social-tools">${w.rounds.map((r, i) => button('round', `第${i + 1}轮`, `data-round-id="${escape(r.id)}"`)).join('')}</div>${round ? `<label class="field">历史原稿<textarea id="writing-history-draft" readonly>${escape(round.draft)}</textarea></label><label class="field">历史反馈<textarea readonly>${escape(round.feedback || round.userFeedback)}</textarea></label><label class="field">历史诊断<textarea readonly>${escape(round.diagnosis)}</textarea></label><label class="field">历史提示词<textarea readonly>${escape(round.prompt)}</textarea></label>
         <label class="field" for="writing-history-compare"><span class="field-label">与另一轮比较</span><select id="writing-history-compare" data-writing-field="historyCompareId">${otherRounds.map(item => `<option value="${escape(item.id)}" ${item.id === compareRoundId ? 'selected' : ''}>第${w.rounds.findIndex(candidate => candidate.id === item.id) + 1}轮</option>`).join('')}</select></label>
         ${comparison ? `<div id="writing-history-comparison"><h3>逐行对照</h3>${comparedFields}${comparedIssues}</div>` : '<p>至少有两个轮次后可比较。</p>'}${forkControls}` : '<p>选择一个轮次查看，不会替换当前表单。</p>'}</section>`;
     }
@@ -840,19 +837,6 @@
       }
     }
     async function operate(action, data = {}) {
-      if (action === 'wizard-stage') {
-        const next = Number(data.stage);
-        const w = workspace(articleId);
-        const hasPrompts = !!(w?.rounds || []).some(round => (round.promptVersions || []).length);
-        if (next === 1 || w && next >= 2 && next <= 3 || next === 4 && w && hasPrompts) { writingStage = next; render(); }
-        return;
-      }
-      if (action === 'open-history') {
-        const advanced = document.getElementById('writing-advanced');
-        if (advanced) advanced.open = true;
-        document.getElementById('writing-history')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-        return;
-      }
       if (action === 'new') { activeMaterialJob?.controller.abort(); webReadResults.clear(); if (articleId) coordinator.cancelResearch(articleId); articleId = ''; render(); return; }
       if (action?.startsWith('coverage-')) {
         const id = articleId;
@@ -1276,7 +1260,6 @@
           const w = await coordinator.createArticle({ ...articlePatch(submitted), ...roundInput(submitted, submitted.draft, ''), genre, confirmAsArticle });
           drafts.delete(''); drafts.set(w.id, f);
           if (articleId === '') articleId = w.id;
-          writingStage = 2;
           if (JSON.stringify(f.materials) === JSON.stringify(submitted.materials)) f.materials = references(w.rounds.at(-1));
           f.genre = schema.getWritingGenreConfig(w.article.genre)?.name || articleConfig.name;
           f.taskType = w.rounds.at(-1).taskType || 'revision';
@@ -1330,12 +1313,11 @@
           f.notifications.push(...result.notifications);
           acknowledge(f, submitted, ['title', 'goal', 'audience', 'platform', 'success', 'preserve', 'constraints', 'dimensions', 'materials', 'corrections', 'packSelections', 'domainInputs']);
           for (const key of ['newDraft', 'feedback', 'preference', 'example', 'counterexample']) if (f[key] === submitted[key]) f[key] = '';
-          writingStage = 3;
         } else if (action === 'save') await coordinator.setSaveEnabled(id, f.saveEnabled);
         else if (action === 'delete-article') {
           if (!await confirm('确认删除整篇文章及所有轮次、稿件和反馈？取消会保留全部历史。')) return;
           await coordinator.deleteArticle(id, { confirmed: true }); drafts.delete(id);
-          if (articleId === id) { articleId = ''; writingStage = 1; }
+          if (articleId === id) articleId = '';
         } else if (action === 'correct-style') {
           await coordinator.correctStyleProfile(id, submitted.corrections);
           updateOutputs(f, coordinator.getWorkspace(id).rounds.at(-1), submitted);
@@ -1419,7 +1401,7 @@
       return operate(target.dataset.writingAction || target.dataset.action, target.dataset);
     });
     render();
-    return { render, openArticle(id) { if (articleId && articleId !== id) coordinator.cancelResearch(articleId); activeMaterialJob?.controller.abort(); webReadResults.clear(); articleId = id || ''; writingStage = articleId ? 2 : 1; render(); },
+    return { render, openArticle(id) { if (articleId && articleId !== id) coordinator.cancelResearch(articleId); activeMaterialJob?.controller.abort(); webReadResults.clear(); articleId = id || ''; render(); },
       refreshFromStorage() {
         memoryDrafts.clear();
         const ids = new Set(coordinator.listArticles().map(a => a.id));
@@ -1434,7 +1416,6 @@
           drafts.set(id, fresh);
         }
         if (articleId && !ids.has(articleId)) articleId = '';
-        writingStage = articleId ? 2 : 1;
         render();
       } };
   }

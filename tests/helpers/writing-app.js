@@ -28,7 +28,7 @@ function createWritingApp(options = {}) {
   element('knowledge-entry-form').reset = () => {
     for (const control of formControls) element(control.id).value = control.value;
   };
-  const scenes = ['task', 'ppt'].map(scene => Object.assign(element(`scene-${scene}`), { dataset: { agentScene: scene } }));
+  const scenes = ['task', 'writing', 'ppt'].map(scene => Object.assign(element(`scene-${scene}`), { dataset: { agentScene: scene } }));
   const nav = ['article', 'prompt-agent'].map(view => Object.assign(element(`nav-${view}`), { dataset: { view } }));
   const document = {
     getElementById(id) { return dom.document.getElementById(id) || academicReviewDOM.document.getElementById(id) || academicPublishingDOM.document.getElementById(id) || element(id); },

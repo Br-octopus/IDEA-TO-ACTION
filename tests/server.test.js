@@ -38,6 +38,45 @@ test('模型客户端归一化成功、空内容和常见失败', async () => {
   }
 });
 
+test('模型客户端转发输出 token 上限并只暴露规范化 usage', async () => {
+  let requestBody;
+  const client = createModelClient({ baseUrl: 'https://model.example/v1', name: 'demo', apiKey: 'secret' }, {
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return response({
+        choices: [{ message: { content: '有限输出' } }],
+        usage: { prompt_tokens: 17, completion_tokens: 9, total_tokens: 26, provider_private: 'drop-me' }
+      });
+    }
+  });
+  const result = await client.request([{ role: 'user', content: 'test' }], { max_tokens: 64 });
+  assert.equal(requestBody.max_tokens, 64);
+  assert.deepEqual(result.usage, { total_tokens: 26, prompt_tokens: 17, completion_tokens: 9 });
+  assert.equal(JSON.stringify(result).includes('drop-me'), false);
+
+  await client.request([], { max_tokens: 0 });
+  assert.equal(Object.hasOwn(requestBody, 'max_tokens'), false);
+});
+
+test('模型 usage 冲突时不低估分项用量，空响应也保留 usage', async () => {
+  let body = {
+    choices: [{ message: { content: '有内容' } }],
+    usage: { prompt_tokens: 17, completion_tokens: 9, total_tokens: 3 }
+  };
+  const client = createModelClient({ baseUrl: 'https://model.example/v1', name: 'demo', apiKey: 'secret' }, {
+    fetchImpl: async () => response(body)
+  });
+  assert.equal((await client.request([])).usage.total_tokens, 26);
+
+  body = {
+    choices: [{ message: { content: '' } }],
+    usage: { prompt_tokens: 13, completion_tokens: 7, total_tokens: 20 }
+  };
+  const empty = await client.request([]);
+  assert.equal(empty.code, MODEL_CODES.EMPTY_RESPONSE);
+  assert.deepEqual(empty.usage, { total_tokens: 20, prompt_tokens: 13, completion_tokens: 7 });
+});
+
 test('模型请求超时使用稳定错误码且默认上限为 30 秒', async () => {
   const client = createModelClient({ baseUrl: 'https://model.example/v1', name: 'demo', apiKey: 'secret' }, {
     timeoutMs: 5,

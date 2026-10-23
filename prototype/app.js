@@ -1481,7 +1481,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     "method-card": "方法卡",
     "github-summary": "GitHub 摘要",
     "article-summary": "文章摘要",
-    "academic-literature": "学术文献",
     "manual-note": "手动资料"
   };
   const knowledgeVerificationLabels = {
@@ -1611,14 +1610,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     persistenceBlocked = true;
     toast(`本地数据读取失败，已暂停保存以避免覆盖：${error.message || "本地存储不可用"}`);
   }
-  if (desktopApi?.recoverBackupImports) {
-    desktopApi.recoverBackupImports((state.researchAttachments || []).map(item => item.id))
-      .catch(error => toast(`备份导入事务恢复失败：${error.message || "请重启应用重试"}`));
-  }
   let selectedDomain = "通用计划";
   let activeProjectId = null;
   let currentOptimizedPrompt = "";
   let currentFollowupBasePrompt = "";
+  if (desktopApi?.recoverBackupImports) {
+    desktopApi.recoverBackupImports((state.researchAttachments || []).map(item => item.id))
+      .catch(error => toast(`备份导入事务恢复失败：${error.message || "请重启应用重试"}`));
+  }
   let currentProjectReviewCase = null;
 
   function persist() {
@@ -1648,24 +1647,54 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     state = saveState(localStorage, nextState, options);
     return state;
   }
+  function renderFlowStrip() {
+    const project = getActiveProject();
+    const hasResearch = (state.researchTasks || []).length > 0;
+    const hasPromptTask = (state.promptAgentTasks || []).length > 0;
+    const statuses = {
+      idea: project ? "done" : "active",
+      plan: project ? "done" : "not-started",
+      research: hasResearch ? "done" : project ? "active" : "not-started",
+      prompt: hasPromptTask ? "done" : hasResearch ? "active" : "not-started",
+      review: hasPromptTask ? "active" : "not-started"
+    };
+    document.querySelectorAll("[data-flow-step]").forEach(node => {
+      const status = statuses[node.dataset.flowStep] || "not-started";
+      node.classList.toggle("done", status === "done");
+      node.classList.toggle("active", status === "active");
+      node.setAttribute("aria-label", `${node.textContent.trim()}：${({ done: "已完成", active: "进行中", "not-started": "未开始" })[status]}`);
+    });
+  }
   function go(view) {
     const writingAlias = view === "article";
     if (writingAlias) view = "prompt-agent";
     activeView = view;
     document.querySelectorAll(".view").forEach(node => node.classList.toggle("active", node.id === `view-${view}`));
-    document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === view));
-    const labels = { home: "新建规划", plans: "我的计划", "prompt-agent": "提示词 Agent", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
-    document.getElementById("breadcrumb").textContent = `工作台　/　${labels[view] || "新建规划"}`;
+    document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === (writingAlias ? "article" : view)));
+    const labels = { home: "新建规划", plans: "我的计划", article: "文章改写", "prompt-agent": "提示词 Agent", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
+    document.getElementById("breadcrumb").textContent = `工作台　/　${labels[writingAlias ? "article" : view] || "新建规划"}`;
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (view === "plans") renderPlans();
     if (view === "library") renderLibrary();
     if (view === "references") refreshKnowledgeView();
+    if (view === "home") renderFlowStrip();
     if (view === "prompt-agent") {
       if (writingAlias) agentScenes?.selectScene("writing");
       else agentScenes?.selectScene(agentScenes.getScene());
     }
+    document.querySelectorAll(".mobile-more").forEach(menu => { menu.open = false; });
   }
   document.querySelectorAll("[data-view]").forEach(node => node.addEventListener("click", () => go(node.dataset.view)));
+  const flowDestinations = { idea: "home", plan: "plans", research: "social-research", prompt: "prompt-agent", review: "project" };
+  document.querySelectorAll("[data-flow-step]").forEach(node => node.addEventListener("click", () => {
+    const destination = flowDestinations[node.dataset.flowStep];
+    if (destination === "project" && !getActiveProject()) {
+      toast("先创建或打开一份计划，再进入复盘");
+      return;
+    }
+    if (destination === "project") renderProject(getActiveProject());
+    else go(destination);
+  }));
   if (window.ForwardStepSocialResearchCoordinator && window.ForwardStepSocialResearchUI && desktopApi?.social) {
     const coordinator = window.ForwardStepSocialResearchCoordinator.createSocialResearchCoordinator({
       desktopApi,
@@ -1675,7 +1704,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     socialResearchUI = window.ForwardStepSocialResearchUI.createSocialResearchUI({
       document, desktopApi, coordinator, getState: () => state,
       persistState: persistWorkbenchState,
-      navigate: go
+      navigate: go,
+      getPromptAgentController: () => window.ForwardStepPromptAgentUIController
     });
   }
   if (window.ForwardStepPromptAgentCoordinator && window.ForwardStepPromptAgentUI) {
@@ -1813,20 +1843,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       ].filter(Boolean).join("；");
       const entry = knowledgeSchemaApi.normalizeKnowledgeEntry({
         id: existing?.id || `writing-material-${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`,
-        type: "manual-note",
-        title: normalized.title || "写作材料摘录",
+        type: "manual-note", title: normalized.title || "写作材料摘录",
         sourceUrl: /^https?:\/\//i.test(normalized.url || "") ? normalized.url : "",
         sourceType: sourceTypeLabels[normalized.sourceType] || "写作材料摘录",
-        sourceKind: "reference",
-        sourceId,
-        domains: ["写作材料"],
+        sourceKind: "reference", sourceId, domains: ["写作材料"],
         stages: [normalized.purpose === "style" ? "风格参考" : "写作参考"],
-        keywords: [normalized.purpose || "content"],
-        summary: excerpt,
-        contentExcerpt: excerpt,
+        keywords: [normalized.purpose || "content"], summary: excerpt, contentExcerpt: excerpt,
         limitations: ["仅保存用户明确选择的可见摘录；来源尚未核验，不包含原文件或授权目录全文。", locationNote].filter(Boolean).join(" "),
-        verificationStatus: "unverified",
-        createdAt: existing?.createdAt || new Date().toISOString()
+        verificationStatus: "unverified", createdAt: existing?.createdAt || new Date().toISOString()
       });
       const previousState = state;
       try {
@@ -1878,6 +1902,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         copyText,
         notify: toast
       });
+
+    if (window.ForwardStepPptFeedbackUI && window.ForwardStepPptFeedback) {
+      window.ForwardStepPptFeedbackUIController = window.ForwardStepPptFeedbackUI.createPptFeedbackUI({
+        document,
+        sceneSchema: window.ForwardStepPptSceneSchema,
+        feedbackSchema: window.ForwardStepPptFeedbackSchema,
+        feedback: window.ForwardStepPptFeedback,
+        taskSchema: window.ForwardStepPromptAgentSchema,
+        getState: () => state,
+        persistState(nextState) { state = saveState(localStorage, nextState); return state; },
+        notify: toast
+      });
+    }
     }
   }
   document.querySelectorAll(".domain").forEach(button => button.addEventListener("click", () => {
@@ -2011,11 +2048,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   });
   document.getElementById("copy-master").addEventListener("click", () => { const p = getActiveProject(); if (p) copyText(withSelectedReferences(p.masterPrompt)); });
   document.getElementById("to-social-research").addEventListener("click", () => {
-    const p = getActiveProject(); if (!p) return;
+    const project = getActiveProject();
+    if (!project) return;
     const topic = document.getElementById("social-research-topic");
-    topic.value = (p.goalSummary || p.idea).slice(0, 120);
+    topic.value = String(document.getElementById("project-goal-summary").value.trim() || project.goalSummary || project.idea).slice(0, 120);
     go("social-research");
-    toast("已带入计划目标；请检查研究模板和平台后生成计划");
+    toast("计划目标已带入；请检查研究方向和平台后继续");
   });
   async function requestModel(prompt, onSuccess, onFailure) {
     const result = document.getElementById("model-result");
@@ -2351,28 +2389,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   function renderRecent() {
     const root = document.getElementById("recent-list");
-    renderFlowStrip();
     if (!state.projects.length) { root.innerHTML = '<div class="empty-recent">还没有计划。上面写下一个想法，就可以开始。</div>'; return; }
     root.innerHTML = state.projects.slice(0, 3).map(project => `<button class="recent-item" data-open-project="${escapeHtml(project.id)}"><span><span class="recent-title">${escapeHtml(project.idea.slice(0, 90))}</span><span class="recent-meta">${escapeHtml(project.domain)} · ${formatDate(project.createdAt)}</span></span><span class="arrow">›</span></button>`).join("");
     root.querySelectorAll("[data-open-project]").forEach(button => button.addEventListener("click", () => { const p = state.projects.find(item => item.id === button.dataset.openProject); if (p) renderProject(p); }));
-  }
-  function renderFlowStrip() {
-    const strip = document.getElementById("flow-strip");
-    if (!strip) return;
-    const latest = state.projects[0];
-    const nodes = { idea: "active", plan: "", research: "", prompt: "", review: "" };
-    if (latest) {
-      nodes.idea = "done"; nodes.plan = "active";
-      const completedSteps = (latest.completed || []).length;
-      if (completedSteps >= 2) nodes.research = "active";
-      if (completedSteps >= 3) nodes.prompt = "active";
-      if (completedSteps >= 4) { nodes.prompt = "done"; nodes.review = "active"; }
-    }
-    strip.querySelectorAll("[data-flow-step]").forEach(node => {
-      const step = node.dataset.flowStep;
-      node.classList.toggle("done", nodes[step] === "done");
-      node.classList.toggle("active", nodes[step] === "active");
-    });
   }
   function renderLibrary() {
     const root = document.getElementById("library-list");
@@ -2391,13 +2410,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       renderLibrary(); toast("已从提示词库移除");
     }));
   }
-  function getLegacyKnowledgeFilters() {
+  function getKnowledgeFilters() {
     return {
-      query: document.getElementById("legacy-knowledge-query").value.trim(),
-      type: document.getElementById("legacy-knowledge-type").value,
-      domain: document.getElementById("legacy-knowledge-domain").value,
-      stage: document.getElementById("legacy-knowledge-stage").value,
-      verificationStatus: document.getElementById("legacy-knowledge-verification").value
+      query: document.getElementById("knowledge-query").value.trim(),
+      type: document.getElementById("knowledge-type").value,
+      domain: document.getElementById("knowledge-domain").value,
+      stage: document.getElementById("knowledge-stage").value,
+      verificationStatus: document.getElementById("knowledge-verification").value
     };
   }
   function setKnowledgeFilterOptions(id, values, labels, emptyLabel) {
@@ -2441,8 +2460,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     panel.hidden = false;
     panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
-  function renderLegacyKnowledgeResults(items = []) {
-    const root = document.getElementById("legacy-knowledge-results");
+  function renderKnowledgeResults(items = []) {
+    const root = document.getElementById("knowledge-results");
     if (!root) return;
     const selectedIds = Array.isArray(state.knowledgeSelection) ? state.knowledgeSelection : [];
     if (!items.length) {
@@ -2473,7 +2492,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (selected && !current.includes(id)) {
       if (current.length >= 5) {
         toast("最多选择五条资料摘要");
-        renderLegacyKnowledgeResults(knowledgeEntries);
+        renderKnowledgeResults(knowledgeEntries);
         return;
       }
       state.knowledgeSelection = [...current, id];
@@ -2481,19 +2500,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       state.knowledgeSelection = current.filter(item => item !== id);
     }
     if (!persist()) return;
-    refreshLegacyKnowledgeView();
+    refreshKnowledgeView();
   }
-  function refreshLegacyKnowledgeView() {
-    const status = document.getElementById("legacy-knowledge-search-status");
+  function refreshKnowledgeView() {
+    const status = document.getElementById("knowledge-search-status");
     if (!status || !knowledgeSearch || typeof knowledgeSearch.searchKnowledge !== "function") return;
     knowledgeEntries = getKnowledgeIndex();
     if (!Array.isArray(state.knowledgeSelection)) state.knowledgeSelection = [];
     state.knowledgeSelection = [...new Set(state.knowledgeSelection)].filter(id => knowledgeEntries.some(item => item.id === id)).slice(0, 5);
-    setKnowledgeFilterOptions("legacy-knowledge-type", Object.keys(knowledgeTypeLabels), knowledgeTypeLabels, "全部类型");
-    setKnowledgeFilterOptions("legacy-knowledge-domain", knowledgeEntries.flatMap(item => item.domains || []), {}, "全部领域");
-    setKnowledgeFilterOptions("legacy-knowledge-stage", knowledgeEntries.flatMap(item => item.stages || []), knowledgeStageLabels, "全部阶段");
-    setKnowledgeFilterOptions("legacy-knowledge-verification", Object.keys(knowledgeVerificationLabels), knowledgeVerificationLabels, "全部验证状态");
-    const filters = getLegacyKnowledgeFilters();
+    setKnowledgeFilterOptions("knowledge-type", Object.keys(knowledgeTypeLabels), knowledgeTypeLabels, "全部类型");
+    setKnowledgeFilterOptions("knowledge-domain", knowledgeEntries.flatMap(item => item.domains || []), {}, "全部领域");
+    setKnowledgeFilterOptions("knowledge-stage", knowledgeEntries.flatMap(item => item.stages || []), knowledgeStageLabels, "全部阶段");
+    setKnowledgeFilterOptions("knowledge-verification", Object.keys(knowledgeVerificationLabels), knowledgeVerificationLabels, "全部验证状态");
+    const filters = getKnowledgeFilters();
     const results = knowledgeSearch.searchKnowledge(knowledgeEntries, filters.query, {
       type: filters.type,
       types: filters.type ? [filters.type] : [],
@@ -2502,7 +2521,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       verificationStatus: filters.verificationStatus,
       limit: 20
     });
-    renderLegacyKnowledgeResults(results);
+    renderKnowledgeResults(results);
     status.textContent = '找到 ' + results.length + ' 条资料；已选择 ' + state.knowledgeSelection.length + '/5。选择后只使用摘要、方法和来源。';
   }
   function saveKnowledgeEntry(event) {
@@ -2538,17 +2557,17 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     refreshKnowledgeView();
     toast("资料摘要已保存，当前状态为未验证");
   }
-  document.getElementById("legacy-knowledge-search").addEventListener("click", refreshLegacyKnowledgeView);
-  document.getElementById("legacy-knowledge-query").addEventListener("keydown", event => {
+  document.getElementById("knowledge-search").addEventListener("click", refreshKnowledgeView);
+  document.getElementById("knowledge-query").addEventListener("keydown", event => {
     if (event.key === "Enter") {
       event.preventDefault();
-      refreshLegacyKnowledgeView();
+      refreshKnowledgeView();
     }
   });
-  document.getElementById("legacy-knowledge-type").addEventListener("change", refreshLegacyKnowledgeView);
-  document.getElementById("legacy-knowledge-domain").addEventListener("change", refreshLegacyKnowledgeView);
-  document.getElementById("legacy-knowledge-stage").addEventListener("change", refreshLegacyKnowledgeView);
-  document.getElementById("legacy-knowledge-verification").addEventListener("change", refreshLegacyKnowledgeView);
+  document.getElementById("knowledge-type").addEventListener("change", refreshKnowledgeView);
+  document.getElementById("knowledge-domain").addEventListener("change", refreshKnowledgeView);
+  document.getElementById("knowledge-stage").addEventListener("change", refreshKnowledgeView);
+  document.getElementById("knowledge-verification").addEventListener("change", refreshKnowledgeView);
   document.getElementById("open-knowledge-entry").addEventListener("click", () => {
     const form = document.getElementById("knowledge-entry-form");
     form.hidden = !form.hidden;
@@ -2991,7 +3010,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         if (result?.canceled) { toast("已取消导出"); return; }
       }
       else {
-        if (scope === "workspace") toast("浏览器开发模式仅导出 JSON，不包含已保存附件正文；完整附件备份请在桌面应用中导出。");
         const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
         const link = document.createElement("a"); link.href = url; link.download = `forward-step-${scope}.json`; link.click(); URL.revokeObjectURL(url);
       }
@@ -3011,7 +3029,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       if (result && result.canceled) throw new Error("安全备份已取消");
       return result;
     }
-    toast("浏览器开发模式的安全备份仅含 JSON，不包含已保存附件正文。");
     const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = "forward-step-safety-backup.json"; link.click(); URL.revokeObjectURL(url);
     confirmBrowserSafetyBackup(window.confirm);
@@ -3021,69 +3038,75 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const archiveStage = raw && typeof raw === "object" && raw.format === "workspace-archive" ? raw : null;
     let transactionId = "";
     try {
-    const backup = typeof raw === "string" ? JSON.parse(raw)
-      : archiveStage ? JSON.parse(archiveStage.content)
-        : raw && typeof raw.content === "string" ? JSON.parse(raw.content) : raw;
-    const summary = workspaceBackup.getBackupSummary(backup);
-    const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料、${summary.counts.writingArticles || 0} 篇文章、${summary.counts.writingMemories || 0} 条写作记忆。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
-    let importAttachments = archiveStage?.attachments || [];
-    if (archiveStage) {
-      const index = new Map((backup.data.researchAttachments || []).map(item => [item.id, item]));
-      if (index.size !== importAttachments.length || importAttachments.some(item => {
-        const metadata = index.get(item.id);
-        return !metadata || metadata.type !== item.type || metadata.size !== item.size
-          || !item.id.startsWith(`${item.taskId}_`);
-      })) throw new Error("ZIP 附件清单与工作区附件索引不一致");
-    }
-    let sourceBackup = backup;
-    let remappedAttachmentIds = [];
-    let omittedAttachmentCount = 0;
-    if (mode === "merge" && summary.scope === "workspace") {
-      const acceptedTaskIds = new Set(workspaceBackup.mergeState(state, backup).added
-        .filter(item => item.collection === "researchTasks").map(item => item.id));
-      importAttachments = importAttachments.filter(item => acceptedTaskIds.has(item.taskId));
-      const mapped = workspaceBackup.remapResearchAttachmentIds({
-        ...backup.data,
-        researchTasks: (backup.data.researchTasks || []).filter(item => acceptedTaskIds.has(item.id)),
-        researchAttachments: (backup.data.researchAttachments || []).filter(item => acceptedTaskIds.has(item.id.slice(0, item.id.lastIndexOf("_"))))
-      }, importAttachments, (state.researchAttachments || []).map(item => item.id), () => crypto.randomUUID().replace(/-/g, ""));
-      importAttachments = mapped.attachments;
-      remappedAttachmentIds = mapped.remapped;
-      sourceBackup = {
-        ...backup,
-        data: { ...mapped.data, researchAttachments: mapped.data.researchAttachments.filter(item => acceptedTaskIds.has(item.id.slice(0, item.id.lastIndexOf("_")))) },
-        counts: { ...backup.counts, researchTasks: acceptedTaskIds.size, researchAttachments: importAttachments.length }
-      };
-    }
-    if (!archiveStage && summary.scope === "workspace") {
-      const retained = workspaceBackup.retainResearchAttachments(sourceBackup.data,
-        (state.researchAttachments || []).map(item => item.id));
-      sourceBackup = { ...sourceBackup, data: retained.data };
-      omittedAttachmentCount = retained.removed;
-    }
-    const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, sourceBackup) } : workspaceBackup.mergeState(state, sourceBackup);
-    if (archiveStage && desktopApi?.commitBackupImport) {
-      const committed = await desktopApi.commitBackupImport(archiveStage.stageId,
-        archiveStage.attachments.filter(item => importAttachments.some(target => target.sourceId === item.id)).map(item => item.id),
-        importAttachments.map(item => item.id));
-      if (committed?.status !== "ok" || !committed.transactionId) throw new Error(committed?.message || "附件安装失败");
-      transactionId = committed.transactionId;
-    }
-    try {
-      persistWorkbenchState(result.state, { restoreWriting: true });
-    } catch (error) {
-      if (transactionId) await desktopApi.rollbackBackupImport(transactionId).catch(() => {});
-      throw error;
-    }
-    if (transactionId) await desktopApi.finalizeBackupImport(transactionId);
-    if (summary.scope === "workspace") {
-      await writingCoordinator?.refreshFromStorage({ preserveSessions: mode === "merge" });
-      window.WritingWorkbenchUIController?.refreshFromStorage();
-      academicReviewController?.refreshFromStorage();
-      academicPublishingController?.refreshFromStorage();
-    } else window.WritingWorkbenchUIController?.render();
-    renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
-    toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}${remappedAttachmentIds.length ? `；已重映射 ${remappedAttachmentIds.length} 个冲突附件 ID` : ""}${omittedAttachmentCount ? `；JSON 备份不含正文，已跳过 ${omittedAttachmentCount} 个附件索引` : ""}`);
+      const backup = typeof raw === "string" ? JSON.parse(raw)
+        : archiveStage ? JSON.parse(archiveStage.content)
+          : raw && typeof raw.content === "string" ? JSON.parse(raw.content) : raw;
+      const summary = workspaceBackup.getBackupSummary(backup);
+      if (archiveStage && summary.scope !== "workspace") throw new Error("ZIP 仅支持完整工作区备份");
+      const mode = window.confirm(`已校验${summary.scope === "workspace" ? "工作区" : "资料库"}备份，共 ${summary.counts.knowledgeEntries || 0} 条资料、${summary.counts.writingArticles || 0} 篇文章、${summary.counts.writingMemories || 0} 条写作记忆。点击“确定”替换，取消则合并。`) ? "replace" : "merge";
+      let importAttachments = archiveStage?.attachments || [];
+      if (archiveStage) {
+        const metadata = new Map((backup.data.researchAttachments || []).map(item => [item.id, item]));
+        if (!Array.isArray(archiveStage.attachments) || metadata.size !== importAttachments.length || importAttachments.some(item => {
+          const itemMetadata = metadata.get(item.id);
+          return !itemMetadata || itemMetadata.type !== item.type || itemMetadata.size !== item.size
+            || !item.id.startsWith(`${item.taskId}_`);
+        })) throw new Error("ZIP 附件清单与工作区附件索引不一致");
+      }
+      let sourceBackup = backup;
+      let remappedAttachmentIds = [];
+      let omittedAttachmentCount = 0;
+      if (mode === "merge" && summary.scope === "workspace") {
+        const acceptedTaskIds = new Set(workspaceBackup.mergeState(state, backup).added
+          .filter(item => item.collection === "researchTasks").map(item => item.id));
+        importAttachments = importAttachments.filter(item => acceptedTaskIds.has(item.taskId));
+        const mapped = workspaceBackup.remapResearchAttachmentIds({
+          ...backup.data,
+          researchTasks: (backup.data.researchTasks || []).filter(item => acceptedTaskIds.has(item.id)),
+          researchAttachments: (backup.data.researchAttachments || []).filter(item => acceptedTaskIds.has(item.id.slice(0, item.id.lastIndexOf("_"))))
+        }, importAttachments, (state.researchAttachments || []).map(item => item.id), () => crypto.randomUUID().replace(/-/g, ""));
+        importAttachments = mapped.attachments;
+        remappedAttachmentIds = mapped.remapped;
+        sourceBackup = {
+          ...backup,
+          data: { ...mapped.data, researchAttachments: mapped.data.researchAttachments.filter(item => acceptedTaskIds.has(item.id.slice(0, item.id.lastIndexOf("_")))) },
+          counts: { ...backup.counts, researchTasks: acceptedTaskIds.size, researchAttachments: importAttachments.length }
+        };
+      }
+      if (!archiveStage && summary.scope === "workspace") {
+        const retained = workspaceBackup.retainResearchAttachments(sourceBackup.data,
+          (state.researchAttachments || []).map(item => item.id));
+        sourceBackup = { ...sourceBackup, data: retained.data };
+        omittedAttachmentCount = retained.removed;
+      }
+      const result = mode === "replace" ? { state: workspaceBackup.replaceState(state, sourceBackup) } : workspaceBackup.mergeState(state, sourceBackup);
+      if (archiveStage && desktopApi?.commitBackupImport) {
+        const committed = await desktopApi.commitBackupImport(archiveStage.stageId,
+          archiveStage.attachments.filter(item => importAttachments.some(target => target.sourceId === item.id)).map(item => item.id),
+          importAttachments.map(item => item.id));
+        if (committed?.status !== "ok" || !committed.transactionId) throw new Error(committed?.message || "附件安装失败");
+        transactionId = committed.transactionId;
+      }
+      const previousState = state;
+      try {
+        persistWorkbenchState(result.state, { restoreWriting: true });
+      } catch (error) {
+        state = previousState;
+        if (transactionId) {
+          await desktopApi.rollbackBackupImport(transactionId).catch(() => {});
+          transactionId = "";
+        }
+        throw new Error(`导入结果保存失败：${error.message || "存储不可用"}`);
+      }
+      if (transactionId) await desktopApi.finalizeBackupImport(transactionId);
+      if (summary.scope === "workspace") {
+        await writingCoordinator?.refreshFromStorage({ preserveSessions: mode === "merge" });
+        window.WritingWorkbenchUIController?.refreshFromStorage();
+        academicReviewController?.refreshFromStorage();
+        academicPublishingController?.refreshFromStorage();
+      } else window.WritingWorkbenchUIController?.render();
+      renderCaseProjectOptions(); refreshKnowledgeView(); renderPlans(); renderSendPanel();
+      toast(`导入成功：${mode === "replace" ? "已替换" : `新增 ${result.added.length} 条`}${remappedAttachmentIds.length ? `；已重映射 ${remappedAttachmentIds.length} 个冲突附件 ID` : ""}${omittedAttachmentCount ? `；JSON 备份不含正文，已跳过 ${omittedAttachmentCount} 个附件索引` : ""}`);
     } catch (error) {
       if (archiveStage && !transactionId) await desktopApi?.discardBackupImport?.(archiveStage.stageId).catch(() => {});
       throw error;
@@ -3192,6 +3215,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (desktopApi) return desktopApi.getConfig();
     const response = await fetch("/api/config");
     return response.json();
+        if (scope === "workspace") toast("浏览器开发模式仅导出 JSON，不包含已保存附件正文；完整附件备份请在桌面应用中导出。");
   }
   function settingsStorageMessage(config) {
     if (!desktopApi) return "当前是浏览器开发模式，不能安全保存密钥，请使用 Windows 桌面应用。";

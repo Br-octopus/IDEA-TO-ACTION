@@ -255,7 +255,7 @@
       const task = normalizeTask(originalTask);
       const stage = String(options.stage || task.stage || "clarification");
       const freshSources = await selectMaterials(task, { stage });
-      const selectedSources = mergeSelectedSources(freshSources, originalTask.selectedSources, originalTask.excludedSourceIds);
+      const selectedSources = mergeSelectedSources(freshSources, originalTask.selectedSources, originalTask.excludedSourceIds).slice(0, 3);
       const promptTask = stage === "review" && originalTask.review && typeof originalTask.review === "object"
         ? { ...task, review: { ...task.review, ...originalTask.review } }
         : task;

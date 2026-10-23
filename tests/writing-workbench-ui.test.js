@@ -76,28 +76,14 @@ function fixture(options = {}) {
   return { ...dom, ui, coordinator, copied, get state() { return state; }, get requests() { return requests; }, set failSave(value) { failSave = value; } };
 }
 
-test('写作工作台按四步显示内容，并在新建和回带成功后自动前进', async () => {
-  const f = fixture();
-  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-1"/);
-  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-2" hidden/);
-  assert.match(f.mount.innerHTML, /data-stage="2" disabled/);
-
-  const id = await create(f, '向导文章', '初稿');
-  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-2"/);
-  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-2" hidden/);
-  await f.click('wizard-stage', { stage: '1' });
-  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-1" hidden/);
-  await f.click('wizard-stage', { stage: '3' });
-  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-3" hidden/);
-  await f.click('wizard-stage', { stage: '4' });
-  await f.input('writing-new-draft', '带回的新稿');
-  await f.click('append');
-  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-3"/);
-  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-3" hidden/);
-  assert.match(f.mount.innerHTML, /id="writing-advanced"/);
-  assert.ok(f.coordinator.getWorkspace(id).rounds.length >= 2);
+test('软著内容包在普通文章中可选，且不会自动用于无关文章', () => {
+  const packs = writingPackCatalog.getBuiltinWritingPacks();
+  const f = fixture({ writingPacks: packs });
+  const checkbox = f.node('writing-pack-selection-builtin-softcopyright-content');
+  assert.ok(checkbox, '软著内容包显示在专业基础包选择区');
+  assert.equal(checkbox.checked, false, '普通文章默认不自动套用软著规则');
+  assert.match(f.mount.innerHTML, /软著内容/);
 });
-
 test('通用核心包可在普通文章任务中选择并进入实际提示词', async () => {
   const app = createWritingApp();
   await app.settle();
@@ -118,15 +104,6 @@ test('通用核心包可在普通文章任务中选择并进入实际提示词',
   const article = app.coordinator.getWorkspace(app.coordinator.listArticles()[0].id);
   assert.deepEqual(article.article.packSelections, ['builtin-writing-core', 'shared-core-writing-rules']);
   assert.match(article.rounds[0].prompt, /通用核心规则进入提示词/);
-});
-
-test('软著内容包在普通文章中可选，且不会自动用于无关文章', () => {
-  const packs = writingPackCatalog.getBuiltinWritingPacks();
-  const f = fixture({ writingPacks: packs });
-  const checkbox = f.node('writing-pack-selection-builtin-softcopyright-content');
-  assert.ok(checkbox, '软著内容包显示在专业基础包选择区');
-  assert.equal(checkbox.checked, false, '普通文章默认不自动套用软著规则');
-  assert.match(f.mount.innerHTML, /软著内容/);
 });
 
 test('写作工作台可预览资料库全量范围、确认覆盖并完成一批外部处理', async () => {
@@ -742,23 +719,22 @@ test('编辑复制提示词，模型失败保留诊断和输入，迟到结果�
   assert.match(f.mount.innerHTML, /模型不可用/);
 });
 
-test('文章改写进入独立页面，提示词 Agent 保持独立且两个工作台互不嵌套', async () => {
+test('应用真实接线：旧文章别名进入单写作root，场景隔离且面包屑正确', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp();
   assert.ok(f.coordinator, '应用需要实际创建写作协调器');
   await f.event('nav-article');
-  assert.match(f.element('breadcrumb').textContent, /文章改写/);
-  assert.doesNotMatch(f.element('breadcrumb').textContent, /提示词 Agent/);
-  assert.match(f.pageHTML, /id="view-article"[\s\S]*?id="writing-workbench-root"/);
-  assert.match(f.pageHTML, /id="view-prompt-agent"[\s\S]*?id="prompt-agent-root"/);
-  await f.input('writing-goal', '切页面不丢失');
+  assert.equal(f.mount.hidden, false);
+  assert.equal(f.element('ppt-scene-root').hidden, true);
+  assert.match(f.element('breadcrumb').textContent, /写作工作台/);
+  await f.input('writing-goal', '切场景不丢失');
+  await f.event('scene-ppt');
+  assert.equal(f.mount.hidden, true);
+  assert.equal(f.element('ppt-scene-root').hidden, false);
+  await f.event('scene-writing');
+  assert.equal(f.node('writing-goal').value, '切场景不丢失');
   await f.event('nav-prompt-agent');
   assert.match(f.element('breadcrumb').textContent, /提示词 Agent/);
-  await f.event('scene-ppt');
-  assert.equal(f.element('ppt-scene-root').hidden, false);
-  await f.event('nav-article');
-  assert.equal(f.node('writing-goal').value, '切页面不丢失');
-  assert.match(f.element('breadcrumb').textContent, /文章改写/);
 });
 
 test('应用真实发送预览确认前零请求，取消保留原诊断，确认才外发', async () => {

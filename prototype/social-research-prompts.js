@@ -19,7 +19,10 @@
       '请输出严格 JSON，或使用带固定字段名的明确可解析区块；不得输出无法解析的散文。',
       '热度、点赞数、转发数和推荐位置不等于事实或可靠性。',
       '必须明确列出未完成平台、失败平台或未覆盖平台，不得隐藏研究缺口。',
-      '每条发现和结论都必须附至少一个对应结果的原始 URL；没有链接的结论不得输出。',
+      '结论应回链到真实原始结果或材料；不得编造来源链接或标识。',
+      '报告只能引用输入中提供的 resultId 和 materialId，不得编造标识。',
+      '每条核心发现使用 citations 数组回链，字段为 findingIndex、resultId、materialId；resultId 必须是该材料所属结果。',
+      '仅搜索摘要可用时保留 resultIds；只有提供了材料时才填写 materialId。',
       '区分事实、用户观点、营销表达、推断和待核验事项，不足以判断时明确写明。'
     ].join('\n');
   }
@@ -35,7 +38,7 @@
 
   function buildResearchReportPrompt(task = {}, results = []) {
     const template = TEMPLATES[(task.plan && task.plan.researchType) || task.template] || TEMPLATES['pain-points'];
-    return `依据研究结果撰写报告。模板分析重点：${template}\n${requirements()}\n报告 JSON 字段：summary、coreFindings、commonPoints、platformDifferences、painPointsOrPatterns、representativeCases、conflicts、needsVerification、nextSteps、resultIds、incompletePlatforms。每条 coreFindings 必须包含 finding、resultIds、sourceUrls。\n任务：\n${serialize(task)}\n结果：\n${serialize(results)}`;
+    return `依据研究结果撰写报告。模板分析重点：${template}\n${requirements()}\n报告 JSON 字段：summary、coreFindings、commonPoints、platformDifferences、painPointsOrPatterns、representativeCases、conflicts、needsVerification、nextSteps、resultIds、sourceUrls、citations、incompletePlatforms。citations 中 findingIndex 从 0 开始并对应 coreFindings；只引用真实已完成材料。\n任务与可用材料：\n${serialize(task)}\n搜索结果：\n${serialize(results)}`;
   }
 
   return { buildResearchPlanPrompt, buildSupplementarySearchPrompt, buildResearchReportPrompt };

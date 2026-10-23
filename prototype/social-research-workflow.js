@@ -14,8 +14,11 @@
     details: 0,
     durationMs: 0,
     attachmentBytes: 0,
-    analysisTokens: 0
+    analysisTokens: 0,
+    analysisTokensEstimated: false,
+    sourceRequests: 0
   });
+  const DOMESTIC_PLATFORM_IDS = new Set(['xiaohongshu', 'bilibili', 'weibo', 'zhihu']);
 
   function budgetError(message) {
     const error = new RangeError(`budget_exceeded: ${message}`);
@@ -40,6 +43,17 @@
     return [...new Set(values.map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
   }
 
+  function assertDomesticPlatformList(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+      throw new TypeError('至少选择一个国内社媒平台');
+    }
+    const platforms = normalizePlatformList(values);
+    if (platforms.length !== values.length || platforms.some(platform => !DOMESTIC_PLATFORM_IDS.has(platform))) {
+      throw new TypeError('仅支持小红书、B 站、微博和知乎');
+    }
+    return platforms;
+  }
+
   function assertAtLeastOnePlatformReady(task, readyPlatforms) {
     const planned = normalizePlatformList(task.platforms || []);
     const ready = normalizePlatformList(readyPlatforms || []);
@@ -56,8 +70,7 @@
 
   function createResearchPlan(input = {}, capabilities = []) {
     const source = input && typeof input === 'object' ? input : {};
-    const platforms = [...new Set((Array.isArray(source.platforms) ? source.platforms : [])
-      .map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
+    const platforms = assertDomesticPlatformList(source.platforms);
     const queries = [...new Set((Array.isArray(source.queries) ? source.queries : [source.topic])
       .map(value => String(value || '').trim()).filter(Boolean))];
     const normalizedBudget = schema.normalizeResearchPlan({ budget: source.budget }).budget;
@@ -165,7 +178,7 @@
     assertApproved(task);
     const budget = task.budget || {};
     const current = task.usage || EMPTY_USAGE();
-    const integerMetrics = new Set(['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'attachmentBytes', 'analysisTokens']);
+    const integerMetrics = new Set(['platforms', 'queries', 'queriesPerPlatform', 'pages', 'details', 'attachmentBytes', 'analysisTokens', 'sourceRequests']);
     const metricFields = [...integerMetrics, 'durationMs'];
     for (const field of metricFields) {
       if (!Object.prototype.hasOwnProperty.call(usage, field)) continue;
@@ -209,7 +222,9 @@
       details: Number(current.details || 0) + Number(usage.details || 0),
       durationMs: Number(current.durationMs || 0) + Number(usage.durationMs || 0),
       attachmentBytes: Number(current.attachmentBytes || 0) + Number(usage.attachmentBytes || 0),
-      analysisTokens: Number(current.analysisTokens || 0) + Number(usage.analysisTokens || 0)
+      analysisTokens: Number(current.analysisTokens || 0) + Number(usage.analysisTokens || 0),
+      analysisTokensEstimated: Boolean(current.analysisTokensEstimated || usage.analysisTokensEstimated),
+      sourceRequests: Number(current.sourceRequests || 0) + Number(usage.sourceRequests || 0)
     };
     if (platform && queryCount) nextUsage.queriesByPlatform[platform] = Number(nextUsage.queriesByPlatform[platform] || 0) + queryCount;
     for (const [name, count] of queryMapEntries) {
@@ -221,7 +236,8 @@
       [nextUsage.details, budget.maxDetails, '详情数'],
       [nextUsage.durationMs, budget.maxDurationMs, '执行时间'],
       [nextUsage.attachmentBytes, budget.maxAttachmentBytes, '附件大小'],
-      [nextUsage.analysisTokens, budget.maxAnalysisTokens, '模型分析 token 数']
+      [nextUsage.analysisTokens, budget.maxAnalysisTokens, '模型分析 token 数'],
+      [nextUsage.sourceRequests, budget.maxSourceRequests || 100, '来源出站请求次数']
     ];
     for (const [actual, limit, label] of checks) {
       if (Number.isFinite(Number(actual)) && Number(actual) > Number(limit)) throw budgetError(`${label}超出预算`);
@@ -232,11 +248,82 @@
     return { ...task, usage: nextUsage };
   }
 
+  function reserveDeepReadBudget(task, { details = 0, pages = 0 } = {}) {
+    for (const [name, value] of [["details", details], ["pages", pages]]) {
+      if (!Number.isInteger(value) || value < 0 || value > 1) {
+        throw new TypeError(`${name} 预占数量必须是 0 或 1`);
+      }
+    }
+    return consumeResearchBudget(task, { details, pages });
+  }
+
+  function recoverResearchOperations(task, now = new Date().toISOString()) {
+    const operations = (task.operations || []).map(operation => operation.state === 'running'
+      ? { ...operation, state: 'unknown', updatedAt: now, errorCode: 'INTERRUPTED', errorMessage: '应用退出时操作仍在运行，结果未知；请选择重试或跳过。' }
+      : operation);
+    return { ...task, operations };
+  }
+
+  function chooseResearchOperation(task, operationId, choice, now = new Date().toISOString(), newOperationId = '') {
+    const operations = (task.operations || []).map(operation => {
+      if (operation.operationId !== operationId) return operation;
+      if (!['unknown', 'failed', 'waiting'].includes(operation.state)) throw new Error('只有待恢复或失败的操作可重试或跳过');
+      if (choice === 'skip') return { ...operation, state: 'skipped', updatedAt: now };
+      if (choice !== 'retry') throw new TypeError('操作选择必须是 retry 或 skip');
+      return {
+        ...operation,
+        operationId: newOperationId || operation.operationId,
+        parentOperationId: operation.parentOperationId || operation.operationId,
+        attempt: operation.attempt + 1,
+        state: 'waiting', updatedAt: now, errorCode: '', errorMessage: ''
+      };
+    });
+    if (!operations.some(operation => operation.operationId === operationId || operation.parentOperationId === operationId)) {
+      throw new Error('研究操作不存在');
+    }
+    return { ...task, operations };
+  }
+
+  function settleSourceRequests(task, reserved, usedRequests) {
+    for (const [name, value] of [['reserved', reserved], ['usedRequests', usedRequests]]) {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new TypeError(`${name} 必须是有限的非负安全整数`);
+      }
+    }
+    if (usedRequests > reserved) throw new RangeError('来源实际请求数不能超过预占数');
+    const current = Number(task.usage?.sourceRequests || 0);
+    if (current < reserved) throw new RangeError('来源请求预占数与任务用量不匹配');
+    return {
+      ...task,
+      usage: {
+        ...EMPTY_USAGE(), ...(task.usage || {}),
+        sourceRequests: current - reserved + usedRequests
+      }
+    };
+  }
+
+  function recordAnalysisTokens(task, tokens, { estimated = false } = {}) {
+    assertApproved(task);
+    if (!Number.isSafeInteger(tokens) || tokens < 0) {
+      throw new TypeError('analysisTokens 必须是有限的非负安全整数');
+    }
+    const current = Number(task.usage?.analysisTokens || 0);
+    const total = current + tokens;
+    if (!Number.isSafeInteger(total)) throw new RangeError('累计 analysisTokens 超出安全整数范围');
+    return {
+      ...task,
+      usage: {
+        ...EMPTY_USAGE(), ...(task.usage || {}), analysisTokens: total,
+        analysisTokensEstimated: Boolean(task.usage?.analysisTokensEstimated || estimated)
+      }
+    };
+  }
+
   function decideConnectionMode(platform, connection = {}, preference = 'auto') {
     const choice = ['api', 'browser', 'auto'].includes(preference) ? preference : 'auto';
     if (choice === 'browser') return 'browser';
     const unavailableStatuses = new Set(['not-ready', 'needs-recheck', 'checking', 'failed', 'expired', 'restricted']);
-    const apiAvailable = connection.apiAvailable === true && !unavailableStatuses.has(connection.status);
+    const apiAvailable = connection.apiConfigured === true && !unavailableStatuses.has(connection.status);
     if (choice === 'api') {
       if (!apiAvailable) {
         const error = new Error(`API unavailable: ${platform} 的 API 不可用或尚未准备`);
@@ -250,13 +337,29 @@
 
   function shouldFallbackToBrowser(apiResult = {}, capability = {}) {
     if (capability.preference && capability.preference !== 'auto') return false;
-    if (apiResult.ok === false || apiResult.error) return true;
-    const results = Array.isArray(apiResult) ? apiResult : Array.isArray(apiResult.results) ? apiResult.results : [];
-    if (!results.length) return true;
-    const minimum = Number(capability.minimumResults ?? capability.minResults ?? 1);
-    if (results.length < minimum) return true;
-    const fields = capability.requiredFields || capability.requiredResultFields || [];
-    return results.some(result => fields.some(field => result[field] === undefined || result[field] === null || result[field] === ''));
+    const code = String(apiResult?.code || apiResult?.errorCode || '').toUpperCase();
+    const category = String(apiResult?.errorCategory || '').toLowerCase();
+    const status = String(apiResult?.status || '').toLowerCase();
+    const message = String(apiResult?.message || apiResult?.error || '').toLowerCase();
+    if (/RATE[_ -]?LIMIT|RESTRICT|CAPTCHA|VERIFICATION|LOGIN|AUTH|PERMISSION|FORBIDDEN|DENIED|SCOPE/.test(code)
+      || ['restricted', 'rate-limited', 'rate_limited', 'captcha', 'manual-verification', 'login-required', 'permission-denied', 'forbidden'].includes(category)
+      || ['restricted', 'rate-limited', 'rate_limited', 'captcha', 'manual-verification', 'login-required', 'permission-denied', 'forbidden'].includes(status)
+      || /rate.?limit|captcha|验证码|登录|login|required|restricted|受限|verification|验证|权限|无权|permission|forbidden|scope/.test(message)) {
+      return false;
+    }
+    const results = Array.isArray(apiResult) ? apiResult : Array.isArray(apiResult?.results) ? apiResult.results : [];
+    const successful = Array.isArray(apiResult) || apiResult?.status === 'ok';
+    if (successful && results.length === 0) return false;
+    if (successful) {
+      const minimum = Number(capability.minimumResults ?? capability.minResults ?? 1);
+      if (results.length < minimum) return true;
+      const fields = capability.requiredFields || capability.requiredResultFields || [];
+      return fields.length > 0 && results.some(result => fields.some(field => result[field] === undefined || result[field] === null || result[field] === ''));
+    }
+    if ((/NOT_CONFIGURED|UNSUPPORTED|INVALID_REQUEST|UNAUTHORIZED/.test(code)
+      && !code.includes('SOCIAL_API_UNSUPPORTED_CAPABILITY'))) return false;
+    if (apiResult?.status === 'ok') return false;
+    return apiResult?.ok === false || Boolean(apiResult?.error) || Boolean(apiResult?.status);
   }
 
   function canRequestSupplementarySearch(task, request = {}) {
@@ -309,6 +412,7 @@
 
   return {
     createResearchPlan,
+    assertDomesticPlatformList,
     approveResearchPlan,
     rejectResearchPlan,
     transitionResearchTask,
@@ -319,6 +423,11 @@
       return { ...task, status: 'searching' };
     },
     consumeResearchBudget,
+    reserveDeepReadBudget,
+    recoverResearchOperations,
+    chooseResearchOperation,
+    settleSourceRequests,
+    recordAnalysisTokens,
     decideConnectionMode,
     shouldFallbackToBrowser,
     canRequestSupplementarySearch

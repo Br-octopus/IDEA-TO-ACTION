@@ -580,28 +580,6 @@ test('只选择启用且适用的基础包条目，并把来源和跳过原因�
   assert.equal(selection.snapshot.entries.some(entry => entry.id === 'rule-revision'), true);
 });
 
-test('选择软著内容包后，文章诊断和定向改写提示词都会带入对应规则与来源', () => {
-  const packId = 'builtin-softcopyright-content';
-  const base = {
-    article: { id: 'softcopyright-article', genre: 'article', goal: '编写软件操作手册', packSelections: [packId] },
-    round: { draft: '用户提供的手册草稿。', feedback: '补充每个功能的实际操作入口。' }
-  };
-  const diagnosis = diagnose(base);
-  const revision = revise(base);
-  for (const prompt of [diagnosis, revision]) {
-    assert.match(prompt, /软著内容 专用提示词/);
-    assert.match(prompt, /功能—证据—手册段落映射/);
-    assert.match(prompt, /步骤写清入口、前置条件、用户动作和可见结果/);
-    assert.match(prompt, /https:\/\/github\.com\/Rodert\/copyright-forge-skill/);
-    assert.match(prompt, /《计算机软件著作权登记办法》/);
-  }
-  assert.match(diagnosis, /不直接改写成稿/);
-  assert.match(revision, /定向改写提示词/);
-
-  const withoutPack = diagnose({ article: { id: 'generic-article', genre: 'article' }, round: { draft: '普通文章' } });
-  assert.doesNotMatch(withoutPack, /软著内容 专用提示词|功能—证据—手册段落映射/);
-});
-
 test('单项停用不进入快照，方法卡按任务适用范围筛选并冻结结构字段', () => {
   const pack = {
     id: 'method-scope-pack', name: '方法卡包', layer: 'core', version: 4,

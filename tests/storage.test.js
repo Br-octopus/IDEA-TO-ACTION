@@ -14,6 +14,7 @@ const {
   confirmCase
 } = require('../prototype/storage.js');
 const { catalog } = require('../prototype/research-catalog.js');
+const { createBackup } = require('../prototype/workspace-backup.js');
 
 function memoryStorage(entries = {}) {
   const values = new Map(Object.entries(entries));
@@ -202,7 +203,6 @@ test('旧状态迁移新增 Agent 集合默认为空，保存时只持久化规�
     promptAgentIndex: [{ content: 'derived index' }]
   });
   const serialized = storage.getItem(STORAGE_KEY);
-
   assert.equal(saved.promptAgentTasks[0].goal, '拆解产品想法');
   assert.equal(JSON.parse(serialized).promptAgentSources[0].absolutePath, undefined);
   assert.equal(serialized.includes('secret'), false);
@@ -273,6 +273,35 @@ test('PPT 场景持久化扩展白名单并丢弃附件原文与凭证', () => {
   assert.equal(serialized.includes('私有附件原文'), false);
   assert.equal(serialized.includes('原文件正文不应保存'), false);
   assert.equal(serialized.includes('drop-me'), false);
+});
+
+test('PPT 反馈附件与标注只持久化安全元数据，丢弃 URI、绝对路径、二进制和未知字段', () => {
+  const storage = memoryStorage();
+  const saved = saveState(storage, {
+    promptAgentTasks: [{
+      id: 'feedback-task', type: 'advance-idea', goal: '验收页面',
+      pptFeedback: {
+        attachments: [{
+          id: 'a1', taskId: 'feedback-task', sourceType: 'folder', mimeType: 'image/png', extension: '.png', contentHash: 'sha256:abc',
+          dataUrl: 'data:image/png;base64,secret-binary', absolutePath: 'C:/private/page.png', binary: [1, 2], apiKey: 'secret'
+        }],
+        annotations: [{
+          id: 'n1', taskId: 'feedback-task', attachmentId: 'a1', contentHash: 'sha256:abc', pageIndex: 0,
+          target: { kind: 'point', x: 0.2, y: 0.3 }, comment: '标题太小', category: 'readability',
+          dataUrl: 'data:image/png;base64,secret-annotation', absolutePath: 'C:/private', unknownSecret: 'do-not-save'
+        }],
+        unknownSensitiveField: 'drop'
+      }
+    }]
+  });
+  const serialized = storage.getItem(STORAGE_KEY);
+  assert.equal(saved.promptAgentTasks[0].pptFeedback.attachments[0].contentHash, 'sha256:abc');
+  const backupSerialized = JSON.stringify(createBackup(saved, { scope: 'workspace' }));
+  assert.equal(saved.promptAgentTasks[0].pptFeedback.annotations[0].comment, '标题太小');
+  for (const sentinel of ['data:image/png', 'secret-binary', 'C:/private', 'unknownSecret', 'do-not-save', 'unknownSensitiveField']) {
+    assert.equal(serialized.includes(sentinel), false, `localStorage 不应包含 ${sentinel}`);
+    assert.equal(backupSerialized.includes(sentinel), false, `备份不应包含 ${sentinel}`);
+  }
 });
 
 test('已保存的知识选择允许在保留公开资料选择时清空', () => {
@@ -885,6 +914,57 @@ test('写作状态迁移补空集合，已保存文章和记忆 JSON 往返保�
   assert.deepEqual(saved.writingMemories, [schema.normalizeWritingMemory(memory)]);
   assert.deepEqual(loadState(store).state, saved);
   assert.deepEqual(saved.promptAgentTasks, []);
+});
+
+test('写作基础包集合迁移、白名单清洗且与文章暂停保存独立', () => {
+  const state = createEmptyState();
+  assert.deepEqual(state.writingPacks, []);
+  assert.deepEqual(state.writingPackSettings, []);
+  assert.deepEqual(migrateState({ writingArticles: [writingSnapshot()] }).writingPacks, []);
+
+  const store = memoryStorage();
+  const pack = {
+    id: 'pack-one', name: '用户包', layer: 'task', version: 1,
+    checks: [{ id: 'check-one', statement: '检查', apiKey: 'secret-marker' }],
+    sources: [{ id: 'source-one', title: '来源', password: 'secret-marker' }],
+    accessToken: 'secret-marker'
+  };
+  const setting = { id: 'builtin-article', enabled: false, password: 'secret-marker' };
+  const saved = saveState(store, {
+    writingArticles: [writingSnapshot('paused-article', false)],
+    writingPacks: [pack], writingPackSettings: [setting]
+  });
+  assert.equal(saved.writingArticles.length, 0);
+  assert.equal(saved.writingPacks[0].checks[0].statement, '检查');
+  assert.equal(saved.writingPacks[0].checks[0].apiKey, undefined);
+  assert.equal(saved.writingPacks[0].sources[0].password, undefined);
+  assert.equal(saved.writingPacks[0].accessToken, undefined);
+  assert.deepEqual(saved.writingPackSettings, [{ id: 'builtin-article', enabled: false, updatedAt: '' }]);
+  assert.equal(JSON.stringify(saved).includes('secret-marker'), false);
+  assert.throws(() => migrateState({
+    writingPackSettings: [{ id: 'same-pack', enabled: true }, { id: 'same-pack', enabled: false }]
+  }), /重复 ID/);
+});
+
+test('基础包非空数据缺 schema 时拒绝，空集合仍可迁移且恢复导入可写入', () => {
+  const context = {};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../prototype/storage.js'), 'utf8'), context);
+  const api = context.ForwardStepStorage;
+  assert.equal(api.migrateState({}).writingPacks.length, 0);
+  const data = { writingPacks: [{ id: 'pack-one', name: '包', layer: 'task', version: 1 }] };
+  const raw = JSON.stringify(data);
+  const store = memoryStorage({ [STORAGE_KEY]: raw });
+  assert.throws(() => api.loadState(store), error => error.code === 'WRITING_SCHEMA_UNAVAILABLE');
+  assert.equal(store.getItem(STORAGE_KEY), raw);
+
+  const restoredStore = memoryStorage();
+  const restored = saveState(restoredStore, {
+    writingArticles: [writingSnapshot('restored-article', false)],
+    writingPacks: data.writingPacks,
+    writingPackSettings: [{ id: 'builtin-article', enabled: false }]
+  }, { restoreWriting: true });
+  assert.equal(restored.writingArticles[0].id, 'restored-article');
+  assert.equal(restored.writingPacks[0].id, 'pack-one');
 });
 
 test('写作保存默认关闭不落盘，关闭后冻结正文轮次风格，显式删除不复活', () => {

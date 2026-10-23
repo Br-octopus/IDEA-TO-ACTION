@@ -49,7 +49,7 @@
             <div class="field"><label class="field-label" for="prompt-agent-type">从哪里开始</label><select id="prompt-agent-type"><option value="advance-idea" ${task?.type === "advance-idea" ? "selected" : ""}>我有个想法，不知道怎么推进</option><option value="optimize-prompt" ${task?.type === "optimize-prompt" ? "selected" : ""}>我有提示词，想检查和优化</option><option value="diagnose-ai-result" ${task?.type === "diagnose-ai-result" ? "selected" : ""}>AI 结果不理想，想知道怎么调整</option></select></div>
             <div class="field"><label class="field-label" for="prompt-agent-target">领域或对象</label><input id="prompt-agent-target" value="${escape(task?.target || "")}" placeholder="例如：公众号文章、学习计划、产品方案"></div>
           </div>
-          <div class="field"><label class="field-label" for="prompt-agent-goal">你想解决什么？</label><textarea id="prompt-agent-goal" placeholder="用你自己的话写就行，例如：这段文章有 AI 味，但我不知道该怎么要求 AI 改。">${escape(task?.goal || "")}</textarea></div>
+          <div class="field"><label class="field-label" for="prompt-agent-goal">你想解决什么？</label><textarea id="prompt-agent-goal" placeholder="用你自己的话写就行，例如：这段文章有 AI 味，但我不知道该怎么要求 AI 改。">${escape(task?.goal || incomingContext?.topic || "")}</textarea></div>
           <div class="social-form-grid">
             <div class="field"><label class="field-label" for="prompt-agent-current">${task?.type === "optimize-prompt" ? "要检查的现有提示词" : task?.type === "diagnose-ai-result" ? "不满意的 AI 结果或片段" : "已有内容或当前情况"}</label><textarea id="prompt-agent-current" maxlength="8000" placeholder="${task?.type === "optimize-prompt" ? "粘贴你现在使用的提示词" : task?.type === "diagnose-ai-result" ? "粘贴 AI 生成的结果或关键片段" : "可粘贴现有材料或补充背景"}">${escape(currentRawInput || task?.currentState || "")}</textarea><small class="social-muted">原文只在本次应用会话中暂存；发送前会显示预览，任务记录只保存摘要。</small></div>
             <div class="field"><label class="field-label" for="prompt-agent-success">怎样算做好？</label><textarea id="prompt-agent-success" placeholder="写下你希望达到的效果，暂时不确定也可以留空">${escape((task?.successCriteria || []).join("\n"))}</textarea></div>
@@ -317,7 +317,9 @@
       persistState({ ...state(), promptAgentSources: sources });
       render();
     }).catch(error => setStatus(`本地授权目录读取失败：${error.message}`));
-    return { render, openTask(id) { taskId = id; render(); },
+    return {
+      render,
+      openTask(id) { taskId = id; render(); },
       applyIncomingContext(context) {
         if (!context || typeof context !== "object") return;
         incomingContext = context;
@@ -327,8 +329,11 @@
         reviewFeedbackDraft = "";
         researchStatusText = "";
         render();
-        setStatus(context.summary ? "已带入研究结果摘要；请补充你想解决的问题后开始梳理。" : "已按独立任务打开；未找到可带入的研究结论。");
-      } };
+        setStatus(context.summary
+          ? "已带入研究报告摘要；请补充任务目标后开始梳理。"
+          : "已按独立任务打开；未找到可带入的研究结论。");
+      }
+    };
   }
   function createPromptAgentScenes({ document, onSceneChange } = {}) {
     const roots = { task: 'prompt-agent-root', writing: 'writing-workbench-root', ppt: 'ppt-scene-root' };

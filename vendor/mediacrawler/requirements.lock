@@ -1,0 +1,20 @@
+# 仅用于裁剪后 MediaCrawler 只读导入闭包；不包含上游全量依赖。
+# 最低运行版本：Python >=3.11，与后续来源管理器的专用 Python 3.11 环境一致。
+# 本锁按 Python 3.11 验证；Python <3.11 还需 exceptiongroup，因此不纳入支持范围。
+# 直接依赖：HTTP、字段转换、小红书签名与独立登录浏览器。
+httpx==0.28.1
+pyhumps==3.8.0
+playwright==1.64.0
+xhshow==0.2.0
+
+# 固定传递依赖（由固定提交的 uv.lock 收敛）。
+anyio==4.9.0
+certifi==2025.6.15
+greenlet==3.5.6
+h11==0.16.0
+httpcore==1.0.9
+idna==3.10
+pyee==13.0.0
+pycryptodome==3.23.0
+sniffio==1.3.1
+typing-extensions==4.15.0

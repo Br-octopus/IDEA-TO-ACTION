@@ -17,6 +17,7 @@ function loadBackupHandler({ channel, filePath, fsModule = fs, importCanceled = 
     isPackaged: false,
     whenReady: () => Promise.resolve(),
     getPath: () => path.dirname(filePath),
+    getAppPath: () => root,
     on: () => {},
     quit: () => {}
   };
@@ -400,9 +401,20 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
   const expectedChannels = [
     'config:get', 'config:save', 'model:request', 'search:request',
     'backup:export', 'backup:import', 'backup:list', 'backup:read',
+    'backup:commit-import', 'backup:discard-import', 'backup:finalize-import',
+    'backup:recover-imports', 'backup:rollback-import',
     'social:list-platforms', 'social:get-status', 'social:open-login', 'social:check', 'social:search',
     'social:fetch-detail', 'social:capture-evidence', 'social:close', 'social:clear-profile',
+    'social-source:cancel', 'social-source:check-environment', 'social-source:diagnostics',
+    'social-source:list', 'social-source:open-login', 'social-source:prepare', 'social-source:research:begin',
+    'social-source:research:end', 'social-source:run', 'social-source:stop-profile', 'social-source:uninstall',
+    'social-source:version:activate', 'social-source:version:cleanup', 'social-source:version:prepare',
+    'social-source:version:rollback', 'social-source:versions:list',
     'research:save-attachment', 'research:read-attachment', 'research:delete-attachment',
+    'ppt-feedback:choose-file', 'ppt-feedback:list-attachments', 'ppt-feedback:open-preview',
+    'ppt-feedback:close-preview', 'ppt-feedback:delete-attachment', 'ppt-feedback:save-annotation',
+    'ppt-source:select-file', 'ppt-source:select-directory', 'ppt-source:list-directory',
+    'ppt-source:read', 'ppt-source:cancel',
     'prompt-agent-sources:select-directory', 'prompt-agent-sources:list-authorized',
     'prompt-agent-sources:refresh-index', 'prompt-agent-sources:search-index',
     'prompt-agent-sources:set-authorization-enabled', 'prompt-agent-sources:remove-authorization'
@@ -428,6 +440,7 @@ test('Electron 初始化和窗口加载失败会显示错误并退出', async ()
       isPackaged: false,
       whenReady: () => readyPromise,
       getPath: () => root,
+      getAppPath: () => root,
       on: () => {},
       quit: () => events.push('quit')
     };
