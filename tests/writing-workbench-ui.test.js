@@ -1,9 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createWritingDOM } = require('./helpers/writing-dom.js');
+const { createWritingApp } = require('./helpers/writing-app.js');
 const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
 const storage = require('../prototype/storage.js');
 const { createWritingWorkbenchUI } = require('../prototype/writing-workbench-ui.js');
+const writingPackCatalog = require('../prototype/writing-pack-catalog.js');
 
 test('UMD界面从schema配置读取名称、目标标签、维度和说明，选择维度实际进入诊断', async () => {
   const vm = require('node:vm');
@@ -32,22 +34,201 @@ test('UMD界面从schema配置读取名称、目标标签、维度和说明，�
   assert.ok(!dom.node('writing-diagnosis').value.includes('语言表达：'));
 });
 
+test('材料卡显示自动选材理由并允许用户排除本轮不采用的材料', async () => {
+  const app = fixture();
+  await app.click('add-material');
+  await app.input('writing-material-0-title', '预算记录');
+  await app.input('writing-material-0-excerpt', '项目预算依据为公开报价。');
+  app.ui.render();
+  assert.match(app.mount.innerHTML, /系统按当前任务文本匹配|材料数量未超过上限|没有找到明确关键词匹配/);
+  await app.change('writing-material-0-selection', false);
+  await app.input('writing-goal', '核对预算依据');
+  await app.click('create');
+  const article = app.coordinator.listArticles()[0];
+  const round = app.coordinator.getWorkspace(article.id).rounds[0];
+  assert.equal(round.materials[0].selectedForPrompt, false);
+  assert.doesNotMatch(round.prompt, /项目预算依据为公开报价/);
+});
+
 function fixture(options = {}) {
   const dom = createWritingDOM();
-  let state = storage.createEmptyState();
+  let state = options.initialState || storage.createEmptyState();
   const disk = new Map();
   let failSave = false;
   let requests = 0;
   const copied = [];
+  const writingPacks = options.writingPacks || [];
   const coordinator = createWritingWorkbenchCoordinator({
     getState: () => state,
     persistState(next) { if (failSave) throw new Error('磁盘已满'); state = storage.saveState({ getItem: key => disk.get(key), setItem: (key, value) => disk.set(key, value) }, next); return state; },
+    writingPacks,
     requestModel: async payload => { requests++; return options.requestModel ? options.requestModel(payload) : '模型诊断'; },
     promptAgentCoordinator: options.promptAgentCoordinator || { selectMaterials: async () => [{ id: 'local-1', title: '本地资料', excerpt: '来源事实', location: 'https://example.test/source' }] }
   });
-  const ui = createWritingWorkbenchUI({ document: dom.document, coordinator, getState: () => state, copyText: async text => copied.push(text), confirm: options.confirm || (() => true) });
+  const packUI = writingPacks.length ? {
+    getAvailablePacks: () => writingPacks,
+    getSelection: () => ({ selectedIds: writingPacks.map(pack => pack.id) }),
+    renderManager: () => '', connectWorkbenchRenderer() {}, handle() {}
+  } : undefined;
+  const ui = createWritingWorkbenchUI({ document: dom.document, coordinator, packUI, getState: () => state, desktopApi: options.desktopApi,
+    fetch: options.fetch, copyText: async text => copied.push(text), downloadText: options.downloadText,
+    confirm: options.confirm || (() => true), saveMaterialToLibrary: options.saveMaterialToLibrary });
   return { ...dom, ui, coordinator, copied, get state() { return state; }, get requests() { return requests; }, set failSave(value) { failSave = value; } };
 }
+
+test('写作工作台按四步显示内容，并在新建和回带成功后自动前进', async () => {
+  const f = fixture();
+  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-1"/);
+  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-2" hidden/);
+  assert.match(f.mount.innerHTML, /data-stage="2" disabled/);
+
+  const id = await create(f, '向导文章', '初稿');
+  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-2"/);
+  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-2" hidden/);
+  await f.click('wizard-stage', { stage: '1' });
+  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-1" hidden/);
+  await f.click('wizard-stage', { stage: '3' });
+  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-3" hidden/);
+  await f.click('wizard-stage', { stage: '4' });
+  await f.input('writing-new-draft', '带回的新稿');
+  await f.click('append');
+  assert.match(f.mount.innerHTML, /id="writing-wizard-stage-3"/);
+  assert.doesNotMatch(f.mount.innerHTML, /id="writing-wizard-stage-3" hidden/);
+  assert.match(f.mount.innerHTML, /id="writing-advanced"/);
+  assert.ok(f.coordinator.getWorkspace(id).rounds.length >= 2);
+});
+
+test('通用核心包可在普通文章任务中选择并进入实际提示词', async () => {
+  const app = createWritingApp();
+  await app.settle();
+  await app.packCoordinator.createPack({
+    id: 'shared-core-writing-rules', name: '通用写作规则', layer: 'core',
+    checks: [{ id: 'core-rule', statement: '通用核心规则进入提示词' }]
+  });
+  app.window.WritingWorkbenchUIController.render();
+
+  const selection = app.node('writing-pack-selection-shared-core-writing-rules');
+  assert.ok(selection, '核心层包显示在普通文章选择区');
+  await app.change('writing-pack-selection-shared-core-writing-rules', true);
+  await app.input('writing-goal', '验证核心层包消费');
+  await app.input('writing-draft', '这是一段验收初稿。');
+  await app.click('create');
+  await app.settle();
+
+  const article = app.coordinator.getWorkspace(app.coordinator.listArticles()[0].id);
+  assert.deepEqual(article.article.packSelections, ['builtin-writing-core', 'shared-core-writing-rules']);
+  assert.match(article.rounds[0].prompt, /通用核心规则进入提示词/);
+});
+
+test('软著内容包在普通文章中可选，且不会自动用于无关文章', () => {
+  const packs = writingPackCatalog.getBuiltinWritingPacks();
+  const f = fixture({ writingPacks: packs });
+  const checkbox = f.node('writing-pack-selection-builtin-softcopyright-content');
+  assert.ok(checkbox, '软著内容包显示在专业基础包选择区');
+  assert.equal(checkbox.checked, false, '普通文章默认不自动套用软著规则');
+  assert.match(f.mount.innerHTML, /软著内容/);
+});
+
+test('写作工作台可预览资料库全量范围、确认覆盖并完成一批外部处理', async () => {
+  const initialState = storage.createEmptyState();
+  initialState.knowledgeEntries = [
+    { id: 'knowledge-a', title: '材料甲', summary: '甲材料的完整摘要。', updatedAt: 'v1' },
+    { id: 'knowledge-b', title: '材料乙', contentExcerpt: '乙材料的可用摘录。', updatedAt: 'v2' }
+  ];
+  const f = fixture({ initialState });
+  await f.input('writing-title', '资料覆盖项目');
+  await f.input('writing-goal', '逐项处理完整资料范围');
+  await f.click('create');
+  await f.change('writing-save', true);
+  await f.click('coverage-preview-library');
+  assert.match(f.mount.innerHTML, /发现 2 项 · 枚举完整/);
+  assert.match(f.mount.innerHTML, /材料甲/);
+  assert.match(f.mount.innerHTML, /材料乙/);
+  await f.change('writing-coverage-include-library:knowledge-b', false);
+  await f.click('coverage-confirm-range');
+  assert.match(f.mount.innerHTML, /待处理 1/);
+  assert.match(f.mount.innerHTML, /排除 1/);
+  await f.click('coverage-start-batch');
+  assert.match(f.mount.innerHTML, /当前批次提示词/);
+  assert.equal(f.copied.length, 0, '生成提示词不能伪装成复制或外部处理');
+  const articleId = f.coordinator.listArticles()[0].id;
+  const batch = f.coordinator.getWorkspace(articleId).materialCoverage.batches[0];
+  assert.deepEqual(batch.itemIds, ['library:knowledge-a']);
+  await f.click('coverage-copy-batch');
+  assert.equal(f.copied.length, 1);
+  assert.equal(f.coordinator.getWorkspace(articleId).rounds[0].promptVersions.find(version => version.id === batch.promptVersionId).copied, true);
+  await f.input(`writing-coverage-result-${batch.id}`, '两条资料均已逐项阅读并汇总。');
+  await f.click(`coverage-return`);
+  assert.match(f.mount.innerHTML, /已带回 1/);
+  await f.input(`writing-coverage-confirmation-${batch.id}`, '已核对外部结果覆盖两条材料');
+  await f.click('coverage-confirm');
+  assert.match(f.mount.innerHTML, /已完成 1/);
+  assert.match(f.mount.innerHTML, /覆盖率 50%/);
+  assert.equal(f.state.writingArticles.find(item => item.id === articleId).materialCoverage.items[0].status, 'processed');
+});
+
+test('授权目录覆盖只纳入筛选子目录，并在生成批次前重新读取来源版本', async () => {
+  const initialState = storage.createEmptyState();
+  initialState.promptAgentSources = [{ id: 'grant-a', label: '合成目录', enabled: true }];
+  let fingerprint = 'v1';
+  let refreshes = 0;
+  const desktopApi = { promptAgentSources: { async refreshIndex() {
+    refreshes++;
+    return { inventoryComplete: true, inventory: [
+      { id: 'notes/one.md', relativePath: 'notes/one.md', title: '目录甲', status: 'indexed' },
+      { id: 'other/two.md', relativePath: 'other/two.md', title: '目录乙', status: 'indexed' }
+    ], files: [
+      { id: 'notes/one.md', relativePath: 'notes/one.md', title: '目录甲', fingerprint, excerpt: '甲摘录' },
+      { id: 'other/two.md', relativePath: 'other/two.md', title: '目录乙', fingerprint: 'other-v1', excerpt: '乙摘录' }
+    ], traversalErrors: [] };
+  } } };
+  const f = fixture({ initialState, desktopApi });
+  await f.input('writing-title', '授权目录覆盖项目');
+  await f.input('writing-goal', '只处理选定子目录');
+  await f.click('create');
+  await f.input('writing-coverage-directory-filter', 'notes');
+  await f.click('coverage-preview-directory', { sourceId: 'grant-a' });
+  assert.match(f.mount.innerHTML, /发现 1 项 · 枚举完整/);
+  assert.match(f.mount.innerHTML, /目录甲/);
+  assert.doesNotMatch(f.mount.innerHTML, /目录乙/);
+  await f.click('coverage-confirm-range');
+  fingerprint = 'v2';
+  await f.click('coverage-start-batch');
+  assert.equal(refreshes, 2, '批次启动前必须重新检查授权目录来源');
+  assert.match(f.mount.innerHTML, /版本已变化/);
+  assert.equal(f.coordinator.getWorkspace(f.coordinator.listArticles()[0].id).materialCoverage.items[0].status, 'pending');
+});
+
+test('长篇研究文章可为章节保存摘要和前后章节关系', async () => {
+  const f = fixture();
+  await f.input('writing-title', '跨章节研究文章');
+  await f.input('writing-genre', 'longform-research-article');
+  await f.input('writing-goal', '解释研究问题并追踪证据');
+  await f.click('create');
+  const id = f.coordinator.listArticles().at(-1).id;
+
+  assert.ok(f.node('writing-unit-summary'), '新增章节表单提供摘要字段');
+  assert.ok(f.node('writing-unit-prior-unit-ids'), '新增章节表单提供前序章节字段');
+  assert.ok(f.node('writing-unit-next-unit-ids'), '新增章节表单提供后续章节字段');
+  await f.input('writing-unit-title', '第二节：证据分析');
+  await f.input('writing-unit-summary', '比较两组证据的适用范围');
+  await f.input('writing-unit-prior-unit-ids', '第一节ID');
+  await f.input('writing-unit-next-unit-ids', '第三节ID');
+  await f.click('add-unit');
+
+  let units = f.coordinator.getWorkspace(id).units;
+  assert.equal(units[0].summary, '比较两组证据的适用范围');
+  assert.deepEqual(units[0].priorUnitIds, ['第一节ID']);
+  assert.deepEqual(units[0].nextUnitIds, ['第三节ID']);
+
+  await f.input(`writing-unit-${units[0].id}-summary`, '修订后的证据范围摘要');
+  await f.input(`writing-unit-${units[0].id}-priorUnitIds`, '第一节ID, 引言ID');
+  await f.click(`update-unit`, { unitId: units[0].id });
+  units = f.coordinator.getWorkspace(id).units;
+  assert.equal(units[0].summary, '修订后的证据范围摘要');
+  assert.deepEqual(units[0].priorUnitIds, ['第一节ID', '引言ID']);
+});
+
 async function create(f, title = '文章甲', draft = '众所周知，这个产品非常重要。') {
   await f.input('writing-title', title);
   await f.input('writing-goal', '向新读者解释产品');
@@ -215,6 +396,19 @@ test('同一表单离线新建与继续回带，更新目标不增加轮次，�
   assert.equal(f.state.writingMemories.length, 0);
 });
 
+test('写作记忆可限定到当前项目并在界面明确显示范围', async () => {
+  const f = fixture();
+  const id = await create(f, '项目记忆范围');
+  assert.match(f.mount.innerHTML, /仅当前项目/);
+  await f.change('writing-memory-scope', 'project');
+  await f.input('writing-preference', '本项目统一使用守门人称谓');
+  await f.click('remember');
+  const memory = f.state.writingMemories[0];
+  assert.equal(memory.scope, 'project');
+  assert.equal(memory.projectId, id);
+  assert.ok(f.coordinator.getRelevantMemories('article', id).some(item => item.id === memory.id));
+});
+
 test('切篇、回看只读轮次及重复渲染保留各篇未提交输入', async () => {
   const f = fixture();
   const a = await create(f);
@@ -233,6 +427,253 @@ test('切篇、回看只读轮次及重复渲染保留各篇未提交输入', as
   assert.equal(f.node('writing-feedback').value, '甲反馈');
   await f.change('writing-article-list', b);
   assert.equal(f.node('writing-new-draft').value, '乙未提交');
+});
+
+test('真实工作台可保存和复制提示词版本、关联带回稿、比较历史并从旧轮继续', async () => {
+  const f = fixture();
+  const id = await create(f, '版本与分支验收', '第一轮稿');
+  await f.change('writing-save', true);
+  const first = f.coordinator.getRounds(id)[0];
+
+  await f.input('writing-prompt', '用户编辑的第一版提示词');
+  await f.click('save-prompt-version');
+  await f.input('writing-prompt', '用户确认复制的第二版提示词');
+  await f.click('copy-prompt');
+  const versions = f.coordinator.readRound(id, first.id).promptVersions;
+  const saved = versions.at(-2);
+  const copied = versions.at(-1);
+  assert.equal(saved.content, '用户编辑的第一版提示词');
+  assert.equal(saved.copied, false);
+  assert.equal(copied.content, '用户确认复制的第二版提示词');
+  assert.equal(copied.copied, true);
+  assert.equal(copied.parentVersionId, saved.id);
+
+  await f.input('writing-new-draft', '第二轮结果');
+  await f.change('writing-source-prompt-version', copied.id);
+  await f.click('append');
+  assert.equal(f.coordinator.getRounds(id)[1].sourcePromptVersionId, copied.id);
+  await f.input('writing-new-draft', '第三轮结果');
+  await f.click('append');
+
+  await f.click('round', { roundId: first.id });
+  await f.change('writing-history-compare', f.coordinator.getRounds(id)[2].id);
+  assert.match(f.mount.innerHTML, /writing-history-comparison/);
+  assert.match(f.mount.innerHTML, /第一轮稿/);
+  assert.match(f.mount.innerHTML, /第三轮结果/);
+
+  await f.click('continue-from-round', { roundId: first.id });
+  const rounds = f.coordinator.getRounds(id);
+  assert.equal(rounds.length, 4);
+  assert.equal(rounds[1].draft, '第二轮结果');
+  assert.equal(rounds[2].draft, '第三轮结果');
+  assert.equal(rounds[3].draft, '第一轮稿');
+  assert.equal(rounds[3].parentRoundId, first.id);
+  assert.equal(rounds[3].restoredFromRoundId, first.id);
+});
+
+test('接近历史提醒阈值时提示导出且导出完整本轮提示词版本', async () => {
+  let downloaded;
+  const f = fixture({ downloadText: (filename, content) => { downloaded = { filename, content }; } });
+  const id = await create(f, '提示词历史导出', '第一轮稿');
+  const round = f.coordinator.getRounds(id)[0];
+  for (let index = 0; index < 79; index++) {
+    await f.coordinator.recordPromptVersion(id, round.id, `历史提示词${index}`);
+  }
+  f.ui.render();
+  assert.match(f.mount.innerHTML, /历史已接近100条/);
+  await f.click('export-prompt-history');
+  const exported = JSON.parse(downloaded.content);
+  assert.match(downloaded.filename, /writing-prompt-history/);
+  assert.equal(exported.promptVersions.length, 80);
+  assert.equal(exported.promptVersions[0].content, round.prompt);
+  assert.equal(exported.promptVersions.at(-1).content, '历史提示词78');
+  assert.match(f.mount.innerHTML, /已导出本轮80条提示词版本/);
+});
+
+test('未写入当前轮次的新材料不提供立即应用范围操作', async () => {
+  const f = fixture();
+  await create(f, '延迟加入材料', '全文原稿');
+  await f.click('add-material');
+  await f.input('writing-material-0-title', '稍后进入轮次的材料');
+  await f.input('writing-material-0-excerpt', '仅在下一轮保存的内容');
+  await f.input('writing-unit-title', '第一章');
+  await f.click('add-unit');
+
+  const applyButtons = f.mount.querySelectorAll('[data-writing-action="apply-material-units"]');
+  assert.equal(applyButtons.length, 1);
+  assert.equal(applyButtons[0].disabled, true);
+});
+
+test('真实工作台可创建任务单元、关联材料并让选中单元约束下一轮提示词', async () => {
+  const f = fixture();
+  await f.click('add-material');
+  await f.input('writing-material-0-title', '第一章材料');
+  await f.input('writing-material-0-excerpt', '第一章证据哨兵');
+  await f.click('add-material');
+  await f.input('writing-material-1-title', '第二章材料');
+  await f.input('writing-material-1-excerpt', '第二章排除哨兵');
+  const id = await create(f, '单元和材料范围', '全文原稿');
+
+  await f.input('writing-unit-title', '第一章');
+  await f.input('writing-unit-goal', '解释第一章目标');
+  await f.input('writing-unit-criteria', '第一章完成标准');
+  await f.click('add-unit');
+  await f.input('writing-unit-title', '第二章');
+  await f.input('writing-unit-goal', '解释第二章目标');
+  await f.click('add-unit');
+  const units = f.coordinator.getWorkspace(id).units;
+  await f.change(`writing-material-0-unit-${units[0].id}`, true);
+  await f.click('apply-material-units', { index: '0' });
+  await f.change(`writing-material-1-unit-${units[1].id}`, true);
+  await f.click('apply-material-units', { index: '1' });
+  await f.change('writing-unit-selection', units[0].id);
+  await f.input('writing-new-draft', '第一章具体稿件');
+  await f.click('append');
+
+  const round = f.coordinator.getRounds(id).at(-1);
+  assert.equal(round.unitId, units[0].id);
+  assert.equal(round.unitSnapshot.goal, '解释第一章目标');
+  assert.match(round.prompt, /第一章证据哨兵/);
+  assert.doesNotMatch(round.prompt, /第二章排除哨兵/);
+  assert.match(round.prompt, /未采用/);
+});
+
+test('长篇连续性表单可新增并编辑单元摘要和前后序单元 ID', async () => {
+  const f = createWritingApp();
+  await f.settle();
+  await f.change('writing-genre', 'fiction');
+  await f.input('writing-title', '单元连续性资料');
+  await f.click('create');
+  await f.settle();
+  const articleId = f.coordinator.listArticles()[0].id;
+
+  for (const id of ['writing-unit-summary', 'writing-unit-prior-unit-ids', 'writing-unit-next-unit-ids']) {
+    assert.ok(f.node(id), `新增单元表单应显示 ${id}`);
+  }
+  await f.input('writing-unit-title', '第二章');
+  await f.input('writing-unit-summary', '新增时填写的用户摘要');
+  await f.input('writing-unit-prior-unit-ids', 'chapter-1, chapter-0');
+  await f.input('writing-unit-next-unit-ids', 'chapter-3');
+  await f.click('add-unit');
+  await f.settle();
+
+  let unit = f.coordinator.getWorkspace(articleId).units[0];
+  assert.equal(unit.summary, '新增时填写的用户摘要');
+  assert.deepEqual(unit.priorUnitIds, ['chapter-1', 'chapter-0']);
+  assert.deepEqual(unit.nextUnitIds, ['chapter-3']);
+  for (const suffix of ['summary', 'priorUnitIds', 'nextUnitIds']) {
+    assert.ok(f.node(`writing-unit-${unit.id}-${suffix}`), `已有单元编辑表单应显示 ${suffix}`);
+  }
+
+  await f.input(`writing-unit-${unit.id}-summary`, '编辑后的用户摘要');
+  await f.input(`writing-unit-${unit.id}-priorUnitIds`, 'chapter-0');
+  await f.input(`writing-unit-${unit.id}-nextUnitIds`, 'chapter-4, chapter-5');
+  await f.click('update-unit', { unitId: unit.id });
+  await f.settle();
+
+  unit = f.coordinator.getWorkspace(articleId).units[0];
+  assert.equal(unit.summary, '编辑后的用户摘要');
+  assert.deepEqual(unit.priorUnitIds, ['chapter-0']);
+  assert.deepEqual(unit.nextUnitIds, ['chapter-4', 'chapter-5']);
+});
+
+test('真实工作台允许手动录入问题并在新轮后显式复核', async () => {
+  const f = fixture();
+  const id = await create(f, '问题复核', '原稿中存在待核对结论');
+  await f.input('writing-issue-excerpt', '样本只覆盖两人');
+  await f.input('writing-issue-observation', '结论写成普遍规律');
+  await f.input('writing-issue-impact', '证据范围小于结论范围');
+  await f.input('writing-issue-evidence', '核对研究方法');
+  await f.input('writing-issue-suggestion', '收窄结论并补充依据');
+  await f.click('add-issue');
+  const issue = f.coordinator.getWorkspace(id).issues[0];
+  assert.equal(issue.status, 'pending-user');
+  assert.equal(issue.judgment, 'candidate');
+  assert.equal(issue.promptVersionId, f.coordinator.getRounds(id)[0].promptVersions.at(-1).id);
+
+  await f.input('writing-new-draft', '补充了样本范围和来源的新稿');
+  await f.click('append');
+  const nextRound = f.coordinator.getRounds(id).at(-1);
+  await f.change(`writing-issue-${issue.id}-status`, 'review-passed');
+  await f.change(`writing-issue-${issue.id}-review-round`, nextRound.id);
+  assert.equal(f.node(`writing-issue-${issue.id}-status`).value, 'review-passed');
+  assert.equal(f.node(`writing-issue-${issue.id}-review-round`).value, nextRound.id);
+  await f.input(`writing-issue-${issue.id}-reason`, '新稿已补充可定位来源');
+  await f.click('update-issue', { issueId: issue.id });
+  const reviewed = f.coordinator.getWorkspace(id).issues[0];
+  assert.equal(reviewed.status, 'review-passed', f.mount.innerHTML.match(/id="writing-error"[^>]*>([^<]*)</)?.[1] || '状态未写入');
+  assert.equal(reviewed.roundId, issue.roundId);
+  assert.equal(reviewed.reviewedRoundId, nextRound.id, f.mount.innerHTML.match(/id="writing-error"[^>]*>([^<]*)</)?.[1] || '复核轮次未写入');
+  assert.equal(reviewed.status, 'review-passed');
+  assert.equal(reviewed.statusReason, '新稿已补充可定位来源');
+});
+
+test('手动新增问题可关联结果实际使用的上一轮提示词版本', async () => {
+  const f = fixture();
+  const id = await create(f, '跨轮提示词问题关联', '待检查稿件');
+  const sourcePromptVersionId = f.coordinator.getRounds(id)[0].promptVersions.at(-1).id;
+  await f.change('writing-source-prompt-version', sourcePromptVersionId);
+  await f.input('writing-new-draft', '由第一轮提示词生成的模拟结果');
+  await f.click('append');
+
+  const resultRound = f.coordinator.getRounds(id).at(-1);
+  assert.equal(resultRound.sourcePromptVersionId, sourcePromptVersionId);
+  await f.input('writing-issue-excerpt', '待核查摘录');
+  await f.input('writing-issue-observation', '当前结果缺少对应来源');
+  await f.input('writing-issue-impact', '结论可能超出可见证据');
+  await f.input('writing-issue-evidence', '只使用合成验收输入');
+  await f.click('add-issue');
+
+  const issue = f.coordinator.getWorkspace(id).issues[0];
+  assert.equal(issue.roundId, resultRound.id);
+  assert.equal(issue.promptVersionId, sourcePromptVersionId);
+});
+
+test('真实工作台显示来源路线并支持受阻退回、重做和显式完成', async () => {
+  const pack = {
+    id: 'ui-route-pack', name: '界面路线包', layer: 'task', genre: 'article', taskType: 'revision', version: 3,
+    enabled: true, checks: [], sources: [{ id: 'route-source', title: '方法来源', verificationStatus: 'source-reviewed' }],
+    routes: [{ id: 'ui-route', title: '材料核对', taskTypes: ['revision'], sourceIds: ['route-source'], verificationStatus: 'source-reviewed', stages: [
+      { id: 'gather', title: '补充材料', inputs: ['原文'], outputs: ['材料记录'], checks: ['来源可定位'], sourceIds: ['route-source'], verificationStatus: 'source-reviewed', skippable: false, returnWhenMissing: [] },
+      { id: 'assess', title: '评估材料', inputs: ['材料记录'], outputs: ['评估结论'], checks: ['结论可追溯'], sourceIds: ['route-source'], verificationStatus: 'source-reviewed', skippable: false, returnWhenMissing: ['补充材料后重做'] }
+    ] }]
+  };
+  const f = fixture({ writingPacks: [pack] });
+  await f.change('writing-pack-selection-ui-route-pack', true);
+  const id = await create(f, '路线界面', '待核对稿件');
+  await f.click('select-writing-route', { routeId: 'ui-route', packId: pack.id });
+  assert.equal(f.document.activeElement?.id, 'writing-route-start-gather');
+  assert.match(f.mount.innerHTML, /当前建议：开始当前步骤/);
+  assert.match(f.mount.innerHTML, /优先理由：这是路线中当前首个未完成步骤/);
+  await f.click('route-start', { stageId: 'gather' });
+  assert.equal(f.document.activeElement?.id, 'writing-route-result');
+  assert.ok(f.mount.innerHTML.indexOf('id="writing-route-result"') < f.mount.innerHTML.indexOf('id="writing-route-evidence"'));
+  assert.ok(f.mount.innerHTML.indexOf('id="writing-route-evidence"') < f.mount.innerHTML.indexOf('id="writing-route-complete-gather"'));
+  await f.input('writing-route-result', '材料记录已整理');
+  await f.input('writing-route-evidence', '内部材料表');
+  await f.click('route-complete', { stageId: 'gather' });
+  assert.equal(f.document.activeElement?.id, 'writing-route-start-assess');
+  await f.click('route-start', { stageId: 'assess' });
+  await f.input('writing-route-block-reason', '缺少一份来源');
+  await f.change('writing-route-return', 'gather');
+  await f.click('route-block', { stageId: 'assess' });
+
+  assert.equal(f.coordinator.getWorkspace(id).routeProgress.currentStageId, 'gather');
+  await f.click('route-start', { stageId: 'gather' });
+  await f.input('writing-route-result', '补充来源后的材料记录');
+  await f.input('writing-route-evidence', '新增来源定位');
+  await f.click('route-complete', { stageId: 'gather' });
+  await f.click('route-start', { stageId: 'assess' });
+  await f.input('writing-route-result', '结论已回链到来源');
+  await f.input('writing-route-evidence', '来源核验记录');
+  await f.click('route-complete', { stageId: 'assess' });
+
+  const route = f.coordinator.getWorkspace(id).routeProgress;
+  assert.equal(route.stages[0].status, 'user-confirmed-complete');
+  assert.equal(route.stages[1].status, 'user-confirmed-complete');
+  assert.equal(route.stages[1].verificationStatus, 'source-reviewed');
+  assert.equal(route.stages[1].evidence, '来源核验记录');
+  assert.match(f.coordinator.getRounds(id).at(-1).prompt, /材料核对/);
 });
 
 test('保存失败不误报，暂停后旧历史冻结，删除取消保留整篇', async () => {
@@ -301,22 +742,23 @@ test('编辑复制提示词，模型失败保留诊断和输入，迟到结果�
   assert.match(f.mount.innerHTML, /模型不可用/);
 });
 
-test('应用真实接线：旧文章别名进入单写作root，场景隔离且面包屑正确', async () => {
+test('文章改写进入独立页面，提示词 Agent 保持独立且两个工作台互不嵌套', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp();
   assert.ok(f.coordinator, '应用需要实际创建写作协调器');
   await f.event('nav-article');
-  assert.equal(f.mount.hidden, false);
-  assert.equal(f.element('ppt-scene-root').hidden, true);
-  assert.match(f.element('breadcrumb').textContent, /写作工作台/);
-  await f.input('writing-goal', '切场景不丢失');
-  await f.event('scene-ppt');
-  assert.equal(f.mount.hidden, true);
-  assert.equal(f.element('ppt-scene-root').hidden, false);
-  await f.event('scene-writing');
-  assert.equal(f.node('writing-goal').value, '切场景不丢失');
+  assert.match(f.element('breadcrumb').textContent, /文章改写/);
+  assert.doesNotMatch(f.element('breadcrumb').textContent, /提示词 Agent/);
+  assert.match(f.pageHTML, /id="view-article"[\s\S]*?id="writing-workbench-root"/);
+  assert.match(f.pageHTML, /id="view-prompt-agent"[\s\S]*?id="prompt-agent-root"/);
+  await f.input('writing-goal', '切页面不丢失');
   await f.event('nav-prompt-agent');
   assert.match(f.element('breadcrumb').textContent, /提示词 Agent/);
+  await f.event('scene-ppt');
+  assert.equal(f.element('ppt-scene-root').hidden, false);
+  await f.event('nav-article');
+  assert.equal(f.node('writing-goal').value, '切页面不丢失');
+  assert.match(f.element('breadcrumb').textContent, /文章改写/);
 });
 
 test('应用真实发送预览确认前零请求，取消保留原诊断，确认才外发', async () => {
@@ -346,6 +788,11 @@ test('失败创建和失败回带可通过精简新稿恢复，完整失败原�
   await create(f, '失败原稿', original);
   const id = f.coordinator.listArticles()[0].id;
   assert.match(f.mount.innerHTML, /超过8000/);
+  assert.match(f.mount.innerHTML, /原稿和材料已保留/);
+  assert.match(f.mount.innerHTML, /正文8001字/);
+  assert.match(f.mount.innerHTML, /适用材料摘录共0字/);
+  assert.match(f.mount.innerHTML, /逐单元生成/);
+  assert.match(f.mount.innerHTML, /未纳入内容不会被标记为已阅读或已审核/);
   assert.equal(f.coordinator.getRounds(id)[0].draft, original);
   await f.input('writing-new-draft', '精简可用稿');
   await f.click('append');
@@ -657,6 +1104,7 @@ test('浏览器未确认安全备份时不能打开选择器或读取导入文�
 test('真实页面资料表单和字段ID唯一，资料类型具有可选默认值', () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp();
+  assert.match(f.mount.innerHTML, /id="writing-material-files" type="file" aria-label="导入写作参考材料"/);
   const ids = [...f.pageHTML.matchAll(/\bid="(knowledge-entry-[^"]+)"/g)].map(match => match[1]);
   assert.equal(f.knowledgeForms.length, 1, '必须只有一个可操作的资料表单');
   assert.equal(new Set(ids).size, ids.length, '资料字段ID不得重复');
@@ -716,6 +1164,400 @@ test('完整工作区合并空备份及新增文章保留未保存会话和未�
   assert.equal(f.coordinator.getWorkspace(importedId).article.title, '备份文章');
 });
 
+test('普通文本文件进入本轮提示词并明确标记截取范围', async () => {
+  const f = fixture();
+  await f.change('writing-material-files', [{
+    name: '访谈记录.txt', type: 'text/plain', size: 2400,
+    async text() { return '甲'.repeat(2400); }
+  }]);
+  const id = await create(f, '文件材料验收');
+  const round = f.coordinator.getRounds(id).at(-1);
+  assert.equal(round.materials[0].title, '访谈记录.txt');
+  assert.equal(round.materials[0].contentStatus, 'truncated');
+  assert.equal(round.materials[0].originalLength, 2400);
+  assert.match(round.prompt, /只读取前1200字符，共2400个字符/);
+  assert.match(round.prompt, /甲{20}/);
+});
+
+test('读取材料期间锁定文章提交，完成后材料进入同一首轮提示词', async () => {
+  let finishRead;
+  const f = fixture();
+  const reading = f.change('writing-material-files', [{
+    name: '等待读取.txt', type: 'text/plain', size: 10,
+    text: () => new Promise(resolve => { finishRead = resolve; })
+  }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(f.mount.innerHTML, /正在读取所选材料/);
+  await assert.rejects(f.click('import-material-files'), /操作已禁用：import-material-files/);
+  await assert.rejects(f.click('create'), /操作已禁用：create/);
+  assert.equal(f.coordinator.listArticles().length, 0);
+  finishRead('必须进入首轮的材料');
+  await reading;
+  assert.doesNotMatch(f.mount.innerHTML, /正在读取所选材料/);
+  const id = await create(f, '等待读取完成');
+  assert.match(f.coordinator.getRounds(id)[0].prompt, /必须进入首轮的材料/);
+});
+
+test('PDF 本机解析后可选页摘录，提示词只含选中的未核验摘录', async () => {
+  let request;
+  const f = fixture({ fetch: async (url, options) => {
+    request = { url, options, body: JSON.parse(options.body) };
+    return { ok: true, json: async () => ({
+      status: 'parsed', mimeType: 'application/pdf', method: 'pdf-text', pageCount: 2,
+      extractedCharacters: 1600, truncated: false,
+      segments: [{ locator: '第1页', text: '未选中的背景文字。' }, { locator: '第2页', text: '研究证据句。'.repeat(140) }]
+    }) };
+  } });
+  await f.input('writing-material-link-title', '参考文章');
+  await f.input('writing-material-link-url', 'https://example.test/article');
+  await f.click('add-material-link');
+  await f.change('writing-material-files', [
+    { name: '全文.pdf', type: 'application/pdf', size: 3,
+      async arrayBuffer() { return Uint8Array.from([1, 2, 3]).buffer; } }
+  ]);
+  assert.equal(request.url, '/api/writing-materials/parse');
+  assert.equal(request.body.fileName, '全文.pdf');
+  assert.equal(request.body.mimeType, 'application/pdf');
+  assert.equal(request.body.dataBase64, 'AQID');
+  assert.match(f.mount.innerHTML, /本机解析/);
+  assert.match(f.mount.innerHTML, /第2页/);
+  await f.click('use-material-segment', { index: '1', segmentIndex: '1' });
+  assert.match(f.node('writing-material-1-excerpt').value, /^研究证据句。/);
+  assert.ok(f.node('writing-material-1-excerpt').value.length <= 1200);
+  const id = await create(f, '引用材料验收');
+  const round = f.coordinator.getRounds(id).at(-1);
+  assert.equal(round.sources.length, 1);
+  assert.equal(round.sources[0].url, 'https://example.test/article');
+  assert.equal(round.sources[0].contentStatus, 'reference-only');
+  assert.equal(round.materials.length, 1);
+  assert.equal(round.materials[0].excerptLocator, '第2页');
+  assert.equal(round.materials[0].verificationStatus, 'unverified');
+  assert.equal(round.materials[0].attachmentRequired, true);
+  assert.match(round.prompt, /研究证据句/);
+  assert.doesNotMatch(round.prompt, /未选中的背景文字/);
+  assert.match(round.prompt, /外部 AI/);
+});
+
+test('取消正在等待的本机解析会保留原附件卡片且不采用迟到结果', async () => {
+  const f = fixture({ fetch: (_url, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener('abort', () => { const error = new Error('aborted'); error.name = 'AbortError'; reject(error); }, { once: true });
+  }) });
+  const parsing = f.change('writing-material-files', [{ name: '待取消.pdf', type: 'application/pdf', size: 3,
+    async arrayBuffer() { return Uint8Array.from([1, 2, 3]).buffer; } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(f.mount.innerHTML, /取消读取/);
+  await f.click('cancel-material-parse');
+  await parsing;
+  assert.match(f.mount.innerHTML, /待取消\.pdf/);
+  assert.match(f.mount.innerHTML, /本机解析已取消/);
+  assert.doesNotMatch(f.mount.innerHTML, /parsedSegments/);
+});
+
+test('无效链接不会写入来源，读取失败的文件可见且不冒充已读取', async () => {
+  const f = fixture();
+  await f.input('writing-material-link-url', 'file:///private/notes.txt');
+  await f.click('add-material-link');
+  assert.match(f.mount.innerHTML, /仅支持公开的 HTTP 或 HTTPS 链接/);
+  assert.equal(f.coordinator.listArticles().length, 0);
+  await f.change('writing-material-files', [{
+    name: '读取失败.txt', type: 'text/plain', size: 10,
+    async text() { throw new Error('读取被拒绝'); }
+  }]);
+  assert.match(f.mount.innerHTML, /读取被拒绝/);
+  const id = await create(f, '读取失败验收');
+  const round = f.coordinator.getRounds(id).at(-1);
+  assert.equal(round.materials[0].contentStatus, 'failed');
+  assert.match(round.materials[0].contentError, /读取被拒绝/);
+  assert.match(round.prompt, /读取失败/);
+});
+
+test('未知格式保留为不支持材料卡片并显示失败原因', async () => {
+  const f = fixture();
+  await f.change('writing-material-files', [{ name: '私有资料.xyz', type: 'application/octet-stream', size: 20 }]);
+  assert.match(f.mount.innerHTML, /私有资料\.xyz/);
+  assert.match(f.mount.innerHTML, /暂不支持|不支持/);
+  const id = await create(f, '不支持文件验收');
+  const material = f.coordinator.getRounds(id)[0].materials[0];
+  assert.equal(material.contentStatus, 'unsupported');
+  assert.match(material.contentError, /格式暂不支持/);
+});
+
+test('材料卡片展示来源位置版本和选用理由，仅有摘录的卡片可显式保存到资料库', async () => {
+  const saved = [];
+  const f = fixture({ saveMaterialToLibrary: async material => { saved.push(material); return { id: 'library-material-1' }; } });
+  const workspace = await f.coordinator.createArticle({ draft: '当前稿', sources: [{
+    id: 'local:guides/writing.md', title: '写作指南', excerpt: '可用来源摘录',
+    sourceType: 'authorized-directory', origin: 'authorized-directory',
+    sourceId: 'local:guides/writing.md', sourceLocator: 'guides/writing.md',
+    sourceVersion: `sha256:${'a'.repeat(64)}`, excerptLocator: '第 24 行',
+    selectionReason: '命中当前目标', verificationStatus: 'unverified', contentStatus: 'embedded',
+    attachmentRequired: true
+  }, {
+    id: 'link-only', title: '未读取链接', url: 'https://example.test/private', excerpt: '',
+    sourceType: 'link', contentStatus: 'reference-only', attachmentRequired: true
+  }] });
+  f.ui.openArticle(workspace.id);
+
+  for (const text of ['guides/writing.md', '第 24 行', 'sha256:', '命中当前目标', '原附件需另行提供']) {
+    assert.ok(f.mount.innerHTML.includes(text), `卡片应显示${text}`);
+  }
+  assert.equal((f.mount.innerHTML.match(/data-writing-action="save-material-to-library"/g) || []).length, 1);
+  await f.click('save-material-to-library', { index: '0' });
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].excerpt, '可用来源摘录');
+  assert.equal(saved[0].sourceLocator, 'guides/writing.md');
+  assert.match(f.mount.innerHTML, /已保存到资料库/);
+  assert.equal((f.mount.innerHTML.match(/data-writing-action="save-material-to-library"/g) || []).length, 0);
+});
+
+test('显式保存失败保留当前材料卡片和可见摘录，支持重试', async () => {
+  let fail = true;
+  const f = fixture({ saveMaterialToLibrary: async () => {
+    if (fail) throw new Error('资料库写入失败');
+    return { id: 'saved-after-retry' };
+  } });
+  const workspace = await f.coordinator.createArticle({ draft: '当前稿', materials: [{
+    id: 'manual-excerpt', title: '用户摘录', excerpt: '不可丢失的摘录', purpose: 'content',
+    sourceType: 'pasted-text', origin: 'user-pasted', contentStatus: 'embedded'
+  }] });
+  f.ui.openArticle(workspace.id);
+
+  await f.click('save-material-to-library', { index: '0' });
+  assert.match(f.mount.innerHTML, /资料库写入失败/);
+  assert.match(f.mount.innerHTML, /不可丢失的摘录/);
+  assert.equal(f.coordinator.getRounds(workspace.id)[0].materials[0].excerpt, '不可丢失的摘录');
+
+  fail = false;
+  await f.click('save-material-to-library', { index: '0' });
+  assert.match(f.mount.innerHTML, /已保存到资料库/);
+});
+
+test('D盘应用中显式保存材料只将用户可见摘录写入现有资料库且不要求开启文章保存', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp();
+  await f.change('writing-material-files', [{
+    name: '访谈摘录.txt', type: 'text/plain', size: 18,
+    async text() { return '受访者确认三家客户完成试用'; }
+  }]);
+  await create(f, '显式资料库保存', '本篇草稿');
+  assert.equal(f.state.writingArticles.length, 0, '文章历史默认未保存');
+
+  f.failSave = true;
+  await f.click('save-material-to-library', { index: '0' });
+  assert.equal(f.state.knowledgeEntries.length, 0, '磁盘失败时不得谎报资料入库');
+  assert.match(f.mount.innerHTML, /资料库写入失败/);
+  assert.match(f.mount.innerHTML, /受访者确认三家客户完成试用/);
+
+  f.failSave = false;
+
+  await f.click('save-material-to-library', { index: '0' });
+
+  assert.equal(f.state.knowledgeEntries.length, 1);
+  assert.equal(f.state.knowledgeEntries[0].summary, '受访者确认三家客户完成试用');
+  assert.equal(f.state.knowledgeEntries[0].contentExcerpt, '受访者确认三家客户完成试用');
+  assert.equal(f.state.knowledgeEntries[0].verificationStatus, 'unverified');
+  assert.equal(f.state.writingArticles.length, 0, '仅保存资料不启动文章历史保存');
+  assert.equal(f.diskState.knowledgeEntries[0].contentExcerpt, '受访者确认三家客户完成试用');
+});
+
+test('学术文体可在真实工作台创建并从任务按钮生成带目标要求的提示词', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp({ confirm: () => { throw new Error('支持的学术文体不应要求降级确认'); } });
+  await f.settle();
+  await f.input('writing-genre', 'academic-paper');
+  f.window.WritingWorkbenchUIController.render();
+  assert.match(f.mount.innerHTML, /学术目标与要求/);
+
+  await f.input('writing-title', '教育学位论文');
+  await f.input('writing-goal', '研究生学习体验');
+  await f.input('writing-academic-discipline', '教育学');
+  await f.input('writing-academic-researchType', '观察性研究');
+  await f.input('writing-academic-institution', '示例大学');
+  await f.click('academic-add-requirement');
+  await f.input('writing-academic-requirement-0-title', '学院格式要求');
+  await f.input('writing-academic-requirement-0-text', '结果章节报告研究对象');
+  await f.input('writing-academic-requirement-0-issuer', '研究生院');
+  await f.input('writing-academic-requirement-0-version', '2026版');
+  await f.input('writing-academic-requirement-0-sourceUrl', 'https://example.test/guide');
+  await f.input('writing-draft', '已有访谈材料，尚无统计结果。');
+  await f.click('create');
+  await f.settle();
+
+  const article = f.coordinator.getWorkspace(f.coordinator.listArticles()[0].id);
+  assert.equal(article.article.genre, 'academic-paper');
+  assert.equal(article.article.academicTarget.discipline, '教育学');
+  assert.equal(article.article.academicTarget.requirements[0].text, '结果章节报告研究对象');
+  assert.equal(article.rounds[0].promptVersions.at(-1).taskType, 'academic-planning');
+  for (const task of ['academic-planning', 'academic-outline', 'academic-chapter-draft', 'diagnosis', 'revision']) {
+    assert.match(f.mount.innerHTML, new RegExp(`data-task-type="${task}"`));
+  }
+
+  await f.click('academic-task', { taskType: 'academic-outline' });
+  await f.settle();
+  const updated = f.coordinator.getWorkspace(article.id).rounds[0];
+  assert.equal(updated.promptVersions.at(-1).taskType, 'academic-outline');
+  assert.match(updated.prompt, /结果章节报告研究对象/);
+});
+
+test('结构化文档文体可在真实工作台创建并切换专属任务生成独立提示词', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp({ confirm: () => { throw new Error('受支持文体不应要求降级确认'); } });
+  await f.settle();
+  await f.change('writing-genre', 'technical-document');
+  await f.input('writing-title', '服务运行手册');
+  await f.input('writing-goal', '说明部署前置条件和故障恢复');
+  await f.input('writing-audience', '值班工程师');
+  await f.input('writing-platform', 'Windows Server');
+  await f.input('writing-draft', '部署记录显示端口为4173。');
+  await f.click('create');
+  await f.settle();
+  const id = f.coordinator.listArticles()[0].id;
+  assert.equal(f.coordinator.getWorkspace(id).article.genre, 'technical-document');
+  await f.input('writing-domain-prerequisites', '已获得管理员权限');
+  await f.click('update');
+  await f.settle();
+  assert.match(f.mount.innerHTML, /data-task-type="technical-troubleshooting"/);
+  await f.click('domain-task', { taskType: 'technical-troubleshooting' });
+  await f.settle();
+  const workspace = f.coordinator.getWorkspace(id);
+  const round = workspace.rounds.at(-1);
+  assert.equal(workspace.rounds.length, 2, '切换领域任务保留原轮次并新增任务轮次');
+  assert.equal(round.promptVersions.at(-1).taskType, 'technical-troubleshooting');
+  assert.match(round.prompt, /故障排查/);
+  assert.match(round.prompt, /Windows Server/);
+  assert.match(round.prompt, /前置条件：已获得管理员权限/);
+  assert.match(round.prompt, /不得补造事实/);
+});
+
+test('真实工作台可维护故事设定、关联章节、审查变更影响并按连续性任务生成快照提示词', async () => {
+  const f = createWritingApp();
+  await f.settle();
+  await f.change('writing-genre', 'fiction');
+  await f.input('writing-title', '雾城项目');
+  await f.input('writing-draft', '主人公在午夜进入旧车站。');
+  await f.click('create');
+  await f.settle();
+  const id = f.coordinator.listArticles()[0].id;
+  await f.input('writing-unit-title', '第一章');
+  await f.input('writing-unit-type', 'chapter', 'change');
+  await f.click('add-unit');
+  await f.settle();
+  const unit = f.coordinator.getWorkspace(id).units[0];
+  await f.input('writing-story-canon-name', '旧车站规则');
+  await f.input('writing-story-canon-text', '午夜后不能使用钟表');
+  await f.input('writing-story-canon-units', unit.id);
+  await f.click('add-longform-item', { longformType: 'canon' });
+  await f.settle();
+  const fact = f.coordinator.getWorkspace(id).longform.canon[0];
+  assert.equal(fact.text, '午夜后不能使用钟表');
+  await f.input(`writing-story-item-${fact.id}-value`, '午夜后不能使用钟表，违反者会迷路');
+  await f.input(`writing-story-item-${fact.id}-reason`, '补充故事后果');
+  await f.click('update-longform-item', { longformType: 'canon', itemId: fact.id });
+  await f.settle();
+  let workspace = f.coordinator.getWorkspace(id);
+  const change = workspace.longform.changes[0];
+  assert.ok(change.impacts.some(item => item.id === unit.id));
+  const impactStatusId = `writing-story-impact-status-${change.id}-${unit.id}`;
+  assert.equal(f.node(impactStatusId).value, '', '影响项必须等待用户明确选择，不能默认为已检查');
+  await f.click('review-longform-impact', { changeId: change.id, itemId: unit.id });
+  assert.equal(f.coordinator.getWorkspace(id).longform.changes[0].impacts.find(item => item.id === unit.id).status, 'pending');
+  await f.input(`writing-story-impact-${change.id}-${unit.id}`, '已核对第一章提纲');
+  await f.input(impactStatusId, 'no-change', 'change');
+  await f.click('review-longform-impact', { changeId: change.id, itemId: unit.id });
+  await f.settle();
+  await f.click('domain-task', { taskType: 'longform-continuity' });
+  await f.settle();
+  workspace = f.coordinator.getWorkspace(id);
+  assert.match(workspace.rounds[0].prompt, /旧车站规则/);
+  assert.match(workspace.rounds[0].prompt, /违反者会迷路/);
+  assert.equal(workspace.rounds[0].promptVersions.at(-1).longformSnapshot.canon[0].id, fact.id);
+  assert.equal(workspace.longform.changes[0].impacts.find(item => item.id === unit.id).status, 'no-change');
+  assert.equal(workspace.longform.changes[0].impacts.find(item => item.id === unit.id).reason, '已核对第一章提纲');
+});
+
+test('领域任务按钮先应用未提交字段，长篇资料可归档恢复且影响对象可跳转', async () => {
+  const f = createWritingApp();
+  await f.settle();
+  await f.change('writing-genre', 'business-document');
+  await f.input('writing-title', '商务事实核验');
+  await f.input('writing-draft', '产品有 4 名支持人员；未提供转化率。');
+  await f.click('create');
+  await f.settle();
+  const id = f.coordinator.listArticles()[0].id;
+  await f.input('writing-domain-businessGoal', '比较两种支持排班，不推断销售效果');
+  await f.click('domain-task', { taskType: 'business-proposal' });
+  await f.settle();
+  assert.match(f.coordinator.getWorkspace(id).rounds.at(-1).prompt, /比较两种支持排班/);
+
+  const story = createWritingApp();
+  await story.settle();
+  await story.change('writing-genre', 'fiction');
+  await story.input('writing-title', '归档交互');
+  await story.click('create');
+  await story.settle();
+  const storyId = story.coordinator.listArticles()[0].id;
+  await story.input('writing-unit-title', '第一章');
+  await story.click('add-unit');
+  await story.settle();
+  const unit = story.coordinator.getWorkspace(storyId).units[0];
+  await story.input('writing-story-canon-name', '城门规则');
+  await story.input('writing-story-canon-text', '夜间关闭');
+  await story.input('writing-story-canon-units', unit.id);
+  await story.click('add-longform-item', { longformType: 'canon' });
+  await story.settle();
+  const fact = story.coordinator.getWorkspace(storyId).longform.canon[0];
+  await story.input(`writing-story-item-${fact.id}-value`, '夜间关闭，黎明开启');
+  await story.input(`writing-story-item-${fact.id}-reason`, '设定调整');
+  await story.click('update-longform-item', { longformType: 'canon', itemId: fact.id });
+  await story.settle();
+  assert.ok(story.mount.innerHTML.includes(`href="#writing-unit-${unit.id}"`));
+  await story.click('archive-longform-item', { longformType: 'canon', itemId: fact.id });
+  await story.settle();
+  assert.equal(story.coordinator.getWorkspace(storyId).longform.canon[0].archived, true);
+  await story.click('domain-task', { taskType: 'longform-continuity' });
+  await story.settle();
+  assert.doesNotMatch(story.coordinator.getWorkspace(storyId).rounds.at(-1).prompt, /城门规则|夜间关闭/);
+  await story.click('restore-longform-item', { longformType: 'canon', itemId: fact.id });
+  await story.settle();
+  assert.equal(story.coordinator.getWorkspace(storyId).longform.canon[0].archived, false);
+  await story.click('domain-task', { taskType: 'longform-continuity' });
+  await story.settle();
+  assert.match(story.coordinator.getWorkspace(storyId).rounds.at(-1).prompt, /城门规则/);
+});
+
+test('长篇研究文章领域任务把当前章节材料范围写入新提示词轮次', async () => {
+  const f = fixture();
+  await f.input('writing-title', '分节材料范围');
+  await f.input('writing-genre', 'longform-research-article');
+  await f.input('writing-goal', '按章节范围使用研究材料');
+  await f.click('create');
+  const id = f.coordinator.listArticles()[0].id;
+
+  await f.input('writing-unit-title', '第一节');
+  await f.click('add-unit');
+  const firstUnit = f.coordinator.getWorkspace(id).units[0];
+  await f.input('writing-unit-title', '第二节');
+  await f.click('add-unit');
+  const secondUnit = f.coordinator.getWorkspace(id).units[1];
+
+  await f.click('add-material');
+  await f.input('writing-material-0-title', '第一节来源');
+  await f.input('writing-material-0-excerpt', '第一节专属证据哨兵');
+  await f.change(`writing-material-0-unit-${firstUnit.id}`, true);
+  await f.click('add-material');
+  await f.input('writing-material-1-title', '第二节来源');
+  await f.input('writing-material-1-excerpt', '第二节专属证据哨兵');
+  await f.change(`writing-material-1-unit-${secondUnit.id}`, true);
+  await f.change('writing-unit-selection', secondUnit.id);
+  await f.click('domain-task', { taskType: 'section-plan' });
+
+  const round = f.coordinator.getWorkspace(id).rounds.at(-1);
+  assert.equal(round.unitId, secondUnit.id);
+  assert.equal(round.materials.find(item => item.title === '第二节来源').unitIds[0], secondUnit.id);
+  assert.match(round.prompt, /第二节专属证据哨兵/);
+  assert.doesNotMatch(round.prompt, /第一节专属证据哨兵/);
+});
+
 test('追加第二次真实写入失败仍展示现存新轮，保留回带输入且模型预览对应可见稿', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp();
@@ -749,4 +1591,97 @@ test('追加第二次真实写入失败仍展示现存新轮，保留回带输�
   await pending;
   assert.equal(f.node('writing-draft').value, round.draft);
   assert.equal(f.node('writing-new-draft').value, '新轮正文：客户完成三次试用。');
+});
+
+test('公开网页读取只暂存正文，用户选摘后才进入下一轮提示词', async () => {
+  let requestedUrl = '';
+  const pageText = '已选网页摘录的事实范围。'.repeat(55);
+  const f = fixture({ fetch: async (url, options) => {
+    requestedUrl = url;
+    assert.equal(options.method, 'POST');
+    assert.ok(options.signal);
+    return { ok: true, json: async () => ({ title: '公开页面', finalUrl: 'https://example.test/final', text: pageText,
+      characterCount: pageText.length, truncated: false, incomplete: false }) };
+  } });
+  await f.input('writing-material-link-title', '公开来源');
+  await f.input('writing-material-link-url', 'https://example.test/article?ref=visible');
+  await f.click('add-material-link');
+  const id = await create(f, '网页读取隔离验收');
+  await f.click('read-web-material', { index: '0' });
+  assert.equal(requestedUrl, '/api/writing-materials/read-webpage');
+  assert.match(f.mount.innerHTML, /网页正文（仅当前页面暂存）/);
+  assert.equal(f.node('writing-material-0-excerpt').value, '');
+  assert.equal(f.coordinator.getRounds(id).at(-1).prompt.includes('已选网页摘录的事实范围'), false);
+  await f.click('use-web-segment', { index: '0' });
+  assert.match(f.node('writing-material-0-excerpt').value, /^已选网页摘录/);
+  assert.equal(f.node('writing-material-0-excerpt').value.length, Math.min(1200, pageText.length));
+  await f.input('writing-new-draft', '带回一段待修改的新稿。');
+  await f.click('append');
+  const round = f.coordinator.getRounds(id).at(-1);
+  assert.equal(round.sources[0].sourceType, 'web-text');
+  assert.equal(round.sources[0].verificationStatus, 'unverified');
+  assert.match(round.prompt, /已选网页摘录的事实范围/);
+});
+
+test('公开网页读取失败和取消都保留链接且忽略迟到正文', async () => {
+  const failed = fixture({ fetch: async () => ({ ok: false, json: async () => ({ message: '网页需要登录' }) }) });
+  await failed.input('writing-material-link-url', 'https://example.test/private');
+  await failed.click('add-material-link');
+  await failed.click('read-web-material', { index: '0' });
+  assert.match(failed.mount.innerHTML, /网页需要登录/);
+  assert.match(failed.mount.innerHTML, /example\.test\/private/);
+
+  const cancelled = fixture({ fetch: (_url, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener('abort', () => { const error = new Error('aborted'); error.name = 'AbortError'; reject(error); }, { once: true });
+  }) });
+  await cancelled.input('writing-material-link-url', 'https://example.test/cancel');
+  await cancelled.click('add-material-link');
+  const reading = cancelled.click('read-web-material', { index: '0' });
+  await new Promise(resolve => setImmediate(resolve));
+  await cancelled.click('cancel-material-parse');
+  await reading;
+  assert.match(cancelled.mount.innerHTML, /网页正文尚未读取/);
+  assert.match(cancelled.mount.innerHTML, /example\.test\/cancel/);
+});
+
+test('材料和来源表单可编辑并展示来源元数据且保留未核验状态', async () => {
+  const f = fixture();
+  await f.click('add-material');
+  await f.input('writing-material-0-provider', '发布方哨兵');
+  await f.input('writing-material-0-accessedAt', '2026-10-20');
+  await f.input('writing-material-0-license', '授权说明哨兵');
+  await f.input('writing-material-0-applicability', '适用范围哨兵');
+  await f.input('writing-material-0-limitations', '限制哨兵');
+  assert.equal(f.node('writing-material-0-provider').value, '发布方哨兵');
+  assert.equal(f.node('writing-material-0-provider').attrs['aria-label'], '提供方/发布方');
+
+  await f.input('writing-material-link-url', 'https://example.test/source');
+  await f.click('add-material-link');
+  assert.match(f.mount.innerHTML, /发布方哨兵/);
+  await f.input('writing-material-1-provider', '来源提供方哨兵');
+  await f.input('writing-material-1-accessedAt', '2026-10-21');
+  await f.input('writing-material-1-license', '来源许可哨兵');
+  await f.input('writing-material-1-applicability', '来源适用范围哨兵');
+  await f.input('writing-material-1-limitations', '来源限制哨兵');
+  assert.equal(f.node('writing-material-1-provider').value, '来源提供方哨兵');
+  assert.equal(f.node('writing-material-1-provider').attrs['aria-label'], '提供方/发布方');
+  await f.click('add-material');
+  for (const text of ['来源提供方哨兵', '2026-10-21', '来源许可哨兵', '来源适用范围哨兵', '来源限制哨兵']) {
+    assert.ok(f.mount.innerHTML.includes(text), text);
+  }
+  assert.match(f.mount.innerHTML, /来源核验：未核验/);
+});
+
+test('播客动态领域字段都有明确的可访问名称', async () => {
+  const f = fixture();
+  await f.input('writing-genre', '播客');
+  await f.click('create');
+  for (const [key, label] of Object.entries({
+    format: '单人/多人/采访', speakers: '主持人与嘉宾角色', duration: '目标时长',
+    segments: '段落与提问次序', sources: '引用材料'
+  })) {
+    const control = f.node(`writing-domain-${key}`);
+    assert.ok(control, `${key} 动态字段应渲染`);
+    assert.equal(control.attrs['aria-label'], label, `${key} 应有可访问名称`);
+  }
 });

@@ -1,0 +1,202 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const { readFileSync } = require('node:fs');
+const schema = require('../prototype/writing-pack-schema.js');
+
+const packInput = {
+  id: 'custom-pack', name: '自定义包', layer: 'task', genre: 'article', taskType: 'review', version: 2,
+  builtin: true, basePackId: 'builtin-article', enabled: true,
+  applicability: { tasks: ['review'], languages: ['zh'], exclusions: ['其他文体'], apiKey: 'secret' },
+  clarifications: [{ id: 'q1', question: '目标是什么？', required: true, when: '开始前', credentials: { password: 'secret' } }],
+  materials: [{ id: 'm1', purpose: '背景', required: false, acceptedTypes: ['md'], accessToken: 'secret' }],
+  requirements: [{ id: 'r1', statement: '有依据', sourceIds: ['s1'], verificationStatus: 'source-reviewed' }],
+  methods: [{ id: 'method1', title: '检查', guidance: '逐项检查', applicability: ['review'], sourceIds: ['s1'], verificationStatus: 'case-validated' }],
+  prompts: [{ id: 'p1', taskType: 'review', content: '不要补造事实', sourceIds: ['s1'], verificationStatus: 'unverified' }],
+  structures: [{ id: 'st1', taskType: 'review', sections: ['结论', '依据'] }],
+  style: [{ id: 'style1', statement: '清楚具体', sourceIds: ['s1'], verificationStatus: 'unverified' }],
+  terminology: [{ id: 'term1', term: '依据', definition: '支持判断的信息', sourceIds: ['s1'] }],
+  evidenceRules: [{ id: 'e1', statement: '论断回指来源', sourceIds: ['s1'], verificationStatus: 'unverified' }],
+  routes: [{ id: 'route1', stages: [{ id: 'stage1', inputs: ['draft'], outputs: ['review'], checks: ['c1'], skippable: false, returnWhenMissing: ['draft'] }] }],
+  checks: [{ id: 'c1', statement: '检查具体内容', sourceIds: ['s1'], verificationStatus: 'unverified' }],
+  repairs: [{ id: 'fix1', issue: '缺少目标', action: '先澄清', sourceIds: ['s1'] }],
+  nextSteps: [{ id: 'next1', when: '目标明确', action: '开始诊断', sourceIds: ['s1'] }],
+  examples: [{ id: 'ex1', kind: 'positive', taskType: 'review', input: '稿件', prompt: '检查稿件', result: '列出问题', notes: '仅示范格式', verificationStatus: 'unverified' }],
+  sources: [{ id: 's1', title: '来源', url: 'https://example.test/source', locator: '第 1 节', version: '1', license: '待核对', checkedAt: '未核对', applicability: '一般说明', limitations: '未经独立验证', password: 'secret' }],
+  createdAt: '2026-10-20', updatedAt: '2026-10-20', unknown: 'drop'
+};
+
+test('写作包规范化保留完整契约并过滤所有嵌套未知字段和凭证', () => {
+  const pack = schema.normalizeWritingPack(packInput);
+  assert.deepEqual(Object.keys(pack), ['id', 'name', 'layer', 'genre', 'taskType', 'version', 'builtin', 'basePackId', 'enabled', 'applicability', 'targetFields', 'memoryNamespace', 'checkDimensions', 'outputRequirements', 'riskReminders', 'styleBaseline', 'clarifications', 'materials', 'requirements', 'methods', 'prompts', 'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs', 'nextSteps', 'examples', 'sources', 'createdAt', 'updatedAt']);
+  assert.equal(pack.builtin, false);
+  assert.equal(pack.applicability.tasks[0], 'review');
+  assert.equal(pack.clarifications[0].required, true);
+  assert.equal(pack.materials[0].acceptedTypes[0], 'md');
+  assert.equal(pack.methods[0].verificationStatus, 'case-validated');
+  assert.equal(pack.sources[0].url, 'https://example.test/source');
+  assert.equal(JSON.stringify(pack).includes('secret'), false);
+  assert.equal('unknown' in pack, false);
+  assert.deepEqual(schema.normalizeWritingPack(pack), pack);
+});
+
+test('来源适用范围保留文本，方法适用范围仍按列表规范化', () => {
+  const pack = schema.normalizeWritingPack({
+    id: 'source-applicability-pack',
+    methods: [{ id: 'method', title: '方法', guidance: '指导', applicability: ['改稿', '论文'] }],
+    sources: [{ id: 'source', title: '来源', applicability: '仅适用于中文论文改稿' }]
+  });
+
+  assert.deepEqual(pack.methods[0].applicability, ['改稿', '论文']);
+  assert.equal(pack.sources[0].applicability, '仅适用于中文论文改稿');
+});
+
+test('拒绝无效层级、验证状态和非正整数版本', () => {
+  for (const layer of ['core', 'genre', 'task']) assert.equal(schema.normalizeWritingPack({ ...packInput, layer }).layer, layer);
+  for (const layer of ['other', '', null]) assert.throws(() => schema.normalizeWritingPack({ ...packInput, layer }), /layer|层级/);
+  for (const status of ['unverified', 'source-reviewed', 'case-validated']) assert.equal(schema.normalizeWritingPack({ ...packInput, requirements: [{ id: 'r', statement: '规则', verificationStatus: status }] }).requirements[0].verificationStatus, status);
+  for (const status of ['verified', 'user-confirmed']) assert.throws(() => schema.normalizeWritingPack({ ...packInput, requirements: [{ id: 'r', statement: '规则', verificationStatus: status }] }), /verificationStatus|验证状态/);
+  for (const version of [0, -1, 1.5, true, Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => schema.normalizeWritingPack({ ...packInput, version }), /version|正安全整数/);
+});
+
+test('包内各条目与来源 ID 唯一，且文本、数组和集合数量受限', () => {
+  assert.throws(() => schema.normalizeWritingPack({ ...packInput, checks: [{ id: 'x', statement: '一' }, { id: 'x', statement: '二' }] }), /唯一|重复/);
+  assert.throws(() => schema.normalizeWritingPack({ ...packInput, sources: [{ id: 's1', title: '一' }, { id: 's1', title: '二' }] }), /唯一|重复/);
+  assert.throws(() => schema.normalizeWritingPack({ ...packInput, sources: [{ id: '', title: '来源' }] }), /id|ID/);
+  const pack = schema.normalizeWritingPack({ ...packInput, name: '名'.repeat(2000), checks: Array.from({ length: 200 }, (_, i) => ({ id: `c${i}`, statement: '检查' })) });
+  assert.ok(pack.name.length <= schema.WRITING_PACK_LIMITS.text);
+  assert.ok(pack.checks.length <= schema.WRITING_PACK_LIMITS.itemsPerCollection);
+  assert.ok(pack.applicability.tasks.length <= schema.WRITING_PACK_LIMITS.listItems);
+});
+
+test('设置和包集合使用白名单、唯一 ID 与有界条目', () => {
+  const setting = schema.normalizeWritingPackSettings({ id: 'builtin-article', enabled: false, updatedAt: 'today', apiKey: 'secret' });
+  assert.deepEqual(setting, { id: 'builtin-article', enabled: false, updatedAt: 'today' });
+  assert.throws(() => schema.normalizeWritingPackSettings({ id: '', enabled: true }), /id|ID/);
+  const collection = schema.normalizeWritingPackCollection([packInput, { ...packInput, id: 'second', builtin: true }]);
+  assert.equal(collection.length, 2);
+  assert.ok(collection.every(item => item.builtin === false));
+  assert.throws(() => schema.normalizeWritingPackCollection([packInput, packInput]), /唯一|重复/);
+  assert.ok(schema.normalizeWritingPackCollection(Array.from({ length: 100 }, (_, i) => ({ ...packInput, id: `p${i}` }))).length <= schema.WRITING_PACK_LIMITS.packs);
+});
+
+test('对象包、对象设置及集合成员缺少或为空白 ID 时拒绝', () => {
+  for (const id of [undefined, '', '   ']) {
+    const pack = { ...packInput, id };
+    delete pack.id;
+    if (id !== undefined) pack.id = id;
+    assert.throws(() => schema.normalizeWritingPack(pack), /id|ID/);
+    const setting = { id, enabled: true };
+    assert.throws(() => schema.normalizeWritingPackSettings(setting), /id|ID/);
+    assert.throws(() => schema.normalizeWritingPackCollection([pack]), /id|ID/);
+  }
+  assert.doesNotThrow(() => schema.normalizeWritingPack(null));
+  assert.doesNotThrow(() => schema.normalizeWritingPackSettings(null));
+  assert.deepEqual(schema.normalizeWritingPackCollection([null]), []);
+});
+
+test('异常输入安全降级且不修改调用方对象', () => {
+  for (const input of [undefined, null, [], 'x', 1, false, Symbol('x')]) assert.doesNotThrow(() => schema.normalizeWritingPack(input));
+  const input = structuredClone(packInput);
+  const original = JSON.stringify(input);
+  schema.normalizeWritingPack(input);
+  assert.equal(JSON.stringify(input), original);
+});
+
+test('基础包的目标字段和提示要求映射会剔除凭证键及非字符串值', () => {
+  const pack = schema.normalizeWritingPack({
+    ...packInput,
+    targetFields: {
+      title: '标题', apiKey: 'secret-token', privateKey: 'secret-private',
+      nested: { password: 'secret' }, authHeader: 'Bearer secret'
+    },
+    outputRequirements: {
+      revision: '保留原有观点', password: 'secret-pass', callback: () => '不保留',
+      privateKey: 'secret-private', authHeader: 'Bearer secret'
+    }
+  });
+  assert.deepEqual(pack.targetFields, { title: '标题' });
+  assert.deepEqual(pack.outputRequirements, { revision: '保留原有观点' });
+  assert.equal(JSON.stringify(pack).includes('secret'), false);
+});
+
+test('schema 以 WritingPackSchema 名称提供 UMD 全局导出', () => {
+  const context = vm.createContext({});
+  vm.runInContext(readFileSync(require.resolve('../prototype/writing-pack-schema.js'), 'utf8'), context);
+  assert.equal(typeof context.WritingPackSchema.normalizeWritingPack, 'function');
+  assert.equal(JSON.stringify(context.WritingPackSchema.normalizeWritingPack(packInput)), JSON.stringify(schema.normalizeWritingPack(packInput)));
+});
+
+test('专业路线保留标题、适用任务、来源及步骤核验状态，并兼容旧路线', () => {
+  const pack = schema.normalizeWritingPack({
+    id: 'route-pack',
+    sources: [{ id: 'source-1', title: '方法来源', url: 'https://example.test/method' }],
+    routes: [{
+      id: 'route-1', title: '逐项核对路线', taskTypes: ['review', 'revision'],
+      sourceIds: ['source-1'], verificationStatus: 'source-reviewed',
+      stages: [{
+        id: 'stage-1', title: '核查论据', inputs: ['当前稿件'], outputs: ['证据清单'], checks: ['来源可定位'],
+        sourceIds: ['source-1'], verificationStatus: 'case-validated', skippable: false,
+        returnWhenMissing: ['补交来源'], apiKey: 'secret'
+      }]
+    }, {
+      id: 'legacy-route', stages: [{ id: 'legacy-stage', inputs: ['草稿'], outputs: ['检查结果'] }]
+    }]
+  });
+
+  assert.equal(pack.routes[0].title, '逐项核对路线');
+  assert.deepEqual(pack.routes[0].taskTypes, ['review', 'revision']);
+  assert.deepEqual(pack.routes[0].sourceIds, ['source-1']);
+  assert.equal(pack.routes[0].verificationStatus, 'source-reviewed');
+  assert.equal(pack.routes[0].stages[0].title, '核查论据');
+  assert.equal(pack.routes[0].stages[0].verificationStatus, 'case-validated');
+  assert.equal(pack.routes[1].verificationStatus, 'unverified');
+  assert.equal(pack.routes[1].title, '');
+  assert.equal(pack.routes[1].stages[0].verificationStatus, 'unverified');
+  assert.doesNotMatch(JSON.stringify(pack.routes), /secret|apiKey/);
+  assert.deepEqual(schema.normalizeWritingPack(pack).routes, pack.routes);
+});
+
+test('路线和步骤来源字段限长、唯一并使用受限状态', () => {
+  assert.throws(() => schema.normalizeWritingPack({
+    id: 'duplicate-route-sources',
+    routes: [{ id: 'r', sourceIds: ['s1', 's1'], stages: [] }]
+  }), /唯一|重复/);
+  assert.throws(() => schema.normalizeWritingPack({
+    id: 'invalid-route-status',
+    routes: [{ id: 'r', verificationStatus: 'verified', stages: [] }]
+  }), /verificationStatus|验证状态/);
+  assert.throws(() => schema.normalizeWritingPack({
+    id: 'duplicate-step-sources',
+    routes: [{ id: 'r', stages: [{ id: 's', sourceIds: ['x', 'x'] }] }]
+  }), /唯一|重复/);
+
+  const pack = schema.normalizeWritingPack({
+    id: 'bounded-route', routes: [{
+      id: 'r', title: '路线'.repeat(500), taskTypes: ['review', 'review'],
+      sourceIds: ['s1'], stages: [{ id: 's', title: '步骤'.repeat(500), sourceIds: ['s1'] }]
+    }]
+  });
+  assert.ok(pack.routes[0].title.length <= schema.WRITING_PACK_LIMITS.text);
+  assert.deepEqual(pack.routes[0].taskTypes, ['review']);
+  assert.ok(pack.routes[0].stages[0].title.length <= schema.WRITING_PACK_LIMITS.text);
+});
+
+test('方法卡结构字段、路线关联与来源追溯字段经过白名单规范化', () => {
+  const pack = schema.normalizeWritingPack({
+    id: 'structured-method-pack',
+    methods: [{ id: 'method-a', title: '检查方法', inputs: ['草稿'], outputs: ['问题列表'],
+      checks: ['每项有位置'], skippable: true, returnWhenMissing: ['缺原稿时返回'], enabled: false }],
+    routes: [{ id: 'route-a', stages: [{ id: 'stage-a', methodCardIds: ['method-a'], inputs: ['草稿'] }] }],
+    sources: [{ id: 'source-a', versionHash: 'sha256:abc', readAt: '2026-10-22', adoptionReason: '方法来源',
+      reviewRecord: '人工待核', password: 'must-drop' }]
+  });
+  assert.deepEqual(pack.methods[0].inputs, ['草稿']);
+  assert.equal(pack.methods[0].enabled, false);
+  assert.deepEqual(pack.routes[0].stages[0].methodCardIds, ['method-a']);
+  assert.equal(pack.sources[0].versionHash, 'sha256:abc');
+  assert.equal(pack.sources[0].readAt, '2026-10-22');
+  assert.equal(pack.sources[0].adoptionReason, '方法来源');
+  assert.equal(pack.sources[0].reviewRecord, '人工待核');
+  assert.doesNotMatch(JSON.stringify(pack), /must-drop/);
+});
