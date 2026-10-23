@@ -399,27 +399,84 @@ test('PPT 规划工作台从提示词 Agent 入口加载并保持文件输出边
 });
 
 
-test('统一写作入口只加载一个root，旧文章DOM移除且脚本依赖有序', () => {
+test('写作、提示词Agent与学术论文分别挂载到独立页面', () => {
   assert.equal((html.match(/id="writing-workbench-root"/g) || []).length, 1);
-  assert.doesNotMatch(html, /id="view-article"|id="article-form"/);
+  const promptView = html.indexOf('id="view-prompt-agent"');
+  const writingView = html.indexOf('id="view-article"');
+  const academicView = html.indexOf('id="view-academic-workbench"');
+  const promptRoot = html.indexOf('id="prompt-agent-root"');
+  const writingRoot = html.indexOf('id="writing-workbench-root"');
+  const academicRoot = html.indexOf('id="academic-literature-root"');
+  const academicReviewRoot = html.indexOf('id="academic-review-root"');
+  const academicPublishingRoot = html.indexOf('id="academic-publishing-root"');
+  assert.ok(promptView < promptRoot && promptRoot < writingView);
+  assert.ok(writingView < writingRoot && writingRoot < academicView);
+  assert.ok(academicView < academicRoot && academicRoot < academicReviewRoot && academicReviewRoot < academicPublishingRoot);
+  assert.doesNotMatch(html, /id="article-form"/);
   assert.doesNotMatch(app, /currentArticleReviewCase|resetArticleReviewResult|article-original|article-revised/);
   const scripts = ['writing-workbench-schema', 'writing-workbench-prompts', 'writing-workbench-coordinator', 'writing-workbench-ui', 'app'];
   const positions = scripts.map(name => html.indexOf('src="/prototype/' + name + '.js"'));
   assert.ok(positions.every((pos, i) => pos >= 0 && (i === 0 || pos > positions[i - 1])));
-  for (const scene of ['task', 'writing', 'ppt']) assert.ok(html.includes('data-agent-scene="' + scene + '"'));
+  for (const scene of ['task', 'ppt']) assert.ok(html.includes('data-agent-scene="' + scene + '"'));
+  assert.doesNotMatch(html, /data-agent-scene="writing"/);
   assert.match(html, /#view-prompt-agent \[hidden\]\s*\{\s*display:\s*none/);
 });
 
-test('写作、任务、PPT 场景切换使用真实控制器隔离root', async () => {
+test('写作工作台独立于提示词Agent的任务与PPT场景', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp();
   await f.event('nav-article');
-  assert.equal(f.mount.hidden, false);
+  assert.notEqual(f.mount.hidden, true);
   assert.match(f.element('breadcrumb').textContent, /写作工作台/);
   await f.event('scene-ppt');
   assert.equal(f.element('ppt-scene-root').hidden, false);
-  assert.equal(f.mount.hidden, true);
   await f.event('scene-task');
   assert.equal(f.element('prompt-agent-root').hidden, false);
   assert.equal(f.element('ppt-scene-root').hidden, true);
+  assert.notEqual(f.mount.hidden, true, 'Agent 场景切换不隐藏独立写作页内容');
+});
+
+test('长手册改写闭环将原文与三份辅助材料分开并生成附原件的选章提示词', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const f = createWritingApp();
+  await f.change('writing-wizard-mode-rewrite', 'rewrite');
+  await f.input('writing-goal', '保留事实，优化操作手册表达');
+  await f.change('writing-source-file', [{ name: '操作手册.md', size: 100, lastModified: 1,
+    text: async () => '# 安装步骤\n全文唯一原文哨兵。\n'.repeat(3) }]);
+  await f.change('writing-source-processing-scope', 'sections');
+  const sectionId = f.mount.querySelectorAll('[data-source-section]')[0]?.id;
+  assert.ok(sectionId, '应提取出可选章节');
+  await f.change(sectionId, true);
+
+  const files = Array.from({ length: 4 }, (_, index) => {
+    const content = `export const reference${index} = '参考摘录${index}';`;
+    const bytes = Uint8Array.from(Buffer.from(content));
+    return { name: `reference-${index}.js`, webkitRelativePath: `repo/src/reference-${index}.js`, size: bytes.length,
+      arrayBuffer: async () => bytes.buffer };
+  });
+  await f.change('writing-material-folder', files);
+  const candidates = f.mount.querySelectorAll('[data-wizard-material]');
+  assert.equal(candidates.length, 4);
+  for (let index = 0; index < 3; index++) await f.changeData('wizardMaterial', index, true);
+  assert.equal(f.mount.querySelectorAll('[data-wizard-material]').filter(item => item.disabled).length, 1,
+    '三份材料选满后应阻止勾选第四份');
+
+  let analyzedInput;
+  f.coordinator.analyzeTask = async input => {
+    analyzedInput = input;
+    return { genre: 'article', taskType: 'revision', reason: '按章节改写手册' };
+  };
+  await f.click('wizard-analyze');
+  assert.equal(analyzedInput.sourceDocument.preview.length <= 8000, true);
+  assert.equal(analyzedInput.materials.length, 3);
+  assert.ok(analyzedInput.materials.every(item => item.excerpt));
+  await f.change('writing-wizard-genre', 'article');
+  await f.change('writing-wizard-task-type', 'revision');
+  await f.click('wizard-confirm');
+  const round = f.coordinator.getWorkspace(f.coordinator.listArticles()[0].id).rounds.at(-1);
+  assert.match(round.prompt, /请在当前 AI 对话中附上该文件/);
+  assert.match(round.prompt, /只处理以下章节/);
+  assert.match(round.prompt, /安装步骤/);
+  assert.doesNotMatch(round.prompt, /全文唯一原文哨兵/);
+  assert.equal(round.sourceDocument.selectedSectionIds.length, 1);
 });

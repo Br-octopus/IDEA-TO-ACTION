@@ -3,6 +3,29 @@ const assert = require('node:assert/strict');
 const { createWritingWorkbenchCoordinator } = require('../prototype/writing-workbench-coordinator.js');
 const schema = require('../prototype/writing-workbench-schema.js');
 
+test('任务分析只返回经过校验的文体建议，不创建文章', async () => {
+  const coordinator = createWritingWorkbenchCoordinator({ getState: () => ({}), requestModel: async payload => {
+    assert.equal(payload.stage, 'writing-task-analysis');
+    assert.match(payload.messages[0].content, /已确认的参考材料摘录/);
+    return { text: JSON.stringify({ genre: 'technical-document', taskType: 'technical-procedure', reason: '目标是说明操作步骤', confidence: 'high', suggestedFields: { productVersion: '2.0' }, missingInfo: ['运行环境'] }) };
+  } });
+  const suggestion = await coordinator.analyzeTask({ goal: '写操作手册', draft: '已有稿', materials: [{ title: '界面说明', excerpt: '点击保存' }] });
+  assert.equal(suggestion.genre, 'technical-document');
+  assert.equal(suggestion.taskType, 'technical-procedure');
+  assert.equal(suggestion.suggestedFields.productVersion, '2.0');
+  assert.equal(coordinator.listArticles().length, 0);
+});
+
+test('任务分析拒绝无效文体/任务及非 JSON，模型不可用可手动降级', async () => {
+  for (const text of ['不是 JSON', JSON.stringify({ genre: 'unknown', taskType: 'revision' }), JSON.stringify({ genre: 'fiction', taskType: 'technical-procedure' })]) {
+    const coordinator = createWritingWorkbenchCoordinator({ requestModel: async () => ({ text }) });
+    await assert.rejects(coordinator.analyzeTask({ goal: '分类' }), { code: 'INVALID_TASK_SUGGESTION' });
+    assert.equal(coordinator.listArticles().length, 0);
+  }
+  const offline = createWritingWorkbenchCoordinator();
+  await assert.rejects(offline.analyzeTask({ goal: '分类' }), { code: 'MODEL_UNAVAILABLE' });
+});
+
 test('协调器按项目和配置命名空间筛选记忆，未知文体只读通用', async () => {
   const { readFileSync } = require('node:fs');
   const vm = require('node:vm');

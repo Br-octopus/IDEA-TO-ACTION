@@ -165,24 +165,29 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
               : parsed.error.code === 'CANCELLED' ? 499 : 422;
           return sendJson(res, status, { code: `WRITING_MATERIAL_${parsed.error.code}`, message: parsed.error.message });
         }
-        const maxSegmentChars = 10_000;
+        const maxSegmentChars = 30_000;
         const rawSegments = parsed.format === 'pdf'
           ? parsed.pages.map(page => ({ locator: `第${page.page}页${page.method === 'pdf-ocr' ? ' · OCR' : ''}`, text: page.text }))
-          : parsed.text.split(/\n+/).map((text, index) => ({ locator: parsed.format === 'docx' ? `第${index + 1}段` : `图片识别`, text: text.trim() })).filter(segment => segment.text);
+          : parsed.format === 'docx' && Array.isArray(parsed.paragraphs)
+            ? parsed.paragraphs.map((paragraph, index) => ({ locator: `第${index + 1}段`, text: paragraph.text, headingLevel: paragraph.headingLevel ?? null }))
+            : parsed.text.split(/\n+/).map((text, index) => ({ locator: parsed.format === 'docx' ? `第${index + 1}段` : `图片识别`, text: text.trim() })).filter(segment => segment.text);
         let remaining = maxSegmentChars;
+        let segmentTruncated = false;
         const segments = rawSegments.flatMap(segment => {
-          if (remaining <= 0) return [];
+          if (remaining <= 0) { segmentTruncated = true; return []; }
           const text = segment.text.slice(0, remaining);
           remaining -= text.length;
-          return text ? [{ locator: segment.locator, text }] : [];
+          if (text.length < segment.text.length) segmentTruncated = true;
+          return text ? [{ locator: segment.locator, text, ...(segment.headingLevel == null ? {} : { headingLevel: segment.headingLevel }) }] : [];
         });
+        const truncated = Boolean(parsed.truncated || segmentTruncated);
         return sendJson(res, 200, {
           status: parsed.characterCount ? 'parsed' : 'empty', mimeType: body.mimeType,
           method: parsed.format === 'pdf' ? (parsed.usedOcr ? 'pdf-ocr' : 'pdf-text')
             : parsed.format === 'docx' ? 'docx-text' : 'local-ocr',
           pageCount: parsed.format === 'pdf' ? parsed.pageCount : undefined,
           recognitionConfidence: Number.isFinite(parsed.confidence) ? parsed.confidence : undefined,
-          extractedCharacters: parsed.characterCount, truncated: parsed.characterCount > maxSegmentChars,
+          extractedCharacters: parsed.characterCount, truncated,
           warnings: parsed.warnings || [], segments
         });
       } finally {

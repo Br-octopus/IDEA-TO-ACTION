@@ -7,6 +7,39 @@ const { MODEL_CODES, createModelClient, normalizeModelError } = require('../serv
 const { SEARCH_CODES, createSearchClient, normalizeResult } = require('../server/search-client');
 const { SOCIAL_API_CODES } = require('../server/social-api-client');
 
+test('写作材料解析 API 统一限制 30,000 字符并透传 DOCX 标题与截断状态', async t => {
+  const source = '甲'.repeat(30_010);
+  const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} }, writingMaterialParser: {
+    parse: async () => ({ ok: true, format: 'docx', text: source, characterCount: source.length, truncated: true,
+      paragraphs: [{ text: source, headingLevel: 2 }], pages: [], warnings: [] })
+  } });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const response = await fetch(`${baseUrl}/api/writing-materials/parse`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ fileName: '手册.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', dataBase64: Buffer.from('docx').toString('base64') }) });
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(result.truncated, true);
+  assert.equal(result.extractedCharacters, 30_010);
+  assert.equal(result.segments.reduce((sum, item) => sum + item.text.length, 0), 30_000);
+  assert.equal(result.segments[0].headingLevel, 2);
+});
+
+test('写作材料解析 API 保留 PDF 页定位和 OCR 页标记', async t => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} }, writingMaterialParser: {
+    parse: async () => ({ ok: true, format: 'pdf', text: '第一章 设备\n第二章 检查', characterCount: 15, truncated: false,
+      pageCount: 2, usedOcr: true, pages: [{ page: 1, text: '第一章 设备', method: 'pdf-ocr' }, { page: 2, text: '第二章 检查', method: 'pdf-text' }], warnings: ['OCR 需核对'] })
+  } });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const response = await fetch(`${baseUrl}/api/writing-materials/parse`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ fileName: '手册.pdf', mimeType: 'application/pdf', dataBase64: Buffer.from('pdf').toString('base64') }) });
+  const result = await response.json();
+  assert.equal(result.segments[0].locator, '第1页 · OCR');
+  assert.equal(result.segments[1].locator, '第2页');
+  assert.deepEqual(result.warnings, ['OCR 需核对']);
+});
+
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) };
 }

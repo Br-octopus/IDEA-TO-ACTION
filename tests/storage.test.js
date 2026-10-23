@@ -906,6 +906,8 @@ test('写作状态迁移补空集合，已保存文章和记忆 JSON 往返保�
   const schema = require('../prototype/writing-workbench-schema.js');
   assert.deepEqual(migrateState({}).writingArticles, []);
   assert.deepEqual(createEmptyState().writingMemories, []);
+  assert.deepEqual(migrateState({}).writingWorkspaces, []);
+  assert.deepEqual(createEmptyState().writingWorkspaces, []);
   const store = memoryStorage();
   const article = writingSnapshot();
   const memory = { id: 'memory-1', scope: 'general', preference: '短句', reason: '用户确认' };
@@ -914,6 +916,54 @@ test('写作状态迁移补空集合，已保存文章和记忆 JSON 往返保�
   assert.deepEqual(saved.writingMemories, [schema.normalizeWritingMemory(memory)]);
   assert.deepEqual(loadState(store).state, saved);
   assert.deepEqual(saved.promptAgentTasks, []);
+});
+
+test('改写原文元数据随轮次保存重载，限制预览且不持久化文件句柄或路径', () => {
+  const schema = require('../prototype/writing-workbench-schema.js');
+  const article = writingSnapshot();
+  article.rounds[0].sourceDocument = {
+    name: 'C:/private/操作手册.md', format: 'md', fingerprint: '80:abc123', parseStatus: 'parsed',
+    extractedCharacterCount: 80, pageCount: 0, preview: '章节预览哨兵',
+    outline: [{ id: 'chapter-1', title: '安装', level: 1, locator: '第 1 段' }],
+    selectedSectionIds: ['chapter-1'], manualSectionRange: '', processingScope: 'sections',
+    attachmentRequired: true, file: { name: 'must-not-persist.md' }, absolutePath: 'C:/private'
+  };
+  const store = memoryStorage();
+  const saved = saveState(store, { writingArticles: [article] });
+  const loadedRound = loadState(store).state.writingArticles[0].rounds[0];
+  assert.deepEqual(loadedRound.sourceDocument, schema.normalizeWritingSourceDocument(article.rounds[0].sourceDocument));
+  assert.deepEqual(loadedRound.sourceDocument.selectedSectionIds, ['chapter-1']);
+  assert.equal(loadedRound.sourceDocument.name, '操作手册.md');
+  const serialized = store.getItem(STORAGE_KEY);
+  for (const sentinel of ['must-not-persist.md', 'C:/private', 'absolutePath']) {
+    assert.equal(serialized.includes(sentinel), false, `序列化数据不应包含 ${sentinel}`);
+  }
+  assert.equal(saved.writingArticles[0].rounds[0].sourceDocument.preview, '章节预览哨兵');
+});
+
+test('常用工作空间在迁移、保存和重载时仅持久化安全元数据', () => {
+  const schema = require('../prototype/writing-workbench-schema.js');
+  const input = {
+    id: 'workspace-1', name: '项目资料', rootLabel: 'sample-project', sourceKind: 'browser-directory',
+    selectedPaths: [
+      { path: 'src/save.js', fingerprint: '42:abcd1234', content: '目录文件原文哨兵' },
+      { path: '../outside.md', fingerprint: 'unsafe' },
+      { path: 'C:/private/secret.md', fingerprint: 'unsafe' }
+    ],
+    createdAt: '2026-10-23T08:00:00.000Z', fileContents: '正文哨兵', absolutePath: 'C:/private', apiKey: 'credential-sentinel'
+  };
+  const migrated = migrateState({ writingWorkspaces: [input] });
+  assert.deepEqual(migrated.writingWorkspaces, [schema.normalizeWritingWorkspaceRecord(input)]);
+
+  const store = memoryStorage();
+  const saved = saveState(store, { writingWorkspaces: [input] });
+  assert.deepEqual(saved.writingWorkspaces[0].selectedPaths, [{ path: 'src/save.js', fingerprint: '42:abcd1234' }]);
+  assert.deepEqual(loadState(store).state.writingWorkspaces, saved.writingWorkspaces);
+  const serialized = store.getItem(STORAGE_KEY);
+  for (const sentinel of ['目录文件原文哨兵', '正文哨兵', 'C:/private', 'credential-sentinel']) {
+    assert.equal(serialized.includes(sentinel), false);
+  }
+  assert.equal(JSON.parse(serialized).writingWorkspaces[0].fileContents, undefined);
 });
 
 test('写作基础包集合迁移、白名单清洗且与文章暂停保存独立', () => {

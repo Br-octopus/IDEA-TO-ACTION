@@ -102,6 +102,17 @@ async function makeDocx() {
   return Buffer.concat(chunks);
 }
 
+async function makeStyledDocx() {
+  const zip = new yazl.ZipFile();
+  zip.addBuffer(Buffer.from('<w:styles xmlns:w="urn:w"><w:style w:styleId="Heading1" w:type="paragraph"><w:name w:val="heading 1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style><w:style w:styleId="CustomTitle" w:type="paragraph"><w:name w:val="自定义章节"/><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style></w:styles>'), 'word/styles.xml');
+  zip.addBuffer(Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>标准标题</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr><w:r><w:t>自定义标题</w:t></w:r></w:p><w:p><w:pPr><w:outlineLvl w:val="2"/></w:pPr><w:r><w:t>直接大纲标题</w:t></w:r></w:p><w:p><w:r><w:t>普通段落</w:t></w:r></w:p></w:body></w:document>'), 'word/document.xml');
+  const chunks = [];
+  zip.outputStream.on('data', chunk => chunks.push(chunk));
+  zip.end();
+  await once(zip.outputStream, 'end');
+  return Buffer.concat(chunks);
+}
+
 function parserOptions(overrides = {}) {
   return {
     pdfjs: { getDocument: () => ({ promise: Promise.resolve({ numPages: 2, getPage: async pageNumber => ({ getTextContent: async () => ({ items: [{ str: `页${pageNumber}文字`, transform: [1, 0, 0, 1, 20, 700] }] }) }), destroy: async () => {} }) }) },
@@ -128,7 +139,10 @@ test('PDF 按页抽取并保留页码和有界字符范围', async () => {
   assert.match(result.text, /页2文字/);
   assert.ok(result.text.length <= result.characterCount);
   const limited = createWritingMaterialParser(parserOptions({ limits: { maxOutputChars: 4 } }));
-  assert.equal((await limited.parse({ buffer: makePdf(), mimeType: 'application/pdf' })).text.length, 4);
+  const limitedResult = await limited.parse({ buffer: makePdf(), mimeType: 'application/pdf' });
+  assert.equal(limitedResult.text.length, 4);
+  assert.equal(limitedResult.truncated, true);
+  assert.equal(limitedResult.pages[0].text.length, 4);
 });
 
 test('默认 PDF.js 读取器可离线解析合成 PDF', async () => {
@@ -137,6 +151,16 @@ test('默认 PDF.js 读取器可离线解析合成 PDF', async () => {
   assert.equal(result.ok, true);
   assert.match(result.text, /synthetic page text/);
   assert.equal(result.pages[0].page, 1);
+});
+
+test('PDF 按文本基线换行保留页内章节标题边界', async () => {
+  const pdfjs = { getDocument: () => ({ promise: Promise.resolve({ numPages: 1,
+    getPage: async () => ({ getTextContent: async () => ({ items: [
+      { str: '第一章 设备安装', transform: [1, 0, 0, 1, 20, 700] },
+      { str: '安装前确认电源关闭。', transform: [1, 0, 0, 1, 20, 660] }
+    ] }), cleanup() {} }), destroy: async () => {} }) }) };
+  const result = await createWritingMaterialParser({ pdfjs }).parse({ buffer: makePdf(), mimeType: 'application/pdf' });
+  assert.equal(result.pages[0].text, '第一章 设备安装\n安装前确认电源关闭。');
 });
 
 test('扫描版 PDF 逐页渲染后本机 OCR 并保留 OCR 页来源和未核验状态', async () => {
@@ -174,6 +198,30 @@ test('DOCX 从合成 ZIP 文档抽取段落和表格文本，不读取外部关�
   assert.match(result.text, /合成段落/);
   assert.match(result.text, /表格单元格/);
   assert.equal(result.format, 'docx');
+});
+
+test('DOCX styles.xml 标题映射和段落 outlineLvl 保留有序段落级别', async () => {
+  const parser = createWritingMaterialParser(parserOptions());
+  const result = await parser.parse({ buffer: await makeStyledDocx(), mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.paragraphs.map(item => [item.text, item.headingLevel]), [
+    ['标准标题', 1], ['自定义标题', 2], ['直接大纲标题', 3], ['普通段落', null]
+  ]);
+  assert.equal(result.truncated, false);
+});
+
+test('DOCX 超过解析上限时段落和文本共用截断边界并标记 truncated', async () => {
+  const zip = new yazl.ZipFile();
+  zip.addBuffer(Buffer.from(`<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>${'甲'.repeat(12)}</w:t></w:r></w:p><w:p><w:r><w:t>${'乙'.repeat(12)}</w:t></w:r></w:p></w:body></w:document>`), 'word/document.xml');
+  const chunks = [];
+  zip.outputStream.on('data', chunk => chunks.push(chunk));
+  zip.end();
+  await once(zip.outputStream, 'end');
+  const parser = createWritingMaterialParser(parserOptions({ limits: { maxOutputChars: 15 } }));
+  const result = await parser.parse({ buffer: Buffer.concat(chunks), mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  assert.equal(result.text.length, 15);
+  assert.equal(result.truncated, true);
+  assert.equal(result.paragraphs.map(item => item.text).join('\n'), result.text);
 });
 
 test('图片 OCR 注入 worker，限制尺寸和识别字符且标明来源', async () => {

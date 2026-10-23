@@ -1666,22 +1666,18 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     });
   }
   function go(view) {
-    const writingAlias = view === "article";
-    if (writingAlias) view = "prompt-agent";
     activeView = view;
     document.querySelectorAll(".view").forEach(node => node.classList.toggle("active", node.id === `view-${view}`));
-    document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === (writingAlias ? "article" : view)));
-    const labels = { home: "新建规划", plans: "我的计划", article: "文章改写", "prompt-agent": "提示词 Agent", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
-    document.getElementById("breadcrumb").textContent = `工作台　/　${labels[writingAlias ? "article" : view] || "新建规划"}`;
+    document.querySelectorAll("[data-view]").forEach(node => node.classList.toggle("active", node.dataset.view === view));
+    const labels = { home: "新建规划", plans: "我的计划", article: "写作工作台", "academic-workbench": "学术论文工作台", "prompt-agent": "提示词 Agent", library: "提示词库", references: "资料库与 GitHub 参考", "social-research": "社媒研究", project: "计划工作台", "prompt-optimize": "提示词优化", settings: "模型与搜索设置" };
+    document.getElementById("breadcrumb").textContent = `工作台　/　${labels[view] || "新建规划"}`;
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (view === "plans") renderPlans();
     if (view === "library") renderLibrary();
     if (view === "references") refreshKnowledgeView();
     if (view === "home") renderFlowStrip();
-    if (view === "prompt-agent") {
-      if (writingAlias) agentScenes?.selectScene("writing");
-      else agentScenes?.selectScene(agentScenes.getScene());
-    }
+    if (view === "prompt-agent") agentScenes?.selectScene(agentScenes.getScene());
+    if (view === "article") window.WritingWorkbenchUIController?.render();
     document.querySelectorAll(".mobile-more").forEach(menu => { menu.open = false; });
   }
   document.querySelectorAll("[data-view]").forEach(node => node.addEventListener("click", () => go(node.dataset.view)));
@@ -1871,7 +1867,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         requestModel: payload => window.ForwardStepPromptAgentModelRequest(payload), promptAgentCoordinator
       });
       window.WritingWorkbenchUIController = window.WritingWorkbenchUI.createWritingWorkbenchUI({
-        document, coordinator: writingCoordinator, packUI: writingPackController, getState: () => state, copyText,
+        document, coordinator: writingCoordinator, packUI: writingPackController, getState: () => state, persistState: persistWorkbenchState,
+        navigate: view => go(view), copyText,
         saveMaterialToLibrary: saveWritingMaterialToLibrary,
         confirm: message => window.confirm(message), notify: toast
       });
@@ -1880,7 +1877,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       document,
       onSceneChange(scene, label) {
         if (activeView === "prompt-agent") document.getElementById("breadcrumb").textContent = `工作台　/　提示词 Agent　/　${label}`;
-        if (scene === "writing") window.WritingWorkbenchUIController?.render();
         if (scene === "ppt") window.ForwardStepPptSceneUIController?.render();
       }
     });

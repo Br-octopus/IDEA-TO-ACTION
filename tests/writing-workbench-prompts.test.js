@@ -718,3 +718,31 @@ test('超出材料上限时按任务关键词推荐并说明理由，未匹配�
   assert.match(prompt, /关键词建议/);
   assert.doesNotMatch(prompt, /园艺随笔|旅行见闻|语气样本/);
 });
+
+test('文件型原文提示词要求附原件并明确整本或选章范围，不嵌入全文', () => {
+  const prompt = api.buildWritingRevisionPrompt({
+    article: { id: 'manual-rewrite', genre: 'article', goal: '优化操作手册' },
+    round: { id: 'manual-round', draft: '', sourceDocument: {
+      name: '操作手册.docx', format: 'docx', fingerprint: '12000:abcd', parseStatus: 'truncated',
+      preview: '不得出现在提示词的原文尾部哨兵', extractedCharacterCount: 30000, pageCount: 0,
+      outline: [{ id: 'install', title: '安装软件', level: 1, locator: '第2段' }, { id: 'config', title: '配置', level: 1, locator: '' }],
+      selectedSectionIds: ['install'], manualSectionRange: '', processingScope: 'sections', attachmentRequired: true
+    } }
+  });
+  assert.match(prompt, /请在当前 AI 对话中附上该文件/);
+  assert.match(prompt, /只处理以下章节/);
+  assert.match(prompt, /安装软件（第2段）/);
+  assert.doesNotMatch(prompt, /不得出现在提示词的原文尾部哨兵/);
+});
+
+test('文件型任务分析仅接收有界预览与目录，明确预览可能不完整', () => {
+  const prompt = api.buildWritingTaskAnalysisPrompt({ goal: '改好操作手册', sourceDocument: {
+    name: '操作手册.pdf', format: 'pdf', fingerprint: '99999:abcd', parseStatus: 'truncated',
+    extractedCharacterCount: 30000, preview: '预览段落。'.repeat(1200),
+    outline: [{ id: 's1', title: '安装', level: 1, locator: '第2页' }], selectedSectionIds: [],
+    processingScope: 'whole', attachmentRequired: true
+  } });
+  assert.match(prompt, /可能不完整/);
+  assert.match(prompt, /安装（第2页）/);
+  assert.ok(prompt.length < 12000, '分析只使用8000字以内预览和有限目录');
+});

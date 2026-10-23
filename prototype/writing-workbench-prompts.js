@@ -57,7 +57,7 @@
   }
 
   function packApplies(pack, genre, taskType) {
-    if (pack.genre && pack.genre !== genre) return 'genre-mismatch';
+    if (pack.genre && pack.genre !== genre && !pack.applicability?.genres?.includes(genre)) return 'genre-mismatch';
     const tasks = pack.applicability?.tasks || [];
     if (pack.taskType && pack.taskType !== taskType && pack.taskType !== 'article' && !tasks.includes(taskType)
       && !(genre === 'academic-paper' && pack.taskType === 'academic-writing' && ACADEMIC_TASK_TYPES.has(taskType))) return 'task-mismatch';
@@ -282,6 +282,27 @@
     }));
   }
 
+  function buildWritingTaskAnalysisPrompt(input = {}) {
+    const safe = object(input);
+    const materials = list(safe.materials).slice(0, 3).map((item, index) =>
+      `参考材料 ${index + 1}：${String(item.title || '未命名材料').slice(0, 200)}\n${String(item.excerpt || '').slice(0, 4000)}`).join('\n\n');
+    const sourceDocument = schema.normalizeWritingSourceDocument(safe.sourceDocument);
+    const sourceContext = sourceDocument ? [
+      `待改文件：${sourceDocument.name}（${sourceDocument.format.toUpperCase()}；解析状态：${sourceDocument.parseStatus}；提取${sourceDocument.extractedCharacterCount}字）`,
+      `原文有限预览（最多8000字，可能不完整，不得据此断言全文事实）：\n${sourceDocument.preview}`,
+      sourceDocument.outline.length ? `已识别目录：\n${sourceDocument.outline.map(item => `${item.title}${item.locator ? `（${item.locator}）` : ''}`).join('\n')}` : '未识别到可靠目录。'
+    ].join('\n') : '';
+    return [
+      '你是写作任务分类助手，只分析任务并给出结构化建议，不撰写或改写正文。',
+      '根据任务目标和用户提供的原文，选择最合适的受支持文体及该文体下的任务类型；缺少信息写入 missingInfo，不得补造事实。',
+      '只返回 JSON 对象，不要 Markdown。字段：genre、taskType、reason、confidence（low/medium/high）、suggestedFields（对象，只填有依据的当前文体专属字段）、missingInfo（字符串数组）。',
+      `任务目标：\n${String(safe.goal || '').slice(0, 4000)}`,
+      `待处理原文：\n${String(safe.draft || '').slice(0, 8000)}`,
+      sourceContext,
+      materials ? `用户已确认的参考材料摘录：\n${materials}` : '用户未选择参考材料。'
+    ].join('\n\n');
+  }
+
   function normalize(input, taskType = 'revision') {
     const source = object(input);
     const workspace = schema.normalizeWritingWorkspace(source);
@@ -468,8 +489,21 @@
       '{"issues":[{"location":"原文位置","excerpt":"精确摘录","observation":"可观察表现","impact":"对目标或读者的影响","evidenceCategory":"source","evidenceDescription":"依据类别及说明","packId":"适用包 ID 或空字符串","sourceId":"对应来源 ID 或空字符串","suggestion":"修改建议","priority":"medium"}]}',
       'evidenceCategory 只用 source、logic、method、requirement、preference、other；priority 只用 low、medium、high。没有候选问题时输出 {"issues":[]}。所有模型生成项都只是候选问题；不得改变问题处理状态、删除已有问题或自行标记复核通过。无法输出有效 JSON 时，原始诊断仍保留并允许用户手动录入。'
     ];
+    const sourceDocumentInstructions = r.sourceDocument ? (() => {
+      const sourceDocument = schema.normalizeWritingSourceDocument(r.sourceDocument);
+      if (!sourceDocument) return '';
+      const selected = sourceDocument.outline.filter(item => sourceDocument.selectedSectionIds.includes(item.id));
+      const range = sourceDocument.processingScope === 'sections'
+        ? `只${revision ? '处理' : '检查'}以下章节/范围：${selected.length
+          ? selected.map(item => `${item.title}（${item.locator || '位置未识别'}）`).join('、')
+          : sourceDocument.manualSectionRange || '用户尚未指定章节，请先询问范围'}。`
+        : revision ? '请先检查原文件目录，再按章节逐次改写；每次完成一章后等待用户确认再继续。'
+          : '请先检查原文件目录，再按章节逐次检查；每次完成一章后等待用户确认再继续，不要直接改写正文。';
+      return `待改原文件：${sourceDocument.name}。请在当前 AI 对话中附上该文件；工作台没有把整本原文放进此提示词。${range}`;
+    })() : '';
     const baselineLines = [];
     const fixed = [header, COMMON,
+      ...(sourceDocumentInstructions ? [sourceDocumentInstructions] : []),
       ...baselineLines,
       ...(packRuleText(data.packSelection).length ? ['本轮采用的基础包规则（仅当前任务适用项）：', ...packRuleText(data.packSelection)] : []),
       ...(data.packSelection.sources.filter(source => data.packSelection.entries.some(entry => entry.packId !== 'builtin-article'
@@ -857,5 +891,5 @@
   }
 
   return { buildWritingDiagnosisPrompt, buildWritingRevisionPrompt, buildAcademicWritingPrompt, buildDomainWritingPrompt, deriveWritingStyleProfile, buildLocalWritingDiagnosis,
-    selectWritingPacks, listWritingPackRoutes, recommendMaterials };
+    selectWritingPacks, listWritingPackRoutes, recommendMaterials, buildWritingTaskAnalysisPrompt };
 });

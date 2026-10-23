@@ -49,7 +49,8 @@ test('软著内容包可用于普通文章诊断与改写提示词，并区分�
   assert.equal(pack.name, '软著内容');
   assert.equal(pack.layer, 'task');
   assert.equal(pack.genre, 'article');
-  assert.deepEqual(pack.applicability.tasks, ['article', 'diagnosis', 'revision']);
+  assert.deepEqual(pack.applicability.tasks, ['article', 'diagnosis', 'revision', 'technical-procedure', 'technical-api', 'technical-design', 'technical-troubleshooting']);
+  assert.deepEqual(pack.applicability.genres, ['article', 'technical-document']);
   assert.deepEqual(pack.prompts.map(item => item.taskType).sort(), ['diagnosis', 'revision']);
   assert.ok(pack.methods.some(item => /功能—证据—手册段落/.test(item.title)));
   assert.ok(pack.structures.some(item => /操作步骤/.test(item.sections.join(''))));

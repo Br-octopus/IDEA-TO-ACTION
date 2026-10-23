@@ -92,6 +92,7 @@
     return {
       description: text(source.description),
       tasks: list(source.tasks),
+      genres: [...new Set(list(source.genres).filter(item => typeof item === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(item)))].slice(0, 20),
       languages: list(source.languages),
       exclusions: list(source.exclusions)
     };

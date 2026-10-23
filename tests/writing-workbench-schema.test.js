@@ -3,6 +3,53 @@ const assert = require('node:assert/strict');
 const schema = require('../prototype/writing-workbench-schema.js');
 const coverage = require('../prototype/writing-material-coverage.js');
 
+test('常用工作空间只保留有界元数据与安全相对路径', () => {
+  const record = schema.normalizeWritingWorkspaceRecord({
+    id: ' workspace-1 ', name: ' 项目材料 ', rootLabel: ' sample-project ',
+    sourceKind: 'browser-directory', createdAt: '2026-10-23T08:00:00.000Z',
+    selectedPaths: [
+      { path: 'src\\save.js', fingerprint: '42:abcd1234', content: '文件原文不得保存' },
+      { path: '../secret.txt', fingerprint: 'secret' },
+      { path: 'D:/private/file.txt', fingerprint: 'secret' },
+      { path: '/root/file.txt', fingerprint: 'secret' },
+      { path: 'folder/./file.txt', fingerprint: 'secret' },
+      { path: 'folder/..\\secret.txt', fingerprint: 'secret' },
+      { path: 'docs/raw.txt', fingerprint: '这不是文件指纹而是原文' },
+      { path: 'src/save.js', fingerprint: 'duplicate' },
+      { path: 'docs/guide.md', fingerprint: '17:ef0099' }
+    ],
+    absolutePath: 'D:/private', fileContents: '原文哨兵', browserHandle: { secret: true }, apiKey: 'secret'
+  });
+
+  assert.deepEqual(record, {
+    id: 'workspace-1', name: '项目材料', rootLabel: 'sample-project', sourceKind: 'browser-directory',
+    selectedPaths: [
+      { path: 'src/save.js', fingerprint: '42:abcd1234' },
+      { path: 'docs/guide.md', fingerprint: '17:ef0099' }
+    ],
+    createdAt: '2026-10-23T08:00:00.000Z'
+  });
+  assert.doesNotMatch(JSON.stringify(record), /原文哨兵|文件原文|D:\\/);
+
+  const bounded = schema.normalizeWritingWorkspaceRecord({
+    id: 'x'.repeat(150), name: 'n'.repeat(300), rootLabel: 'r'.repeat(300),
+    sourceKind: 'untrusted-kind', createdAt: 'd'.repeat(100),
+    selectedPaths: Array.from({ length: 220 }, (_, index) => ({
+      path: `folder/file-${index}.md`, fingerprint: `${index}:abcdef12`
+    }))
+  });
+  assert.equal(bounded.id.length, 100);
+  assert.equal(bounded.name.length, 120);
+  assert.equal(bounded.rootLabel.length, 120);
+  assert.equal(bounded.sourceKind, '');
+  assert.equal(bounded.createdAt.length, 80);
+  assert.equal(bounded.selectedPaths.length, 200);
+  assert.equal(bounded.selectedPaths[0].fingerprint, '0:abcdef12');
+  assert.deepEqual(schema.normalizeWritingWorkspaceRecords([
+    { id: 'one', name: '一' }, { id: 'one', name: '重复' }, ...Array.from({ length: 25 }, (_, index) => ({ id: `ws-${index}` }))
+  ]).map(item => item.id).length, 20);
+});
+
 test('普通文章配置覆盖七项规格且深层不可变，未知文体明确不支持', () => {
   assert.deepEqual(Object.keys(schema.WRITING_GENRE_CONFIGS).slice(0, 2), ['article', 'academic-paper']);
   const config = schema.getWritingGenreConfig('article');
@@ -907,4 +954,24 @@ test('材料来源元数据在新旧轮次中按白名单保留且不会升级�
   const legacy = schema.normalizeWritingRound({ materials: [{ id: 'legacy', title: '旧材料' }] });
   assert.equal(legacy.materials[0].verificationStatus || 'unverified', 'unverified');
   assert.equal(Object.hasOwn(legacy.materials[0], 'provider'), false);
+});
+
+test('待改文件元数据只保留有限预览、有效目录选择和安全字段', () => {
+  const round = schema.normalizeWritingRound({ sourceDocument: {
+    name: '操作手册.docx', format: 'docx', fingerprint: '12000:abcd', parseStatus: 'parsed',
+    extractedCharacterCount: 30000, pageCount: 0, preview: '预览'.repeat(5000),
+    outline: [{ id: 's1', title: '安装', level: 1, locator: '第1段' }, { id: 's2', title: '配置', level: 2 }],
+    selectedSectionIds: ['s1', 'unknown'], manualSectionRange: '', processingScope: 'sections', attachmentRequired: true,
+    absolutePath: 'D:/private/操作手册.docx', file: { bytes: 'secret' }, raw: '完整正文哨兵'
+  } });
+  assert.ok(round.sourceDocument.preview.length <= 8000);
+  assert.deepEqual(round.sourceDocument.selectedSectionIds, ['s1']);
+  assert.equal(round.sourceDocument.outline.length, 2);
+  assert.equal(Object.hasOwn(round.sourceDocument, 'absolutePath'), false);
+  assert.equal(Object.hasOwn(round.sourceDocument, 'file'), false);
+  assert.equal(JSON.stringify(round).includes('完整正文哨兵'), false);
+  assert.equal(JSON.stringify(round).includes('secret'), false);
+  const restored = schema.normalizeWritingWorkspace({ rounds: [round] }).rounds[0];
+  assert.equal(restored.sourceDocument.name, '操作手册.docx');
+  assert.deepEqual(restored.sourceDocument.selectedSectionIds, ['s1']);
 });

@@ -56,7 +56,7 @@
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters",
     "knowledgeMetadata", "researchTasks", "platformConnections", "researchAttachments", "settings",
-    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories",
+    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories", "writingWorkspaces",
     "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects"
   ];
 
@@ -77,6 +77,7 @@
       promptAgentSources: [],
       writingArticles: [],
       writingMemories: [],
+      writingWorkspaces: [],
       writingPacks: [],
       writingPackSettings: [],
       writingReviews: [],
@@ -405,15 +406,19 @@
   function sanitizeWritingState(state) {
     const articles = Array.isArray(state?.writingArticles) ? state.writingArticles : [];
     const memories = Array.isArray(state?.writingMemories) ? state.writingMemories : [];
+    const workspaces = Array.isArray(state?.writingWorkspaces) ? state.writingWorkspaces : [];
     const packs = Array.isArray(state?.writingPacks) ? state.writingPacks : [];
     const packSettings = Array.isArray(state?.writingPackSettings) ? state.writingPackSettings : [];
     const reviews = Array.isArray(state?.writingReviews) ? state.writingReviews : [];
-    if (!articles.length && !memories.length && !packs.length && !packSettings.length && !reviews.length) {
-      return { writingArticles: [], writingMemories: [], writingPacks: [], writingPackSettings: [], writingReviews: [] };
+    if (!articles.length && !memories.length && !workspaces.length && !packs.length && !packSettings.length && !reviews.length) {
+      return { writingArticles: [], writingMemories: [], writingWorkspaces: [], writingPacks: [], writingPackSettings: [], writingReviews: [] };
     }
     const schema = writingSchema || (typeof globalThis === "undefined" ? null : globalThis.WritingWorkbenchSchema);
-    if ((articles.length || memories.length) && (!schema || typeof schema.normalizeWritingWorkspace !== "function"
+    if ((articles.length || memories.length || workspaces.length) && (!schema || typeof schema.normalizeWritingWorkspace !== "function"
       || typeof schema.normalizeWritingMemory !== "function")) {
+      throw new WritingSchemaUnavailableError();
+    }
+    if (workspaces.length && typeof schema.normalizeWritingWorkspaceRecords !== "function") {
       throw new WritingSchemaUnavailableError();
     }
     const packSchema = writingPackSchema || (typeof globalThis === "undefined" ? null : globalThis.WritingPackSchema);
@@ -434,6 +439,7 @@
         return snapshot;
       }).filter(item => item.id && item.id === item.article.id) : [],
       writingMemories: memories.length ? stripModelKeys(memories).map(schema.normalizeWritingMemory).filter(item => item.id) : [],
+      writingWorkspaces: workspaces.length ? schema.normalizeWritingWorkspaceRecords(stripModelKeys(workspaces)) : [],
       writingPacks: packs.length
         ? packSchema.normalizeWritingPackCollection(stripModelKeys(packs))
         : [],

@@ -149,6 +149,8 @@
   const ROUND_LIMIT = 100;
   const UNIT_LIMIT = 100;
   const ISSUE_LIMIT = 200;
+  const SAVED_WORKSPACE_LIMIT = 20;
+  const SAVED_WORKSPACE_PATH_LIMIT = 200;
   const UNIT_TYPES = Object.freeze(["chapter", "fragment", "task"]);
   const ISSUE_JUDGMENTS = Object.freeze(["candidate", "needs-verification", "preference", "undetermined"]);
   const ISSUE_STATUSES = Object.freeze(["pending", "pending-user", "resolved-awaiting-review", "review-passed", "deferred"]);
@@ -179,7 +181,7 @@
     "id", "articleId", "draft", "feedback", "userFeedback", "revisionNote", "diagnosisParseStatus",
     "parentRoundId", "diagnosis", "prompt", "sources", "materials", "preferences", "undo", "packSelections",
     "packSnapshot", "unitId", "unitSnapshot", "longformSnapshot", "promptVersions", "sourcePromptVersionId", "restoredFromRoundId",
-    "routeSnapshot", "taskType", "createdAt", "updatedAt"
+    "routeSnapshot", "taskType", "sourceDocument", "createdAt", "updatedAt"
   ]);
   const UNDO_FIELDS = new Set(["action", "memoryId", "roundId", "undoneAt"]);
   const STYLE_SAMPLE_FIELDS = new Set(["sourceArticleId", "excerpt", "features"]);
@@ -256,6 +258,55 @@
     if (!locator || locator.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(locator)
       || locator.split("/").some(part => !part || part === "." || part === "..")) return "";
     return locator;
+  }
+
+  function normalizeSavedWorkspacePath(input) {
+    if (!isObject(input)) return null;
+    const path = text(input.path, 500).replace(/\\/g, "/");
+    if (!path || path.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(path)
+      || path.split("/").some(part => !part || part === "." || part === "..")) return null;
+    const fingerprint = text(input.fingerprint, 256);
+    // 索引指纹格式为“字符数:十六进制哈希”，避免把原文伪装成指纹持久化。
+    if (!/^\d{1,10}:[a-f0-9]{1,8}$/i.test(fingerprint)) return null;
+    return { path, fingerprint };
+  }
+
+  // 常用工作空间只保存恢复选择所需的元数据，不保存文件句柄或材料原文。
+  function normalizeWritingWorkspaceRecord(input) {
+    const source = isObject(input) ? input : {};
+    const selectedPaths = [];
+    const seenPaths = new Set();
+    if (Array.isArray(source.selectedPaths)) {
+      for (const item of source.selectedPaths) {
+        const normalized = normalizeSavedWorkspacePath(item);
+        if (!normalized || seenPaths.has(normalized.path)) continue;
+        seenPaths.add(normalized.path);
+        selectedPaths.push(normalized);
+        if (selectedPaths.length >= SAVED_WORKSPACE_PATH_LIMIT) break;
+      }
+    }
+    return {
+      id: text(source.id, 100),
+      name: text(source.name, 120),
+      rootLabel: text(source.rootLabel, 120),
+      sourceKind: ["browser-directory", "authorized-directory"].includes(source.sourceKind) ? source.sourceKind : "",
+      selectedPaths,
+      createdAt: text(source.createdAt, 80)
+    };
+  }
+
+  function normalizeWritingWorkspaceRecords(input) {
+    if (!Array.isArray(input)) return [];
+    const records = [];
+    const seenIds = new Set();
+    for (const item of input) {
+      const record = normalizeWritingWorkspaceRecord(item);
+      if (!record.id || seenIds.has(record.id)) continue;
+      seenIds.add(record.id);
+      records.push(record);
+      if (records.length >= SAVED_WORKSPACE_LIMIT) break;
+    }
+    return records;
   }
 
   function textList(value, limit = 30, itemLimit = TEXT_LIMIT) {
@@ -581,6 +632,20 @@
     return Object.fromEntries(Object.entries(article).filter(([key]) => ARTICLE_FIELDS.has(key)));
   }
 
+  function normalizeWritingTaskSuggestion(input) {
+    const source = isObject(input) ? input : {};
+    const genre = typeof source.genre === 'string' && WRITING_GENRE_CONFIGS[source.genre] ? source.genre : '';
+    const allowedTasks = genre === 'article' ? ['diagnosis', 'revision'] : WRITING_GENRE_CONFIGS[genre]?.taskTypes || [];
+    const taskType = typeof source.taskType === 'string' && allowedTasks.includes(source.taskType) ? source.taskType : '';
+    if (!genre || !taskType) return null;
+    const suggestedFields = Object.fromEntries(Object.entries(isObject(source.suggestedFields) ? source.suggestedFields : {})
+      .filter(([key, value]) => key.length <= 80 && Object.hasOwn(WRITING_GENRE_CONFIGS[genre]?.domainFields || {}, key)
+        && typeof value === 'string').slice(0, 20).map(([key, value]) => [key, safeMetadataText(value, 1000)]));
+    return { genre, taskType, reason: safeMetadataText(source.reason, 1000),
+      confidence: ['low', 'medium', 'high'].includes(source.confidence) ? source.confidence : 'low',
+      suggestedFields, missingInfo: textList(source.missingInfo, 20, 300) };
+  }
+
   function normalizeAcademicTarget(input) {
     const source = isObject(input) ? input : {};
     const target = {};
@@ -638,6 +703,41 @@
     return Object.fromEntries(Object.entries(material).filter(([key]) => MATERIAL_FIELDS.has(key)));
   }
 
+  function normalizeWritingSourceDocument(input) {
+    if (!isObject(input)) return null;
+    const format = ['txt', 'md', 'docx', 'pdf'].includes(input.format) ? input.format : '';
+    const name = safeMetadataText(String(input.name || '').split(/[\\/]/).at(-1), 160);
+    if (!format || !name) return null;
+    const outline = [];
+    const seenIds = new Set();
+    for (const item of Array.isArray(input.outline) ? input.outline.slice(0, 200) : []) {
+      if (!isObject(item)) continue;
+      const id = safeMetadataText(item.id, 100);
+      const title = safeMetadataText(item.title, 240);
+      if (!id || !title || seenIds.has(id)) continue;
+      seenIds.add(id);
+      const level = Number(item.level);
+      outline.push({ id, title, level: Number.isInteger(level) && level >= 1 && level <= 9 ? level : 1,
+        locator: safeMetadataText(item.locator, 160) });
+    }
+    const selectedSectionIds = [...new Set((Array.isArray(input.selectedSectionIds) ? input.selectedSectionIds : [])
+      .filter(id => typeof id === 'string' && seenIds.has(id)))].slice(0, 200);
+    const parseStatuses = ['parsed', 'truncated', 'partial', 'empty', 'failed', 'unsupported'];
+    const fingerprint = safeMetadataText(input.fingerprint, 80);
+    return {
+      name, format, fingerprint,
+      parseStatus: parseStatuses.includes(input.parseStatus) ? input.parseStatus : 'parsed',
+      extractedCharacterCount: count(input.extractedCharacterCount, 30000),
+      pageCount: count(input.pageCount, 100),
+      preview: safeMetadataText(input.preview, 8000),
+      outline,
+      selectedSectionIds,
+      manualSectionRange: safeMetadataText(input.manualSectionRange, 1000),
+      processingScope: input.processingScope === 'sections' ? 'sections' : 'whole',
+      attachmentRequired: input.attachmentRequired !== false
+    };
+  }
+
   function normalizeWritingRound(input) {
     const source = isObject(input) ? input : {};
     const round = {
@@ -676,6 +776,10 @@
     }
     if (Object.prototype.hasOwnProperty.call(source, "packSnapshot")) {
       round.packSnapshot = normalizeWritingPackSnapshot(source.packSnapshot);
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "sourceDocument")) {
+      const sourceDocument = normalizeWritingSourceDocument(source.sourceDocument);
+      if (sourceDocument) round.sourceDocument = sourceDocument;
     }
     if (Object.prototype.hasOwnProperty.call(source, "unitSnapshot")) {
       round.unitSnapshot = normalizeWritingUnit(source.unitSnapshot);
@@ -806,7 +910,7 @@
         ? source.rounds.slice(-ROUND_LIMIT).map(normalizeWritingRound).filter(round => round.id || round.draft
           || round.feedback || round.userFeedback || round.revisionNote || round.diagnosis || round.prompt
           || round.sources.length || round.materials.length || round.preferences?.length || round.promptVersions?.length
-          || Object.keys(round.undo).length)
+          || round.sourceDocument || Object.keys(round.undo).length)
         : [],
       styleProfile: normalizeWritingStyleProfile(source.styleProfile),
       styleProfiles: Array.isArray(source.styleProfiles)
@@ -869,11 +973,15 @@
     ISSUE_PRIORITIES,
     ROUTE_STEP_STATUSES,
     normalizeWritingArticle,
+    normalizeWritingTaskSuggestion,
     normalizeWritingRound,
+    normalizeWritingSourceDocument,
     normalizeWritingUnit,
     normalizeWritingIssue,
     normalizeWritingStyleProfile,
     normalizeWritingMemory,
+    normalizeWritingWorkspaceRecord,
+    normalizeWritingWorkspaceRecords,
     normalizeWritingPackSnapshot,
     normalizeWritingWorkspace,
     normalizeLongform,

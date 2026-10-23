@@ -7,6 +7,174 @@ const storage = require('../prototype/storage.js');
 const { createWritingWorkbenchUI } = require('../prototype/writing-workbench-ui.js');
 const writingPackCatalog = require('../prototype/writing-pack-catalog.js');
 
+test('新写作与文章改写共用引导步骤，只有改写要求原文；分析失败可手动确认', async () => {
+  const f = fixture();
+  let analyzedInput = null;
+  f.coordinator.analyzeTask = async input => { analyzedInput = input; throw new Error('分析服务暂不可用'); };
+  assert.match(f.mount.innerHTML, /新写作：从目标开始/);
+  assert.doesNotMatch(f.mount.innerHTML, /待改原文/);
+  const initialIds = [...f.mount.innerHTML.split('<div hidden>')[0].matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(initialIds).size, initialIds.length, '首屏控件 ID 唯一');
+  await f.input('writing-goal', '写一篇介绍本地备份的文章');
+  await f.click('wizard-analyze');
+  assert.match(f.mount.innerHTML, /确认方向/);
+  assert.match(f.mount.innerHTML, /可手动选择后继续/);
+  await f.change('writing-wizard-genre', 'article');
+  await f.change('writing-wizard-task-type', 'revision');
+  await f.click('wizard-confirm');
+  assert.equal(f.coordinator.listArticles().length, 1);
+  assert.match(f.mount.innerHTML, /生成提示词/);
+  assert.match(f.mount.innerHTML, /可编辑提示词/);
+  const promptStageIds = [...f.mount.innerHTML.split('<div hidden>')[0].matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(promptStageIds).size, promptStageIds.length, '提示词阶段控件 ID 唯一');
+
+  const firstArticleId = f.coordinator.listArticles()[0].id;
+  await f.input('writing-prompt', '用户手工调整后的提示词');
+  await f.click('wizard-stage', { stage: '2' });
+  await f.input('writing-goal', '补充目标细节');
+  await f.click('wizard-confirm');
+  const firstWorkspace = f.coordinator.getWorkspace(firstArticleId);
+  assert.equal(firstWorkspace.rounds.length, 2, '任务目标变化后生成新轮次');
+  assert.equal(f.node('writing-prompt').value, '用户手工调整后的提示词', '回退确认后保留手工编辑的提示词');
+  assert.equal(firstWorkspace.rounds.at(-1).promptVersions.at(-1).content, '用户手工调整后的提示词');
+  assert.match(f.mount.innerHTML, /已保留你手动编辑的提示词/);
+
+  await f.click('new');
+  await f.change('writing-wizard-mode-rewrite', 'rewrite');
+  assert.match(f.mount.innerHTML, /待改原文/);
+  await f.input('writing-goal', '保留事实，改得更简洁');
+  await f.click('wizard-analyze');
+  assert.match(f.mount.innerHTML, /请先提供待改原文和改写目标/);
+  assert.equal(analyzedInput.draft, '', '原文缺失时不发起分析请求');
+  await f.input('writing-draft', '这是需要改写的原文。');
+  await f.click('wizard-analyze');
+  assert.equal(analyzedInput.draft, '这是需要改写的原文。');
+  await f.change('writing-wizard-genre', 'article');
+  await f.change('writing-wizard-task-type', 'revision');
+  await f.click('wizard-confirm');
+
+  const articleId = f.coordinator.listArticles().at(-1).id;
+  await f.click('wizard-used');
+  await f.input('writing-newDraft', '外部 AI 返回的改写结果。');
+  f.coordinator.runModelDiagnosis = async id => {
+    const round = f.coordinator.getWorkspace(id).rounds.at(-1);
+    await f.coordinator.addIssue(id, { roundId: round.id, excerpt: '遗漏范围说明', observation: '结果没有说明适用范围',
+      impact: '读者无法判断适用对象', evidenceCategory: 'requirement', evidenceDescription: '任务目标要求明确适用范围',
+      suggestion: '补充适用范围', priority: 'high' });
+    return { diagnosis: '发现适用范围遗漏。', prompt: '修订提示词基础内容' };
+  };
+  await f.click('wizard-check');
+  const issue = f.coordinator.getWorkspace(articleId).issues.at(-1);
+  assert.match(f.mount.innerHTML, /选择需要处理的问题/);
+  await f.change(`writing-wizard-issue-${issue.id}`, true);
+  await f.click('wizard-next');
+  assert.match(f.node('writing-prompt').value, /结果没有说明适用范围/);
+  assert.match(f.coordinator.getWorkspace(articleId).rounds.at(-1).promptVersions.at(-1).content, /结果没有说明适用范围/);
+});
+
+test('引导材料候选可即时搜索并清除筛选，未匹配时仍保留完整候选', async () => {
+  const f = fixture();
+  assert.match(f.mount.innerHTML, /搜索候选文件/);
+  await f.input('writing-wizard-material-search', '备份');
+  assert.match(f.mount.innerHTML, /没有匹配的候选文件/);
+  await f.click('wizard-clear-material-search');
+  assert.equal(f.node('writing-wizard-material-search').value, '');
+});
+
+test('长原文从独立文件导入，章节范围进入分析和保存轮次，提示词要求附原件', async () => {
+  const f = fixture();
+  await f.change('writing-wizard-mode-rewrite', 'rewrite');
+  assert.match(f.mount.innerHTML, /id="writing-source-file"/);
+  assert.match(f.mount.innerHTML, /待改原文/);
+  await f.input('writing-goal', '优化操作手册');
+  await f.change('writing-source-file', [{ name: '操作手册.md', size: 80, lastModified: 1,
+    text: async () => '# 安装软件\n安装内容哨兵'.repeat(4) }]);
+  assert.match(f.mount.innerHTML, /操作手册\.md/);
+  await f.change('writing-source-processing-scope', 'sections');
+  assert.match(f.mount.innerHTML, /安装软件/);
+  const sectionId = f.mount.querySelectorAll('[data-source-section]')[0]?.id;
+  assert.ok(sectionId, '应显示可选择章节');
+  await f.change(sectionId, true);
+  f.coordinator.analyzeTask = async input => {
+    assert.equal(input.sourceDocument.name, '操作手册.md');
+    assert.equal(input.sourceDocument.selectedSectionIds.length, 1);
+    return { genre: 'article', taskType: 'revision', reason: '已有操作手册' };
+  };
+  await f.click('wizard-analyze');
+  await f.change('writing-wizard-genre', 'article');
+  await f.change('writing-wizard-task-type', 'revision');
+  await f.click('wizard-confirm');
+  const round = f.coordinator.getWorkspace(f.coordinator.listArticles()[0].id).rounds.at(-1);
+  assert.equal(round.sourceDocument.name, '操作手册.md');
+  assert.match(round.prompt, /请在当前 AI 对话中附上该文件/);
+  assert.match(round.prompt, /安装软件/);
+  assert.doesNotMatch(round.prompt, /安装内容哨兵/);
+});
+
+test('参考文件夹按20项分页搜索；过滤文件恢复后才读取，敏感路径不展示', async () => {
+  const f = fixture();
+  const makeFile = (path, text) => {
+    const bytes = Uint8Array.from(Buffer.from(text));
+    return { name: path.split('/').at(-1), webkitRelativePath: `repo/${path}`, size: bytes.length,
+      arrayBuffer: async () => bytes.buffer };
+  };
+  const files = Array.from({ length: 24 }, (_, index) => makeFile(`src/file-${index}.js`, `export const item${index} = true;`));
+  files.push(makeFile('docs/操作手册.md', '# 操作手册\n安装步骤说明。'));
+  files.push(makeFile('build_v8.js', 'export const generated = true;'));
+  files.push(makeFile('.env', 'API_KEY=hidden-value'));
+  await f.change('writing-material-folder', files);
+  assert.match(f.mount.innerHTML, /每页 20 项/);
+  await f.input('writing-wizard-material-search', '操作手册');
+  assert.match(f.mount.innerHTML, /docs\/操作手册\.md/);
+  await f.input('writing-wizard-material-search', '');
+  await f.click('wizard-filtered-toggle');
+  assert.match(f.mount.innerHTML, /build_v8\.js/);
+  assert.doesNotMatch(f.mount.innerHTML, /\.env|hidden-value/);
+  const restore = f.mount.querySelectorAll('[data-writing-action="wizard-restore-filtered"]')[0];
+  assert.ok(restore);
+  await f.click('wizard-restore-filtered', { projectSource: restore.dataset.projectSource, relativePath: 'build_v8.js' });
+  assert.match(f.mount.innerHTML, /build_v8\.js/);
+  assert.match(f.mount.innerHTML, /generated = true/);
+  assert.doesNotMatch(f.mount.innerHTML, /API_KEY=hidden-value/);
+});
+
+test('不同文件夹的同路径候选去重，移除一个来源后保留另一个来源的候选', async () => {
+  const f = fixture();
+  const makeFile = (root, text) => {
+    const bytes = Uint8Array.from(Buffer.from(text));
+    return { name: 'guide.md', webkitRelativePath: `${root}/docs/guide.md`, size: bytes.length,
+      arrayBuffer: async () => bytes.buffer };
+  };
+  await f.change('writing-material-folder', [makeFile('project-a', '# Guide\nFirst source excerpt.')]);
+  await f.change('writing-material-folder', [makeFile('project-b', '# Guide\nSecond source excerpt.')]);
+
+  assert.equal(f.mount.querySelectorAll('[data-wizard-material]').length, 1, '相同相对路径只显示一个候选');
+  assert.match(f.mount.innerHTML, /First source excerpt/);
+  const sources = f.mount.querySelectorAll('[data-writing-action="wizard-remove-project-source"]');
+  assert.equal(sources.length, 2);
+  await f.click('wizard-remove-project-source', { projectSource: sources[0].dataset.projectSource });
+
+  assert.equal(f.mount.querySelectorAll('[data-wizard-material]').length, 1, '移除单个来源不应误删仍被引用的候选');
+  assert.match(f.mount.innerHTML, /Second source excerpt/);
+  assert.doesNotMatch(f.mount.innerHTML, /First source excerpt/);
+});
+
+test('原文文件快速替换时迟到解析结果不会覆盖当前文件', async () => {
+  const f = fixture();
+  await f.change('writing-wizard-mode-rewrite', 'rewrite');
+  let releaseFirst;
+  const firstRead = new Promise(resolve => { releaseFirst = resolve; });
+  const first = f.change('writing-source-file', [{ name: '旧手册.md', size: 10, lastModified: 1, text: () => firstRead }]);
+  await new Promise(resolve => setImmediate(resolve));
+  const second = f.change('writing-source-file', [{ name: '新手册.md', size: 12, lastModified: 2,
+    text: async () => '# 新目录\n新文件正文' }]);
+  await second;
+  releaseFirst('# 旧目录\n旧文件正文');
+  await first;
+  assert.match(f.mount.innerHTML, /新手册\.md/);
+  assert.doesNotMatch(f.mount.innerHTML, /旧手册\.md|旧目录/);
+});
+
 test('UMD界面从schema配置读取名称、目标标签、维度和说明，选择维度实际进入诊断', async () => {
   const vm = require('node:vm');
   const { readFileSync } = require('node:fs');
@@ -719,19 +887,17 @@ test('编辑复制提示词，模型失败保留诊断和输入，迟到结果�
   assert.match(f.mount.innerHTML, /模型不可用/);
 });
 
-test('应用真实接线：旧文章别名进入单写作root，场景隔离且面包屑正确', async () => {
+test('应用真实接线：写作入口独立呈现且保留任务草稿', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp();
   assert.ok(f.coordinator, '应用需要实际创建写作协调器');
   await f.event('nav-article');
-  assert.equal(f.mount.hidden, false);
-  assert.equal(f.element('ppt-scene-root').hidden, true);
+  assert.notEqual(f.mount.hidden, true);
   assert.match(f.element('breadcrumb').textContent, /写作工作台/);
   await f.input('writing-goal', '切场景不丢失');
   await f.event('scene-ppt');
-  assert.equal(f.mount.hidden, true);
   assert.equal(f.element('ppt-scene-root').hidden, false);
-  await f.event('scene-writing');
+  await f.event('scene-task');
   assert.equal(f.node('writing-goal').value, '切场景不丢失');
   await f.event('nav-prompt-agent');
   assert.match(f.element('breadcrumb').textContent, /提示词 Agent/);

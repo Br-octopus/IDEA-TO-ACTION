@@ -980,7 +980,8 @@
       version: 1, builtin: false, basePackId: '', enabled: true,
       applicability: {
         description: '用于生成软著材料相关的文章诊断提示词和定向改写提示词，重点覆盖软件操作手册、功能描述与证据一致性。',
-        tasks: ['article', 'diagnosis', 'revision'], languages: ['zh'],
+        tasks: ['article', 'diagnosis', 'revision', 'technical-procedure', 'technical-api', 'technical-design', 'technical-troubleshooting'],
+        genres: ['article', 'technical-document'], languages: ['zh'],
         exclusions: ['适用于软著材料相关写作，不代替申请地当前官方指南。', '没有用户提供的项目证据时，不补造软件行为或功能。']
       },
       targetFields: { title: '软件全称与版本', goal: '材料用途与本轮写作目标', audience: '目标读者/审核场景', successCriteria: '用户提供的官方要求与交付条件', preserveItems: '已确认的功能事实和术语', constraints: '证据范围、格式要求及待确认项' },

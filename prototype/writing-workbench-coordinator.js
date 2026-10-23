@@ -51,6 +51,7 @@
     const sessions = new Map();
     const memories = new Map();
     const modelRuns = new Map();
+    let taskAnalysisToken = null;
     const researchRuns = new Map();
     const researchStates = new Map();
     const pendingMemories = new Set();
@@ -873,6 +874,37 @@
       await saveWorkspace(w);
       return copy({ articleId: id, roundId: round.id, ...result, ...(taskType ? { taskType } : {}) });
     }
+    async function analyzeTask(input = {}, options = {}) {
+      if (typeof dependencies.requestModel !== 'function') throw failure('MODEL_UNAVAILABLE', '当前模型不可用，请手动选择文体和任务类型');
+      const token = {};
+      taskAnalysisToken = token;
+      const signal = options.signal;
+      if (signal?.aborted) throw failure('MODEL_CANCELLED', '任务分析已取消');
+      const prompt = prompts.buildWritingTaskAnalysisPrompt(input);
+      let onAbort;
+      try {
+        const abort = new Promise((_, reject) => {
+          onAbort = () => reject(failure('MODEL_CANCELLED', '任务分析已取消'));
+          signal?.addEventListener('abort', onAbort, { once: true });
+        });
+        const response = await Promise.race([dependencies.requestModel({
+          messages: [{ role: 'user', content: prompt }], signal, stage: 'writing-task-analysis'
+        }), abort]);
+        if (signal?.aborted || response?.cancelled) throw failure('MODEL_CANCELLED', '任务分析已取消');
+        if (taskAnalysisToken !== token) throw failure('STALE_RESULT', '任务分析结果已过期');
+        const raw = typeof response === 'string' ? response : response?.text;
+        if (typeof raw !== 'string' || !raw.trim()) throw failure('INVALID_TASK_SUGGESTION', '模型没有返回任务判断');
+        const json = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+        let parsed;
+        try { parsed = JSON.parse(json); } catch { throw failure('INVALID_TASK_SUGGESTION', '模型返回内容不是有效 JSON'); }
+        const suggestion = schema.normalizeWritingTaskSuggestion(parsed);
+        if (!suggestion) throw failure('INVALID_TASK_SUGGESTION', '模型返回的文体或任务类型不受支持');
+        return suggestion;
+      } catch (error) {
+        if (error.code) throw error;
+        throw failure('MODEL_FAILED', `任务分析失败：${error.message || error}`);
+      } finally { signal?.removeEventListener('abort', onAbort); }
+    }
     async function createArticle(input = {}) {
       const requestedGenre = input.genre || 'article';
       const supportedGenre = schema.getWritingGenreConfig(requestedGenre) ? requestedGenre : '';
@@ -1310,7 +1342,7 @@
       memories.clear(); pendingMemories.clear(); loadMemories();
       return listArticles();
     }
-    return { createArticle, openArticle: getWorkspace, getWorkspace, listArticles, updateArticle, appendRound,
+    return { analyzeTask, createArticle, openArticle: getWorkspace, getWorkspace, listArticles, updateArticle, appendRound,
       addUnit, updateUnit, archiveUnit, setMaterialUnits, addIssue, updateIssue, listRoutes, selectRoute, advanceRoute,
       updateLongformProject, saveLongformItem, reviewLongformImpact,
       getMaterialCoverage, setMaterialCoverage, startMaterialBatch, recordMaterialBatchOutcome,

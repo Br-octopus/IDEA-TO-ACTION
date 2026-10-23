@@ -41,6 +41,7 @@ function createWritingDOM(rootId = 'writing-workbench-root') {
       else await dispatch('change', { target });
     },
     async changeAction(action, data = {}, value) { const target = [...nodes.values()].find(n => (n.dataset.writingAction === action || n.dataset.action === action) && Object.entries(data).every(([key, expected]) => n.dataset[key] === expected)); if (!target) throw new Error(`操作不存在：${action}`); if (typeof value === 'boolean') target.checked = value; else target.value = value; await dispatch('change', { target }); },
+    async changeData(dataKey, dataValue, value) { const target = [...nodes.values()].find(n => n.dataset[dataKey] === String(dataValue)); if (!target) throw new Error(`数据控件不存在：${dataKey}=${dataValue}`); if (typeof value === 'boolean') target.checked = value; else target.value = value; await dispatch('change', { target }); },
     async change(id, value) { const target = nodes.get(id); if (!target) throw new Error(`控件不存在：${id}`); if (typeof value === 'boolean') target.checked = value; else if (Array.isArray(value)) target.files = value; else target.value = value; await dispatch('change', { target }); }
   };
 }

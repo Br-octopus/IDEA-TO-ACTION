@@ -66,6 +66,65 @@ function extractDocxText(xml) {
   return texts.join('').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function xmlAttribute(tag, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return tag.match(new RegExp(`(?:^|\\s)w:${escaped}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1] || '';
+}
+
+function extractDocxParagraphs(documentXml, stylesXml = '') {
+  if (/<!DOCTYPE|<!ENTITY/i.test(stylesXml)) throw new ParserError('PARSE_FAILED');
+  const styles = new Map();
+  const stylePattern = /<w:style\b([^>]*)>([\s\S]*?)<\/w:style\s*>/gi;
+  let styleMatch;
+  while ((styleMatch = stylePattern.exec(stylesXml))) {
+    const styleId = xmlAttribute(styleMatch[1], 'styleId');
+    if (!styleId) continue;
+    const nameTag = styleMatch[2].match(/<w:name\b[^>]*\/?\s*>/i)?.[0] || '';
+    const outlineTag = styleMatch[2].match(/<w:outlineLvl\b[^>]*\/?\s*>/i)?.[0] || '';
+    const outlineValue = xmlAttribute(outlineTag, 'val');
+    styles.set(styleId, {
+      name: decodeXmlText(xmlAttribute(nameTag, 'val')),
+      level: /^\d+$/.test(outlineValue) ? Number(outlineValue) + 1 : null
+    });
+  }
+  if (/<!DOCTYPE|<!ENTITY/i.test(documentXml)) throw new ParserError('PARSE_FAILED');
+  const paragraphs = [];
+  const paragraphPattern = /<w:p\b[^>]*>([\s\S]*?)<\/w:p\s*>/gi;
+  let paragraphMatch;
+  while ((paragraphMatch = paragraphPattern.exec(documentXml))) {
+    const content = paragraphMatch[1];
+    const text = [...content.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t\s*>/gi)].map(match => decodeXmlText(match[1])).join('').trim();
+    if (!text) continue;
+    const properties = content.match(/<w:pPr\b[^>]*>([\s\S]*?)<\/w:pPr\s*>/i)?.[1] || '';
+    const styleTag = properties.match(/<w:pStyle\b[^>]*\/?\s*>/i)?.[0] || '';
+    const styleId = xmlAttribute(styleTag, 'val');
+    const style = styles.get(styleId);
+    const directOutlineTag = properties.match(/<w:outlineLvl\b[^>]*\/?\s*>/i)?.[0] || '';
+    const directOutline = xmlAttribute(directOutlineTag, 'val');
+    const namedHeading = (style?.name || styleId).match(/heading\s*([1-9])/i)?.[1];
+    const headingLevel = /^\d+$/.test(directOutline) ? Number(directOutline) + 1
+      : style?.level || (namedHeading ? Number(namedHeading) : null);
+    paragraphs.push({ text, headingLevel });
+  }
+  return paragraphs;
+}
+
+function boundParagraphs(paragraphs, maxChars) {
+  let used = 0;
+  let truncated = false;
+  const bounded = [];
+  for (const paragraph of paragraphs) {
+    const separatorLength = bounded.length ? 1 : 0;
+    const available = Math.max(0, maxChars - used - separatorLength);
+    if (available === 0) { truncated = true; break; }
+    const text = paragraph.text.slice(0, available);
+    bounded.push({ ...paragraph, text });
+    used += separatorLength + text.length;
+    if (text.length < paragraph.text.length) { truncated = true; break; }
+  }
+  return { paragraphs: bounded, text: bounded.map(item => item.text).join('\n'), truncated };
+}
+
 function imageDimensions(buffer, mimeType) {
   if (mimeType === 'image/png' && buffer.length >= 24 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && buffer.toString('ascii', 12, 16) === 'IHDR') {
     return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
@@ -170,7 +229,7 @@ function createWritingMaterialParser(options = {}) {
             if (/\.rels$/i.test(entry.fileName) && /TargetMode\s*=\s*["']External["']/i.test(entries.get(entry.fileName) || '')) return fail('PARSE_FAILED');
             expanded += entry.uncompressedSize;
             if (expanded > limits.maxExpandedBytes || (entry.uncompressedSize > 0 && entry.uncompressedSize / Math.max(entry.compressedSize, 1) > limits.maxCompressionRatio)) return fail('LIMIT_EXCEEDED');
-            if (entry.fileName === 'word/document.xml' || entry.fileName === 'word/_rels/document.xml.rels' || entry.fileName === '[Content_Types].xml') {
+            if (entry.fileName === 'word/document.xml' || entry.fileName === 'word/styles.xml' || entry.fileName === 'word/_rels/document.xml.rels' || entry.fileName === '[Content_Types].xml') {
               zip.openReadStream(entry, (streamError, stream) => {
                 if (streamError || !stream) return fail('PARSE_FAILED');
                 const chunks = [];
@@ -223,11 +282,20 @@ function createWritingMaterialParser(options = {}) {
       if (document.numPages > limits.maxPdfPages) throw new ParserError('LIMIT_EXCEEDED');
       const pages = [];
       let text = '';
+      let truncated = false;
       for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
         checkCancelled(signal);
         const page = await document.getPage(pageNumber);
         const content = await page.getTextContent();
-        let pageText = content.items.map(item => item.str || '').filter(Boolean).join(' ').trim();
+        let previousY = null;
+        let pageText = content.items.reduce((joined, item) => {
+          const value = String(item.str || '').trim();
+          if (!value) return joined;
+          const y = Number.isFinite(item.transform?.[5]) ? item.transform[5] : null;
+          const separator = !joined ? '' : y !== null && previousY !== null && Math.abs(y - previousY) > 2 ? '\n' : ' ';
+          previousY = y;
+          return joined + separator + value;
+        }, '').trim();
         let extractionMethod = 'pdf-text';
         if (!pageText) {
           ocrPages++;
@@ -268,11 +336,12 @@ function createWritingMaterialParser(options = {}) {
           text += `${separator}${bounded}`;
         }
         page.cleanup?.();
+        if (pageText.length > bounded.length || text.length >= limits.maxOutputChars && pageNumber < document.numPages) truncated = true;
         if (text.length >= limits.maxOutputChars) break;
       }
       const usedOcr = ocrPages > 0;
       const warnings = usedOcr ? ['扫描页通过本机 OCR 识别，结果可能有误；手写、公式和版面结构需人工核对。'] : [];
-      return { format: 'pdf', text, characterCount: text.length, pageCount: document.numPages, pages, warnings,
+      return { format: 'pdf', text, characterCount: text.length, pageCount: document.numPages, pages, truncated, warnings,
         confidence: ocrPages ? confidenceTotal / ocrPages : null, usedOcr };
     } finally {
       signal?.removeEventListener('abort', abortTask);
@@ -289,8 +358,9 @@ function createWritingMaterialParser(options = {}) {
     if (/TargetMode\s*=\s*["']External["']/i.test(relationships)) throw new ParserError('PARSE_FAILED');
     const types = entries.get('[Content_Types].xml') || '';
     if (/macroEnabled|vbaProject/i.test(types)) throw new ParserError('PARSE_FAILED');
-    const text = extractDocxText(entries.get('word/document.xml')).slice(0, limits.maxOutputChars);
-    return { format: 'docx', text, characterCount: text.length, pages: [] };
+    const paragraphs = extractDocxParagraphs(entries.get('word/document.xml'), entries.get('word/styles.xml') || '');
+    const bounded = boundParagraphs(paragraphs, limits.maxOutputChars);
+    return { format: 'docx', text: bounded.text, characterCount: bounded.text.length, paragraphs: bounded.paragraphs, truncated: bounded.truncated, pages: [] };
   }
 
   async function parseImage(buffer, mimeType, signal) {
@@ -433,7 +503,7 @@ function createWritingMaterialParser(options = {}) {
     });
     try {
       const result = await Promise.race([work, abort]);
-      return { ok: true, ...result };
+      return { ok: true, truncated: Boolean(result.truncated), ...result };
     } catch (error) {
       return safeFailure(error instanceof ParserError ? error.code : 'PARSE_FAILED');
     } finally {

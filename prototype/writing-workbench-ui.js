@@ -1,7 +1,9 @@
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./writing-workbench-schema.js'), globalThis, require('./writing-material-coverage.js'), require('./writing-workbench-prompts.js'));
-  else root.WritingWorkbenchUI = factory(root.WritingWorkbenchSchema, root, root.ForwardStepWritingMaterialCoverage, root.WritingWorkbenchPrompts);
-})(typeof globalThis === 'undefined' ? this : globalThis, function (schema, root, coverageApi, prompts) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./writing-workbench-schema.js'), globalThis,
+    require('./writing-material-coverage.js'), require('./writing-workbench-prompts.js'), require('./writing-document-outline.js'), require('./browser-project-index.js'));
+  else root.WritingWorkbenchUI = factory(root.WritingWorkbenchSchema, root, root.ForwardStepWritingMaterialCoverage,
+    root.WritingWorkbenchPrompts, root.ForwardStepWritingDocumentOutline, root.ForwardStepBrowserProjectIndex);
+})(typeof globalThis === 'undefined' ? this : globalThis, function (schema, root, coverageApi, prompts, outlineApi, browserIndex) {
   'use strict';
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -17,7 +19,7 @@
   const confidenceLabels = { low: '低', medium: '中', high: '高' };
   const verificationLabels = { unverified: '未核验', 'source-reviewed': '已核对来源', 'user-confirmed': '用户确认', 'case-validated': '案例验证' };
 
-  function createWritingWorkbenchUI({ document, coordinator, packUI, getState, copyText, downloadText, desktopApi = root?.desktopApi,
+  function createWritingWorkbenchUI({ document, coordinator, packUI, getState, persistState, navigate, copyText, downloadText, desktopApi = root?.desktopApi,
     fetch: fetchImpl = root?.fetch || globalThis.fetch,
     saveMaterialToLibrary, confirm = message => globalThis.confirm(message), notify } = {}) {
     const mount = document?.getElementById('writing-workbench-root');
@@ -29,6 +31,10 @@
     const busy = new Set();
     let processingMaterials = false;
     let activeMaterialJob = null;
+    let sourceImportJob = null;
+    let filteredCandidatesOpen = false;
+    let candidatePage = 1;
+    const projectSources = new Map();
     let articleId = '';
     let managerOpen = false;
     let focusAfterRenderId = '';
@@ -65,7 +71,7 @@
     function isSelectablePack(pack, genre) {
       const tasks = genre === 'academic-paper' ? academicTaskTypes
         : genre === 'article' ? ['article', 'diagnosis', 'revision'] : schema.getWritingGenreConfig(genre)?.taskTypes || [];
-      return (pack.layer === 'core' || pack.genre === genre)
+      return (pack.layer === 'core' || pack.genre === genre || pack.applicability?.genres?.includes(genre))
         && (!pack.taskType || tasks.includes(pack.taskType) || genre === 'academic-paper' && pack.taskType === 'academic-writing');
     }
 
@@ -107,6 +113,10 @@
           issueEvidence: '', issueSuggestion: '', issuePriority: 'medium', routeResult: '', routeEvidence: '',
           routeBlockReason: '', routeReturnToStageId: '',
           error: '', promptNotice: '', notifications: [], dirty: [],
+          wizardStage: 1, wizardMode: 'new', wizardSuggestion: null, wizardError: '', wizardMaterialIds: [], wizardMaterialSearch: '', wizardIssueIds: [], wizardPromptEdited: false, wizardUsedPrompt: '', wizardWorkspaceId: '', wizardWorkspaceName: '',
+          wizardSourceDocument: round?.sourceDocument ? clone(round.sourceDocument) : null,
+          wizardSourceBusy: false, wizardSourceError: '', wizardShowFiltered: false,
+          wizardFilteredCandidates: [], wizardInventoryComplete: true,
           researchMethod: '普通文章如何减少空泛总结并保留具体证据', researchKeywords: ''
         });
       }
@@ -208,6 +218,26 @@
       return `<section class="social-panel" id="writing-academic-tasks"><h2>学术任务</h2>
         <p class="social-muted">先在任务单元选择当前章节；每次生成会新增一条带任务类型和基础包版本的提示词记录。</p>
         <div class="social-tools">${academicTaskTypes.map(taskType => button('academic-task', labels[taskType], `data-task-type="${taskType}"`, locked)).join('')}</div></section>`;
+    }
+    function renderWritingSourceDocument(f) {
+      const source = f.wizardSourceDocument;
+      const statusLabels = { parsed: '解析完成', truncated: '已解析，但触及 30,000 字符提取上限', partial: '目录未完整识别', empty: '没有提取到可用文字', failed: '解析失败', unsupported: '格式不支持' };
+      const outline = source?.outline?.length && source.processingScope === 'sections' ? `<fieldset><legend>选择要改写的章节</legend>${source.outline.map(item =>
+        `<label class="writing-source-section"><input id="writing-source-section-${escape(item.id)}" type="checkbox" data-source-section="${escape(item.id)}" ${source.selectedSectionIds.includes(item.id) ? 'checked' : ''}>${escape(item.title)} <small>${escape(item.locator || '位置未识别')}</small></label>`).join('')}</fieldset>` : '';
+      return `<section class="writing-source-document" aria-label="待改原文文件">
+        <h3>长原文文件（可选）</h3><p>手册可从文件导入；短文也可以直接粘贴。原文不计入 3 份辅助参考材料。支持 TXT、MD、DOCX、PDF；DOCX/PDF 不超过 20 MB，PDF 不超过 100 页，解析文本最多 30,000 字符。</p>
+        <input id="writing-source-file" type="file" accept=".txt,.md,.docx,.pdf" aria-label="导入待改原文文件" hidden>
+        <button type="button" data-writing-action="import-source-file" ${f.wizardSourceBusy ? 'disabled' : ''}>${source ? '更换原文文件' : '导入原文文件'}</button>
+        ${f.wizardSourceBusy ? '<p role="status">正在读取原文文件…</p>' : ''}
+        ${f.wizardSourceError ? `<p role="alert">${escape(f.wizardSourceError)}</p>` : ''}
+        ${source ? `<article class="writing-source-summary"><strong>${escape(source.name)}</strong><span>${escape(statusLabels[source.parseStatus] || '待解析')} · ${source.extractedCharacterCount} 字${source.pageCount ? ` · ${source.pageCount} 页` : ''}</span>
+          ${source.parseStatus === 'truncated' ? '<p>目录和预览仅基于已提取部分；请在外部 AI 中附上原文件。</p>' : ''}
+          ${source.parseStatus === 'failed' || source.parseStatus === 'empty' ? '<p>保留文件名和改写目标；可重试、粘贴短文或手动填写章节范围。</p>' : ''}
+          <label class="field"><span class="field-label">处理范围</span><select id="writing-source-processing-scope" data-writing-field="wizardSourceScope"><option value="whole" ${source.processingScope === 'whole' ? 'selected' : ''}>整本处理（按章节分批）</option><option value="sections" ${source.processingScope === 'sections' ? 'selected' : ''}>选择章节/范围</option></select></label>
+          ${outline}
+          ${source.processingScope === 'sections' ? `<label class="field"><span class="field-label">手动指定章节或范围（目录缺失/不完整时）</span><textarea id="writing-source-manual-range" data-writing-field="wizardSourceManualRange">${escape(source.manualSectionRange || '')}</textarea></label>` : ''}
+          <button type="button" data-writing-action="remove-source-file">移除原文文件</button></article>` : ''}
+      </section>`;
     }
     const DOMAIN_TASK_LABELS = {
       'longform-research-article': '规划并检查长篇研究文章', 'technical-document': '生成技术文档提示词',
@@ -317,6 +347,49 @@
       const labels = config?.targetFields || articleConfig.targetFields;
       const locked = busy.has(articleId) || processingMaterials;
       const articles = coordinator.listArticles();
+      const guidedToolbar = `<div class="social-tools"><button type="button" class="button-secondary" data-writing-action="new">新建写作任务</button><label>已保存任务 <select id="writing-article-list"><option value="">新写作</option>${articles.map(item => `<option value="${escape(item.id)}" ${item.id === articleId ? 'selected' : ''}>${escape(item.title || item.goal || '未命名任务')}</option>`).join('')}</select></label><button type="button" class="button-secondary" data-writing-action="manage-memories">管理写作记忆</button><button type="button" class="button-secondary" data-writing-action="manage-packs">管理专业规则包</button></div>`;
+      const isGuided = !w || [2, 3, 4].includes(f.wizardStage);
+      const guidedMarkup = isGuided ? (() => {
+        const stage = Math.max(1, Math.min(4, f.wizardStage || 1));
+        const titles = ['描述任务', '确认方向', '生成提示词', '带回结果'];
+        const progress = `<nav aria-label="写作步骤" class="writing-wizard-progress">${titles.map((title, index) => `<button type="button" data-writing-action="wizard-stage" data-stage="${index + 1}" ${index + 1 === stage ? 'aria-current="step"' : ''} ${index + 1 >= stage ? 'disabled' : ''}>${index + 1}. ${title}</button>`).join('')}</nav>`;
+        const localRecommendations = prompts?.recommendMaterials?.(f.materials, { goal: f.goal }, f.taskType) || [];
+        const recommendationIds = new Set(localRecommendations.map(item => item.id));
+        const materialQuery = String(f.wizardMaterialSearch || '').trim().toLocaleLowerCase();
+        const fallbackMatches = f.materials.filter(material => !materialQuery
+          || [material.title, material.relativePath, material.excerpt].some(value => String(value || '').toLocaleLowerCase().includes(materialQuery)));
+        const visibleResult = browserIndex?.filterBrowserProjectCandidates?.({ files: f.materials,
+          filteredCandidates: f.wizardFilteredCandidates || [], filteredCandidateCount: (f.wizardFilteredCandidates || []).length,
+          inventoryComplete: f.wizardInventoryComplete }, { query: materialQuery, page: candidatePage, pageSize: 20 })
+          || { items: fallbackMatches.slice((candidatePage - 1) * 20, candidatePage * 20), total: fallbackMatches.length, page: candidatePage, pageSize: 20 };
+        const visibleMaterials = visibleResult.items.map(material => ({ material, index: f.materials.indexOf(material) }));
+        const materialPageSize = 20;
+        const materialPageCount = Math.max(1, Math.ceil(visibleResult.total / materialPageSize));
+        candidatePage = Math.max(1, Math.min(candidatePage, materialPageCount));
+        const candidateMaterials = visibleMaterials.map(({ material, index }) => `<article class="writing-wizard-material"><label><input type="checkbox" data-wizard-material="${index}" ${f.wizardMaterialIds.includes(material.id) ? 'checked' : ''} ${f.wizardMaterialIds.length >= 3 && !f.wizardMaterialIds.includes(material.id) ? 'disabled' : ''}>${escape(material.title || `材料 ${index + 1}`)}</label><p title="${escape(material.relativePath || '')}" aria-label="文件路径：${escape(material.relativePath || material.title || '')}">${escape(material.relativePath || material.contentError || '可读取参考材料')}</p><details><summary>查看摘录</summary><p>${escape(material.contentError || material.excerpt || '没有可用摘录')}</p></details><p>${recommendationIds.has(material.id) ? escape(localRecommendations.find(item => item.id === material.id)?.selectionReason || '本机关键词初筛建议') : '本机初筛未推荐，可手动选择'}</p><button type="button" data-writing-action="wizard-remove-material" data-index="${index}">移除</button></article>`).join('') || '<p role="status">没有匹配的候选文件。</p>';
+        const candidatePagination = visibleResult.total > materialPageSize
+          ? `<nav aria-label="参考材料候选分页"><button type="button" data-writing-action="wizard-candidate-page" data-page="${candidatePage - 1}" ${candidatePage <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${candidatePage}/${materialPageCount} 页 · 每页 20 项</span><button type="button" data-writing-action="wizard-candidate-page" data-page="${candidatePage + 1}" ${candidatePage >= materialPageCount ? 'disabled' : ''}>下一页</button></nav>` : '';
+        const filteredMatches = (f.wizardFilteredCandidates || []).filter(item => !materialQuery
+          || [item.title, item.relativePath, item.reason].some(value => String(value || '').toLocaleLowerCase().includes(materialQuery)));
+        const projectSourceMarkup = [...projectSources.values()].map(source => `<p class="writing-project-source">当前目录：${escape(source.rootLabel)} · ${source.result.files.length} 份可读候选 · 过滤 ${source.result.filteredCandidateCount} 份 <button type="button" data-writing-action="wizard-remove-project-source" data-project-source="${escape(source.sourceId)}">移除此来源</button></p>`).join('');
+        const filteredMarkup = `${projectSourceMarkup}<section class="writing-filtered-candidates"><button type="button" data-writing-action="wizard-filtered-toggle">${f.wizardShowFiltered ? '收起' : '显示'}已过滤文件（${filteredMatches.length}）</button>${f.wizardShowFiltered
+          ? filteredMatches.map(item => `<article class="writing-wizard-material"><strong>${escape(item.title)}</strong><p title="${escape(item.relativePath)}">${escape(item.relativePath)}</p><p>${escape(item.reason || '默认过滤')}</p><button type="button" data-writing-action="wizard-restore-filtered" data-project-source="${escape(item.projectSourceId)}" data-relative-path="${escape(item.relativePath)}">恢复并读取</button></article>`).join('') || '<p role="status">没有可恢复的过滤项。</p>' : ''}</section>`;
+        const sourceMarkup = f.wizardMode === 'rewrite' ? `${field('draft', '待改原文（可粘贴短文）', f.draft)}${renderWritingSourceDocument(f)}` : '';
+        let body = '';
+        if (stage === 1) body = `<fieldset><legend>你要做什么？</legend><label><input id="writing-wizard-mode-new" type="radio" name="writing-wizard-mode" data-writing-field="wizardMode" value="new" ${f.wizardMode !== 'rewrite' ? 'checked' : ''}>新写作：从目标开始，准备写作提示词</label><label><input id="writing-wizard-mode-rewrite" type="radio" name="writing-wizard-mode" data-writing-field="wizardMode" value="rewrite" ${f.wizardMode === 'rewrite' ? 'checked' : ''}>文章改写：基于已有原文定向修改</label></fieldset>${sourceMarkup}${field('goal', f.wizardMode === 'rewrite' ? '希望怎么改' : '你想写什么', f.goal)}<section><h3>辅助参考材料（可选）</h3><p>已选 ${f.wizardMaterialIds.length}/3 份辅助资料${f.wizardMode === 'rewrite' ? '；待改原文不计入此上限' : ''}。</p><button type="button" data-writing-action="wizard-import-files">选择文件</button><button type="button" data-writing-action="wizard-import-folder">临时添加文件夹</button><label>常用工作空间 <select data-writing-field="wizardWorkspaceId"><option value="">不使用</option>${(state().writingWorkspaces || []).map(item => `<option value="${escape(item.id)}" ${f.wizardWorkspaceId === item.id ? 'selected' : ''}>${escape(item.name)}</option>`).join('')}</select></label><input id="writing-material-files" type="file" multiple hidden><input id="writing-material-folder" type="file" multiple webkitdirectory directory hidden><label>工作空间名称<input data-writing-field="wizardWorkspaceName" value="${escape(f.wizardWorkspaceName || '')}"></label><button type="button" data-writing-action="wizard-save-workspace" ${!f.materials.some(item => item.relativePath && f.wizardMaterialIds.includes(item.id)) || !f.wizardWorkspaceName?.trim() ? 'disabled' : ''}>保存已选文件夹材料为常用工作空间</button><label>搜索候选文件<input id="writing-wizard-material-search" data-writing-field="wizardMaterialSearch" value="${escape(f.wizardMaterialSearch)}" placeholder="按文件名、路径或摘录搜索"></label><button type="button" data-writing-action="wizard-clear-material-search">清除搜索</button><div>${candidateMaterials}${candidatePagination}${filteredMarkup}</div>${visibleMaterials.length > 3 ? '<p role="status">可查看和搜索全部候选；直接参考材料最多 3 份。</p>' : ''}${!f.materials.length ? `<p role="status">${f.wizardInventoryComplete ? '还没有可读的候选材料。' : '目录扫描未完成；已显示扫描到的范围。'}</p>` : ''}<p>目录只在本机初筛；只有你确认的摘录会用于任务分析。</p></section><button type="button" class="button-primary" data-writing-action="wizard-analyze" ${processingMaterials || f.wizardSourceBusy ? 'disabled' : ''}>确认材料并分析任务</button>`;
+        if (stage === 2) {
+          const suggestion = f.wizardSuggestion || {};
+          const confirmedGenre = f.wizardManualGenre || suggestion.genre || 'article';
+          const selectable = (packUI?.getAvailablePacks?.() || []).filter(pack => pack.id === 'builtin-softcopyright-content' && ['article', 'technical-document'].includes(confirmedGenre));
+          const missingInfo = Array.isArray(suggestion.missingInfo) ? suggestion.missingInfo.filter(Boolean) : [];
+          body = `<p>任务理解：${escape(f.goal)}</p>${f.wizardError ? `<p role="alert">${escape(f.wizardError)} 可手动选择后继续。</p>` : ''}<label class="field"><span class="field-label">推荐文体</span><select id="writing-wizard-genre" data-writing-field="wizardGenre">${schema.WRITING_GENRES.map(id => `<option value="${id}" ${(confirmedGenre) === id ? 'selected' : ''}>${escape(schema.getWritingGenreConfig(id)?.name || id)}</option>`).join('')}</select></label><label class="field"><span class="field-label">任务类型</span><select id="writing-wizard-task-type" data-writing-field="wizardTaskType"><option value="revision" ${f.wizardTaskType === 'revision' || !f.wizardTaskType && suggestion.taskType === 'revision' ? 'selected' : ''}>改写/优化</option><option value="diagnosis" ${f.wizardTaskType === 'diagnosis' || !f.wizardTaskType && suggestion.taskType === 'diagnosis' ? 'selected' : ''}>检查/诊断</option>${(schema.getWritingGenreConfig(confirmedGenre)?.taskTypes || []).map(task => `<option value="${escape(task)}" ${f.wizardTaskType === task || !f.wizardTaskType && suggestion.taskType === task ? 'selected' : ''}>${escape(task)}</option>`).join('')}</select></label><p>推荐依据：${escape(suggestion.reason || '模型不可用，请手动确认。')}</p>${missingInfo.length ? `<section aria-label="还需要确认的信息"><h3>还需要确认</h3><ul>${missingInfo.map(item => `<li>${escape(item)}</li>`).join('')}</ul><p>这些信息目前不阻断流程；可以在下方补充，或直接继续。</p></section>` : ''}<details><summary>更多设置（可选）</summary>${Object.entries(schema.getWritingGenreConfig(confirmedGenre)?.domainFields || {}).map(([key,label]) => `<label class="field"><span>${escape(label)}</span><textarea data-writing-domain-field="${escape(key)}">${escape(f.domainInputs?.[key] || suggestion.suggestedFields?.[key] || '')}</textarea></label>`).join('')}</details><fieldset><legend>专业规则包（与参考材料分开，可同时使用）</legend>${selectable.map(pack => `<label><input type="checkbox" data-writing-pack-selection="${escape(pack.id)}" ${f.packSelections.includes(pack.id) ? 'checked' : ''}>${escape(pack.name)}：普通文章或操作/技术文档适用</label>`).join('')||'当前文体没有兼容的规则包'}</fieldset><p>已确认材料：${f.wizardMaterialIds.length}份 ${f.wizardMaterialIds.map(id => escape(f.materials.find(m=>m.id===id)?.title)).join('、')}</p><button type="button" data-writing-action="wizard-back">返回修改目标</button><button type="button" class="button-primary" data-writing-action="wizard-confirm">确认并生成提示词</button>`;
+        }
+        const latestRound = w?.rounds?.at(-1);
+        const roundIssues = (w?.issues || []).filter(issue => issue.roundId === latestRound?.id);
+        if (stage >= 3) body = `<p>已确认：${escape(schema.getWritingGenreConfig(w.article.genre)?.name || w.article.genre)} · ${escape(w.rounds.at(-1)?.taskType || '')}</p><button type="button" data-writing-action="wizard-stage" data-stage="2">修改任务设置</button><label class="field"><span>可编辑提示词</span><textarea id="writing-prompt" data-writing-field="prompt">${escape(f.prompt)}</textarea></label><button type="button" data-writing-action="copy-prompt">复制提示词</button><button type="button" data-writing-action="save-prompt-version">保存提示词版本</button>${stage === 3 ? `<button type="button" data-writing-action="wizard-used">我已在其他 AI 中使用</button>` : `<p>任务：${escape(w.article.goal)}</p><label class="field"><span>外部 AI 结果</span><textarea id="writing-newDraft" data-writing-field="newDraft">${escape(f.newDraft)}</textarea></label>${field('feedback','这次结果哪里不满意（可选）',f.feedback)}<button type="button" data-writing-action="wizard-check">检查这份结果</button>${f.diagnosis ? `<h3>检查结果</h3><pre>${escape(f.diagnosis)}</pre><fieldset><legend>选择需要处理的问题（可选）</legend>${roundIssues.length ? roundIssues.map(issue => `<label><input id="writing-wizard-issue-${escape(issue.id)}" type="checkbox" data-wizard-issue="${escape(issue.id)}" ${f.wizardIssueIds.includes(issue.id) ? 'checked' : ''}>${escape(issue.observation || issue.excerpt || issue.suggestion)}</label>`).join('') : '<p>没有可单独选择的问题；可按完整诊断生成下一轮提示词。</p>'}</fieldset><button type="button" data-writing-action="wizard-next">生成下一轮修改提示词</button><button type="button" data-writing-action="wizard-finish">本轮完成</button>` : ''}`}`;
+        const advanced = w ? `<details class="writing-wizard-advanced"><summary>更多写作工具</summary>${renderHistory(w, f)}${renderMemories(w)}${renderRoute(w, f, locked)}</details>` : '';
+        return `<section class="social-panel"><h2>写作工作台</h2>${guidedToolbar}${progress}<h1>${titles[stage - 1]}</h1>${body}<p role="alert">${escape(f.error)}</p><p role="status">${escape(f.promptNotice)}</p>${advanced}</section>`;
+      })() : '';
       const builtinId = genre === 'academic-paper' ? 'builtin-academic-paper' : 'builtin-article';
       const selectablePacks = (packUI?.getAvailablePacks?.() || []).filter(pack => pack.id !== builtinId
         && isSelectablePack(pack, genre));
@@ -335,7 +408,7 @@
         ${domainFields.map(([key, label]) => `<label class="field" for="writing-domain-${escape(key)}"><span class="field-label">${escape(label)}</span>
           <textarea id="writing-domain-${escape(key)}" aria-label="${escape(label)}" data-writing-domain-field="${escape(key)}">${escape(f.domainInputs?.[key] || '')}</textarea></label>`).join('')}</details>` : '';
       packUI?.connectWorkbenchRenderer?.(render);
-      mount.innerHTML = `<section class="social-panel">
+      const legacyMarkup = `<section class="social-panel">
         <div class="social-tools"><h2>写作工作台</h2>${button('new', '新建文章')}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}${button('manage-packs', '专业基础包')}</div>
         <label class="field" for="writing-article-list"><span class="field-label">文章列表</span><select id="writing-article-list"><option value="">新文章</option>${articles.map(a => `<option value="${escape(a.id)}" ${a.id === articleId ? 'selected' : ''}>${escape(a.title || a.goal || '未命名文章')}</option>`).join('')}</select></label>
         <div class="social-form-grid">${field('title', escape(labels.title), f.title, { input: true })}<label class="field" for="writing-genre"><span class="field-label">文体</span><input id="writing-genre" data-writing-field="genre" list="writing-genre-options" value="${escape(f.genre)}" ${w ? 'disabled' : ''}><datalist id="writing-genre-options">${schema.WRITING_GENRES.map(id => `<option value="${escape(schema.getWritingGenreConfig(id)?.name || id)}">`).join('')}</datalist></label></div>
@@ -385,6 +458,7 @@
         ${button('remember', '记住这个偏好', '', !w || locked)}${renderNotifications(f)}
       </section>
       ${renderHistory(w, f)}${renderMemories(w)}${packManager}`;
+      mount.innerHTML = isGuided ? `${guidedMarkup}<div hidden>${legacyMarkup}</div>` : legacyMarkup;
       if (focusAfterRenderId) {
         document.getElementById(focusAfterRenderId)?.focus?.();
         focusAfterRenderId = '';
@@ -647,6 +721,19 @@
       const d = target.dataset || {};
       if (d.writingField && !target.readOnly) {
         f[d.writingField] = target.value;
+        if (d.writingField === 'draft' && target.value.trim() && f.wizardSourceDocument) {
+          sourceImportJob?.controller.abort(); sourceImportJob = null;
+          f.wizardSourceDocument = null; f.wizardSourceError = '';
+        }
+        if (d.writingField === 'wizardSourceScope' && f.wizardSourceDocument) {
+          f.wizardSourceDocument.processingScope = target.value === 'sections' ? 'sections' : 'whole';
+        }
+        if (d.writingField === 'wizardSourceManualRange' && f.wizardSourceDocument) {
+          f.wizardSourceDocument.manualSectionRange = target.value;
+        }
+        if (d.writingField === 'wizardMode') { f.wizardSuggestion = null; f.wizardError = ''; }
+        if (d.writingField === 'prompt' && f.wizardUsedPrompt && target.value !== f.wizardUsedPrompt) f.wizardPromptEdited = true;
+        if (d.writingField === 'wizardGenre') { f.wizardManualGenre = target.value; f.wizardTaskType = ''; }
         if (d.writingField === 'genre' && !articleId) {
           const selectedGenre = genreId(target.value);
           f.taskType = selectedGenre === 'academic-paper' ? 'academic-planning'
@@ -763,13 +850,16 @@
       render();
       try {
         for (const file of Array.from(files || [])) {
-          if (f.materials.length >= 3) { f.error = '本轮最多添加3份材料，剩余文件未添加'; break; }
-          const name = String(file?.name || '未命名文件').slice(0, 160);
+          if (f.materials.length >= (articleId ? 3 : 10000)) { f.error = articleId ? '本轮最多添加3份材料，剩余文件未添加' : '参考文件最多索引10,000份，剩余文件未添加'; break; }
+          const relativePath = String(file?.webkitRelativePath || '').replace(/\\/g, '/').slice(0, 500);
+          const name = (relativePath || String(file?.name || '未命名文件')).slice(0, 160);
+          const fingerprint = `${Number(file?.size) || 0}:${(Number(file?.lastModified) || 0).toString(16).slice(0, 8) || '0'}`;
+          if (!articleId && f.materials.some(item => (item.relativePath || item.title) === (relativePath || name) && item.fingerprint === fingerprint)) continue;
           const extension = name.includes('.') ? name.split('.').at(-1).toLowerCase() : '';
           if (['txt', 'md', 'csv', 'json'].includes(extension)) {
             if (Number(file.size) > 2 * 1024 * 1024) {
               const message = `${name} 超过2MB，未读取`;
-              f.materials.push({ id: newMaterialId(), title: name, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
+              f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
                 contentStatus: 'failed', contentError: message, originalLength: Number(file.size), attachmentRequired: true, kind: 'material' });
               f.error = message;
               continue;
@@ -778,18 +868,18 @@
               if (typeof file.text !== 'function') throw new Error('当前环境无法读取此文件');
               const content = await file.text();
               if (typeof content !== 'string') throw new Error('文件没有可读取的文本');
-              f.materials.push({ id: newMaterialId(),
+              f.materials.push({ id: newMaterialId(), relativePath, fingerprint,
                 title: name, purpose: 'content', excerpt: content.slice(0, 1200), sourceType: 'text-file', origin: 'file-import',
                 contentStatus: content.length > 1200 ? 'truncated' : 'embedded', originalLength: content.length,
                 attachmentRequired: content.length > 1200, kind: 'material' });
             } catch (error) {
               const message = String(error.message || error);
-              f.materials.push({ id: newMaterialId(), title: name, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
+              f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
                 contentStatus: 'failed', contentError: message, originalLength: 0, attachmentRequired: true, kind: 'material' });
               f.error = `${name} 读取失败，只保留了文件名引用：${message}`;
             }
           } else if (['pdf', 'docx', 'png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
-            const material = { id: newMaterialId(), title: name, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
+            const material = { id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
               contentStatus: 'reference-only', originalLength: 0, attachmentRequired: true, kind: 'material' };
             f.materials.push(material);
             try {
@@ -822,7 +912,7 @@
             }
           } else {
             const message = `${name} 格式暂不支持`;
-            f.materials.push({ id: newMaterialId(), title: name, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
+            f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
               contentStatus: 'unsupported', contentError: message, originalLength: 0, attachmentRequired: true, kind: 'material' });
             f.error = message;
           }
@@ -832,12 +922,302 @@
           activeMaterialJob = null;
           processingMaterials = false;
           f.dirty = [...new Set([...f.dirty, 'materials'])];
+          if (!articleId && !f.wizardMaterialIds.length) f.wizardMaterialIds = (prompts?.recommendMaterials?.(f.materials, { goal: f.goal }, f.taskType) || []).map(item => item.id).slice(0, 3);
+          if (!articleId && f.wizardWorkspaceId) {
+            const saved = (state().writingWorkspaces || []).find(item => item.id === f.wizardWorkspaceId);
+            const folder = f.materials.filter(item => item.relativePath);
+            const root = folder[0]?.relativePath?.split('/')[0] || '';
+            const matches = saved && saved.rootLabel === root && saved.selectedPaths.length > 0
+              && saved.selectedPaths.every(path => folder.some(item => item.relativePath === path.path && item.fingerprint === path.fingerprint));
+            if (matches) f.wizardMaterialIds = saved.selectedPaths.map(path => f.materials.find(item => item.relativePath === path.path)?.id).filter(Boolean).slice(0, 3);
+            else if (folder.length) f.error = '所选文件夹或文件版本与已保存工作空间不匹配；未恢复历史勾选。可继续作为临时文件夹使用。';
+          }
+          render();
+        }
+      }
+    }
+    async function indexReferenceFolder(files) {
+      const fileList = Array.from(files || []);
+      if (!fileList.length) return;
+      if (typeof browserIndex?.indexBrowserProjectFiles !== 'function') {
+        form().error = '本机目录索引不可用；请改用“选择文件”添加参考材料。'; render(); return;
+      }
+      const f = form();
+      const sourceId = `folder-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const rootLabel = String(fileList[0]?.webkitRelativePath || fileList[0]?.name || '').split(/[\\/]/)[0].slice(0, 120);
+      const job = { articleId, controller: new AbortController() };
+      activeMaterialJob?.controller.abort();
+      activeMaterialJob = job; processingMaterials = true; render();
+      try {
+        const result = await browserIndex.indexBrowserProjectFiles(fileList, { signal: job.controller.signal });
+        if (activeMaterialJob !== job || job.controller.signal.aborted) return;
+        projectSources.set(sourceId, { sourceId, rootLabel, files: fileList, result });
+        for (const item of result.files) {
+          const existing = f.materials.find(candidate => (candidate.relativePath || candidate.title) === item.relativePath);
+          if (existing) {
+            existing.projectSourceIds = [...new Set([...(existing.projectSourceIds || [existing.projectSourceId].filter(Boolean)), sourceId])];
+            continue;
+          }
+          f.materials.push({ id: `project:${item.relativePath}`, projectSourceId: sourceId,
+            projectSourceIds: [sourceId],
+            title: item.title, relativePath: item.relativePath, fingerprint: item.fingerprint,
+            purpose: 'content', excerpt: item.excerpt, sourceType: 'text-file', origin: 'authorized-directory',
+            contentStatus: 'embedded', originalLength: item.excerpt.length, attachmentRequired: true, kind: 'material' });
+        }
+        const filtered = result.filteredCandidates.map(item => ({ ...item, projectSourceId: sourceId }));
+        f.wizardFilteredCandidates = [...(f.wizardFilteredCandidates || []), ...filtered]
+          .filter((item, index, list) => list.findIndex(other => other.relativePath === item.relativePath) === index);
+        f.wizardInventoryComplete = result.inventoryComplete && [...projectSources.values()].every(source => source.result.inventoryComplete);
+        if (!f.wizardMaterialIds.length) {
+          f.wizardMaterialIds = (prompts?.recommendMaterials?.(f.materials, { goal: f.goal }, f.taskType) || []).map(item => item.id).slice(0, 3);
+        }
+        const matchedWorkspace = (state().writingWorkspaces || []).find(item => item.id === f.wizardWorkspaceId);
+        const folderMatches = matchedWorkspace && matchedWorkspace.rootLabel === rootLabel
+          && matchedWorkspace.selectedPaths.every(saved => result.files.some(item => item.relativePath === saved.path && item.fingerprint === saved.fingerprint));
+        if (folderMatches) f.wizardMaterialIds = matchedWorkspace.selectedPaths
+          .map(saved => f.materials.find(item => item.relativePath === saved.path)?.id).filter(Boolean).slice(0, 3);
+        else if (matchedWorkspace) f.error = '所选文件夹与常用工作空间不匹配；未恢复历史勾选。请核对目录后继续。';
+        if (!result.inventoryComplete) f.error = '文件夹超过 10,000 项扫描上限；其余文件未扫描。';
+      } catch (error) {
+        if (error?.name !== 'AbortError') f.error = String(error.message || '文件夹索引失败').slice(0, 300);
+      } finally {
+        if (activeMaterialJob === job) { activeMaterialJob = null; processingMaterials = false; render(); }
+      }
+    }
+    async function importWritingSourceFile(file) {
+      if (!file) return;
+      sourceImportJob?.controller.abort();
+      const job = { file, controller: new AbortController() };
+      sourceImportJob = job;
+      const f = form();
+      const name = String(file.name || '未命名原文').split(/[\\/]/).at(-1).slice(0, 160);
+      const extension = name.includes('.') ? name.split('.').at(-1).toLowerCase() : '';
+      const fingerprint = `${Number(file.size) || 0}:${(Number(file.lastModified) || 0).toString(16).slice(0, 8) || '0'}`;
+      f.wizardSourceBusy = true;
+      f.wizardSourceError = '';
+      f.wizardSourceDocument = { name, format: extension, fingerprint, parseStatus: 'partial',
+        extractedCharacterCount: 0, pageCount: 0, preview: '', outline: [], selectedSectionIds: [],
+        manualSectionRange: '', processingScope: 'whole', attachmentRequired: true };
+      f.draft = '';
+      render();
+      try {
+        if (!['txt', 'md', 'docx', 'pdf'].includes(extension)) throw new Error('仅支持 TXT、MD、DOCX、PDF 原文文件');
+        let extractedText = '';
+        let segments = [];
+        let truncated = false;
+        let pageCount = 0;
+        let extractedCharacterCount = 0;
+        if (extension === 'txt' || extension === 'md') {
+          if (Number(file.size) > 30 * 1024 * 1024) throw new Error('文本文件超过 30 MB，暂不导入');
+          const raw = await file.text();
+          extractedText = raw.slice(0, 30000);
+          extractedCharacterCount = raw.length;
+          truncated = raw.length > 30000;
+        } else {
+          if (Number(file.size) > 20 * 1024 * 1024) throw new Error('DOCX/PDF 文件超过 20 MB 本机解析上限');
+          if (typeof file.arrayBuffer !== 'function' || typeof fetchImpl !== 'function') throw new Error('当前环境不支持本机文件解析');
+          const mimeType = fileMimeType(file, extension);
+          if (!mimeType) throw new Error('文件类型与扩展名不匹配');
+          const buffer = await file.arrayBuffer();
+          if (sourceImportJob !== job || job.controller.signal.aborted) return;
+          const response = await fetchImpl('/api/writing-materials/parse', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ fileName: name, mimeType, dataBase64: encodeBase64(buffer) }), signal: job.controller.signal });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || '原文解析失败');
+          segments = Array.isArray(result.segments) ? result.segments.slice(0, 200).map(item => ({
+            locator: String(item.locator || '').slice(0, 120), text: String(item.text || '').slice(0, 30000),
+            ...(Number.isInteger(item.headingLevel) ? { headingLevel: item.headingLevel } : {})
+          })) : [];
+          extractedText = segments.map(item => item.text).join('\n').slice(0, 30000);
+          extractedCharacterCount = Number(result.extractedCharacters) || extractedText.length;
+          pageCount = Math.max(0, Math.min(100, Number(result.pageCount) || 0));
+          truncated = result.truncated === true;
+          if (result.method === 'pdf-ocr') f.wizardSourceError = 'PDF 使用了 OCR，识别结果请人工核对。';
+        }
+        if (sourceImportJob !== job || job.controller.signal.aborted) return;
+        const extracted = outlineApi?.extractWritingOutline?.({ format: extension, text: extractedText, segments, truncated });
+        const outline = extracted?.items || [];
+        f.wizardSourceDocument = { name, format: extension, fingerprint,
+          parseStatus: truncated ? 'truncated' : extractedText ? extracted?.complete === false ? 'partial' : 'parsed' : 'empty',
+          extractedCharacterCount: Math.min(30000, extractedCharacterCount), pageCount,
+          preview: extractedText.slice(0, 8000), outline,
+          selectedSectionIds: [], manualSectionRange: '', processingScope: 'whole', attachmentRequired: true };
+      } catch (error) {
+        if (sourceImportJob !== job || job.controller.signal.aborted) return;
+        f.wizardSourceDocument = { ...f.wizardSourceDocument, parseStatus: 'failed' };
+        f.wizardSourceError = String(error.message || '原文导入失败').slice(0, 300);
+      } finally {
+        if (sourceImportJob === job) {
+          sourceImportJob = null;
+          f.wizardSourceBusy = false;
           render();
         }
       }
     }
     async function operate(action, data = {}) {
-      if (action === 'new') { activeMaterialJob?.controller.abort(); webReadResults.clear(); if (articleId) coordinator.cancelResearch(articleId); articleId = ''; render(); return; }
+      if (action === 'new') { activeMaterialJob?.controller.abort(); sourceImportJob?.controller.abort(); webReadResults.clear(); if (articleId) coordinator.cancelResearch(articleId); articleId = ''; const fresh = form(); fresh.wizardStage = 1; fresh.wizardMode = 'new'; fresh.wizardSuggestion = null; fresh.wizardError = ''; fresh.wizardSourceDocument = null; fresh.draft = ''; render(); return; }
+      if (action === 'wizard-clear-material-search') { form().wizardMaterialSearch = ''; render(); document.getElementById('writing-wizard-material-search')?.focus?.(); return; }
+      if (action === 'wizard-candidate-page') { candidatePage = Math.max(1, Number(data.page) || 1); render(); return; }
+      if (action === 'wizard-filtered-toggle') { const f = form(); f.wizardShowFiltered = !f.wizardShowFiltered; render(); return; }
+      if (action === 'wizard-restore-filtered') {
+        const f = form();
+        const source = projectSources.get(data.projectSource);
+        if (!source || typeof browserIndex?.restoreBrowserProjectCandidate !== 'function') {
+          f.error = '原文件列表已不可用，请重新选择文件夹后恢复。'; render(); return;
+        }
+        const job = { articleId, controller: new AbortController() };
+        activeMaterialJob?.controller.abort(); activeMaterialJob = job; processingMaterials = true; render();
+        try {
+          const { file: item } = await browserIndex.restoreBrowserProjectCandidate(source.files, data.relativePath, { signal: job.controller.signal });
+          if (activeMaterialJob !== job || job.controller.signal.aborted) return;
+          const existing = f.materials.find(candidate => candidate.relativePath === item.relativePath);
+          if (existing) existing.projectSourceIds = [...new Set([...(existing.projectSourceIds || [existing.projectSourceId].filter(Boolean)), source.sourceId])];
+          else f.materials.push({
+            id: `project:${item.relativePath}`, projectSourceId: source.sourceId, projectSourceIds: [source.sourceId], title: item.title,
+            relativePath: item.relativePath, fingerprint: item.fingerprint, purpose: 'content', excerpt: item.excerpt,
+            sourceType: 'text-file', origin: 'authorized-directory', contentStatus: 'embedded',
+            originalLength: item.excerpt.length, attachmentRequired: true, kind: 'material'
+          });
+          f.wizardFilteredCandidates = f.wizardFilteredCandidates.filter(candidate => candidate.relativePath !== item.relativePath);
+          f.error = '';
+        } catch (error) { f.error = `恢复失败：${String(error.message || error).slice(0, 240)}`; }
+        finally { if (activeMaterialJob === job) { activeMaterialJob = null; processingMaterials = false; render(); } }
+        return;
+      }
+      if (action === 'wizard-remove-project-source') {
+        const f = form();
+        projectSources.delete(data.projectSource);
+        for (const item of f.materials) {
+          item.projectSourceIds = (item.projectSourceIds || [item.projectSourceId].filter(Boolean)).filter(id => id !== data.projectSource);
+          if (item.projectSourceId === data.projectSource) {
+            item.projectSourceId = item.projectSourceIds[0] || '';
+            const replacement = projectSources.get(item.projectSourceId)?.result.files.find(candidate => candidate.relativePath === item.relativePath);
+            if (replacement) {
+              item.title = replacement.title;
+              item.fingerprint = replacement.fingerprint;
+              item.excerpt = replacement.excerpt;
+              item.originalLength = replacement.excerpt.length;
+            }
+          }
+        }
+        const removedIds = new Set(f.materials.filter(item => item.id.startsWith('project:') && !item.projectSourceIds.length).map(item => item.id));
+        f.materials = f.materials.filter(item => !item.id.startsWith('project:') || item.projectSourceIds.length);
+        f.wizardMaterialIds = f.wizardMaterialIds.filter(id => !removedIds.has(id));
+        f.wizardFilteredCandidates = f.wizardFilteredCandidates.filter(item => item.projectSourceId !== data.projectSource);
+        f.wizardInventoryComplete = [...projectSources.values()].every(source => source.result.inventoryComplete);
+        render(); return;
+      }
+      if (action === 'import-source-file') { document.getElementById('writing-source-file')?.click?.(); return; }
+      if (action === 'remove-source-file') {
+        sourceImportJob?.controller.abort(); sourceImportJob = null;
+        const f = form(); f.wizardSourceDocument = null; f.wizardSourceError = ''; f.wizardSourceBusy = false; render(); return;
+      }
+      if (action === 'wizard-new-plan') { navigate?.('home'); return; }
+      if (action === 'wizard-stage') { const requested = Number(data.stage); if (requested < (form().wizardStage || 1)) { form().wizardStage = requested; render(); } return; }
+      if (action === 'wizard-back') { form().wizardStage = 1; render(); return; }
+      if (action === 'wizard-import-files') { document.getElementById('writing-material-files')?.click?.(); return; }
+      if (action === 'wizard-import-folder') { document.getElementById('writing-material-folder')?.click?.(); return; }
+      if (action === 'wizard-remove-material') { const f = form(); const [removed] = f.materials.splice(Number(data.index), 1); f.wizardMaterialIds = f.wizardMaterialIds.filter(id => id !== removed?.id); render(); return; }
+      if (action === 'wizard-save-workspace') {
+        const f = form();
+        try {
+          const selected = f.materials.filter(item => f.wizardMaterialIds.includes(item.id) && item.relativePath);
+          const firstPath = selected[0]?.relativePath || '';
+          const record = schema.normalizeWritingWorkspaceRecord({ id: `writing-workspace-${Date.now()}`, name: f.wizardWorkspaceName,
+            rootLabel: firstPath.includes('/') ? firstPath.split('/')[0] : firstPath,
+            sourceKind: 'browser-directory',
+            selectedPaths: selected.map(item => ({ path: item.relativePath, fingerprint: item.fingerprint || '' })), createdAt: new Date().toISOString() });
+          if (!record.id || !record.name || !selected.length) throw new Error('请填写名称，并先选中至少一份文件夹材料');
+          if (typeof persistState !== 'function') throw new Error('当前页面无法保存工作空间');
+          persistState({ ...state(), writingWorkspaces: [record, ...(state().writingWorkspaces || []).filter(item => item.name !== record.name)].slice(0, 20) });
+          f.wizardWorkspaceId = record.id; f.promptNotice = '已保存；下次使用时需重新选择文件夹并核对文件版本。';
+        } catch (error) { f.error = error.message || '保存工作空间失败'; }
+        render(); return;
+      }
+      if (action === 'wizard-analyze') {
+        const f = form(); f.wizardError = ''; f.error = '';
+        if (!f.goal.trim() || f.wizardMode === 'rewrite' && !f.draft.trim() && !f.wizardSourceDocument) {
+          f.error = f.wizardMode === 'rewrite' ? '请先提供待改原文和改写目标' : '请先描述写作目标'; render(); return;
+        }
+        if (f.wizardMaterialIds.length > 3) { f.error = '直接参考材料最多3份，请取消多余选择'; render(); return; }
+        busy.add(''); render();
+        try {
+          const confirmed = f.materials.filter(item => f.wizardMaterialIds.includes(item.id) && item.excerpt && !['failed','unsupported'].includes(item.contentStatus));
+          f.wizardSuggestion = await coordinator.analyzeTask({ goal: f.goal, draft: f.wizardMode === 'rewrite' && !f.wizardSourceDocument ? f.draft : '',
+            sourceDocument: f.wizardMode === 'rewrite' ? f.wizardSourceDocument : null, materials: confirmed });
+          f.wizardManualGenre = f.wizardSuggestion.genre; f.wizardTaskType = f.wizardSuggestion.taskType; f.wizardStage = 2;
+        } catch (error) { f.wizardError = error.message || '任务分析不可用'; f.wizardStage = 2; }
+        finally { busy.delete(''); render(); }
+        return;
+      }
+      if (action === 'wizard-confirm') {
+        const f = form();
+        try {
+          const manuallyEditedPrompt = f.wizardPromptEdited ? f.prompt : '';
+          const genre = genreId(f.wizardManualGenre || f.wizardSuggestion?.genre) || 'article';
+          f.genre = schema.getWritingGenreConfig(genre).name;
+          f.taskType = f.wizardTaskType || f.wizardSuggestion?.taskType || (genre === 'article' ? 'revision' : schema.getWritingGenreConfig(genre).taskTypes[0]);
+          f.materials = f.materials.filter(item => f.wizardMaterialIds.includes(item.id)).slice(0, 3);
+          const input = { ...articlePatch(f), draft: f.wizardMode === 'rewrite' && !f.wizardSourceDocument ? f.draft : '',
+            sourceDocument: f.wizardMode === 'rewrite' ? f.wizardSourceDocument : undefined,
+            materials: f.materials.filter(m => m.kind !== 'source'), sources: f.materials.filter(m => m.kind === 'source'), taskType: f.taskType, packSelections: f.packSelections };
+          let created;
+          if (articleId) {
+            const existing = coordinator.getWorkspace(articleId);
+            await coordinator.updateArticle(articleId, articlePatch(f));
+            const latest = coordinator.getWorkspace(articleId).rounds.at(-1);
+            const referenceKey = items => JSON.stringify(items.map(item => [item.title, item.excerpt, item.purpose]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+            const referencesChanged = referenceKey(references(latest)) !== referenceKey(f.materials);
+            const targetChanged = Object.entries(articlePatch(f)).some(([key, value]) => {
+              const previous = existing.article[key] === undefined
+                ? Array.isArray(value) ? [] : value && typeof value === 'object' ? {} : ''
+                : existing.article[key];
+              return JSON.stringify(previous) !== JSON.stringify(value);
+            });
+            const sourceChanged = JSON.stringify(latest.sourceDocument || null) !== JSON.stringify(input.sourceDocument || null);
+            if (latest.draft !== input.draft || referencesChanged || targetChanged || sourceChanged || latest.taskType !== f.taskType) await coordinator.appendRound(articleId, input);
+            created = coordinator.getWorkspace(articleId);
+          } else {
+            created = await coordinator.createArticle(input);
+            articleId = created.id;
+          }
+          drafts.set(articleId, f);
+          const generatedPrompt = created.rounds.at(-1)?.prompt || '';
+          f.prompt = manuallyEditedPrompt || generatedPrompt;
+          if (manuallyEditedPrompt && f.prompt !== generatedPrompt) await coordinator.recordPromptVersion(articleId, created.rounds.at(-1).id, f.prompt);
+          f.wizardStage = 3; f.wizardUsedPrompt = f.prompt; f.wizardPromptEdited = Boolean(manuallyEditedPrompt);
+          f.promptNotice = manuallyEditedPrompt ? '已保留你手动编辑的提示词并记录为版本；请核对它是否仍适用于更新后的任务方向。' : '';
+        } catch (error) { f.error = error.message || '创建任务失败'; }
+        render(); return;
+      }
+      if (action === 'wizard-used') { form().wizardStage = 4; render(); return; }
+      if (action === 'wizard-check') {
+        const f = form(); f.error = '';
+        try {
+          const latest = coordinator.getWorkspace(articleId).rounds.at(-1);
+          if (latest.draft !== f.newDraft) await coordinator.appendRound(articleId, { draft: f.newDraft, feedback: f.feedback, taskType: f.taskType, packSelections: f.packSelections });
+          const result = await coordinator.runModelDiagnosis(articleId); f.diagnosis = result.diagnosis; f.prompt = result.prompt;
+        }
+        catch (error) { f.error = error.message || '检查失败'; }
+        render(); return;
+      }
+      if (action === 'wizard-next') {
+        const f = form();
+        try {
+          const w = coordinator.getWorkspace(articleId);
+          const latest = w.rounds.at(-1);
+          const selectedIssues = (w.issues || []).filter(issue => f.wizardIssueIds.includes(issue.id) && issue.roundId === latest.id);
+          const issueFocus = selectedIssues.length
+            ? `\n\n用户确认优先处理以下问题：\n${selectedIssues.map(issue => `- ${issue.observation || issue.excerpt || issue.suggestion}`).join('\n')}\n只针对这些问题提出修改要求；保留其他已确认内容。`
+            : '';
+          f.prompt = `${latest.prompt}${issueFocus}`;
+          await coordinator.recordPromptVersion(articleId, latest.id, f.prompt, { source: 'user-confirmed-revision-focus' });
+          f.wizardStage = 3; f.newDraft = ''; f.feedback = ''; f.wizardUsedPrompt = f.prompt; f.wizardPromptEdited = false;
+        }
+        catch (error) { f.error = error.message || '生成下一轮提示词失败'; }
+        render(); return;
+      }
+      if (action === 'wizard-finish') { form().wizardStage = 3; render(); return; }
       if (action?.startsWith('coverage-')) {
         const id = articleId;
         const f = form(id);
@@ -1370,7 +1750,27 @@
         notify?.(f.error);
       } finally { busy.delete(id); render(); }
     }
-    mount.addEventListener('input', event => capture(event.target));
+    mount.addEventListener('input', event => {
+      const target = event.target;
+      if (target.dataset?.writingField === 'wizardMaterialSearch') {
+        const caret = target.selectionStart;
+        capture(target);
+        render();
+        const search = document.getElementById('writing-wizard-material-search');
+        search?.focus?.();
+        search?.setSelectionRange?.(caret, caret);
+        return;
+      }
+      const isReplacingFileSource = target.dataset?.writingField === 'draft' && Boolean(form().wizardSourceDocument);
+      const caret = isReplacingFileSource ? target.selectionStart : null;
+      capture(target);
+      if (isReplacingFileSource) {
+        render();
+        const draft = document.getElementById('writing-draft');
+        draft?.focus?.();
+        draft?.setSelectionRange?.(caret, caret);
+      }
+    });
     mount.addEventListener('change', async event => {
       const target = event.target;
       if (target.dataset?.coverageInclude) {
@@ -1379,17 +1779,49 @@
         if (item) item.included = target.checked;
         render();
       }
+      else if (target.id === 'writing-source-file') { await importWritingSourceFile(target.files?.[0]); target.value = ''; }
+      else if (target.id === 'writing-material-folder') { await indexReferenceFolder(target.files); target.value = ''; }
       else if (target.id === 'writing-material-files') { await importMaterialFiles(target.files); target.value = ''; }
       else if (target.id === 'writing-article-list') { if (articleId && articleId !== target.value) coordinator.cancelResearch(articleId); activeMaterialJob?.controller.abort(); webReadResults.clear(); articleId = target.value; render(); }
+      else if (target.dataset?.writingField === 'wizardSourceScope') { capture(target); render(); }
       else if (target.id === 'writing-genre' && !articleId) {
         // 文体输入框失焦时若整块重绘，会替换用户正要输入的下一个控件；
         // 先记录选择，创建后再按新文体绘制专属字段与任务。
         capture(target);
       }
+      else if (target.id === 'writing-wizard-genre' || target.id === 'writing-wizard-task-type'
+        || target.dataset?.writingField === 'wizardMode') { capture(target); render(); }
       else if (target.id === 'writing-save') { form().saveEnabled = target.checked; await operate('save'); }
       else if (target.dataset?.materialField === 'selectedForPrompt') {
         const material = form().materials[Number(target.dataset.materialIndex)];
         if (material) material.selectedForPrompt = target.checked;
+        render();
+      }
+      else if (target.dataset?.wizardMaterial !== undefined) {
+        const f = form();
+        const item = f.materials[Number(target.dataset.wizardMaterial)];
+        if (item && target.checked && !f.wizardMaterialIds.includes(item.id) && f.wizardMaterialIds.length >= 3) {
+          f.error = '直接参考材料最多 3 份；请先取消一份已选材料。';
+        } else if (item) f.wizardMaterialIds = target.checked
+          ? [...new Set([...f.wizardMaterialIds, item.id])]
+          : f.wizardMaterialIds.filter(id => id !== item.id);
+        render();
+      }
+      else if (target.dataset?.sourceSection !== undefined) {
+        const source = form().wizardSourceDocument;
+        if (source) source.selectedSectionIds = target.checked
+          ? [...new Set([...source.selectedSectionIds, target.dataset.sourceSection])]
+          : source.selectedSectionIds.filter(id => id !== target.dataset.sourceSection);
+        render();
+      }
+      else if (target.dataset?.writingField === 'wizardSourceScope') {
+        capture(target); render();
+      }
+      else if (target.dataset?.wizardIssue) {
+        const selected = new Set(form().wizardIssueIds);
+        if (target.checked) selected.add(target.dataset.wizardIssue);
+        else selected.delete(target.dataset.wizardIssue);
+        form().wizardIssueIds = [...selected];
         render();
       }
       else capture(target);
@@ -1401,7 +1833,7 @@
       return operate(target.dataset.writingAction || target.dataset.action, target.dataset);
     });
     render();
-    return { render, openArticle(id) { if (articleId && articleId !== id) coordinator.cancelResearch(articleId); activeMaterialJob?.controller.abort(); webReadResults.clear(); articleId = id || ''; render(); },
+    return { render, openArticle(id) { if (articleId && articleId !== id) coordinator.cancelResearch(articleId); activeMaterialJob?.controller.abort(); sourceImportJob?.controller.abort(); webReadResults.clear(); articleId = id || ''; render(); },
       refreshFromStorage() {
         memoryDrafts.clear();
         const ids = new Set(coordinator.listArticles().map(a => a.id));

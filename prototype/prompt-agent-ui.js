@@ -336,8 +336,8 @@
     };
   }
   function createPromptAgentScenes({ document, onSceneChange } = {}) {
-    const roots = { task: 'prompt-agent-root', writing: 'writing-workbench-root', ppt: 'ppt-scene-root' };
-    const labels = { task: '任务梳理', writing: '写作工作台', ppt: 'PPT 规划' };
+    const roots = { task: 'prompt-agent-root', ppt: 'ppt-scene-root' };
+    const labels = { task: '任务梳理', ppt: 'PPT 规划' };
     let current = 'task';
     function selectScene(scene) {
       if (!Object.hasOwn(roots, scene)) scene = 'task';
