@@ -1,0 +1,114 @@
+{
+  "name": "@local/forward-step-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "向前一步：DeepSeek Harness 原生插件（Agent、任务与写作/PPT 工作流）",
+  "type": "module",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-storage-domain": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json",
+    "./client": "./client.js",
+    "./typert": {
+      "types": "./lib/typert.host.d.ts",
+      "default": "./lib/typert.host.js"
+    },
+    "./remote": {
+      "types": "./lib/typert.remote-client.d.ts",
+      "default": "./lib/typert.remote-client.js"
+    },
+    "./types": {
+      "types": "./lib/types.d.ts",
+      "default": "./lib/types.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "client/state.js",
+    "cordis.patch.yml",
+    "skills/forward-step/SKILL.md",
+    "locale/*.json",
+    "icon.svg",
+    "lib/host-service.js",
+    "lib/index.d.ts",
+    "lib/typert.host.js",
+    "lib/typert.host.d.ts",
+    "lib/typert.remote-client.js",
+    "lib/typert.remote-client.d.ts",
+    "lib/types.js",
+    "lib/types.d.ts",
+    "core/**/*.js",
+    "memory/**/*.js",
+    "vendor/core/**/*.js",
+    "vendor/core/**/*.json",
+    "lib/core"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-gateway",
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "external": [
+        "@deepseek-ai/dsh-api-gateway/client"
+      ]
+    }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "scripts": {
+    "build:host": "node node_modules/typescript/bin/tsc -p tsconfig.host.json",
+    "build:client": "node node_modules/tsdown/dist/run.mjs --config tsdown.config.mjs",
+    "build": "pnpm run build:host && pnpm run build:client"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-storage-domain": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-generator": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@types/react": "~18.3.1",
+    "react": "18.3.1",
+    "tsdown": "0.22.2",
+    "typescript": "6.0.3"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-storage-domain": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-typert-protocol": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    }
+  }
+}
