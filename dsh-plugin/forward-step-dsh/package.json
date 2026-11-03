@@ -38,6 +38,7 @@
   "files": [
     "index.js",
     "client.js",
+    "client/drafts.js",
     "client/state.js",
     "cordis.patch.yml",
     "skills/forward-step/SKILL.md",

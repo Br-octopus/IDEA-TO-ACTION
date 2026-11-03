@@ -6,19 +6,14 @@
 
 **Architecture:** 复用现有纯 JavaScript 核心，不迁移 Electron 窗口，也不增加常驻服务。业务代码通过插件自己的 HostPort 调用宿主；先验证实际 DSH 接口，再冻结适配实现。任务结果先保存，学习随后独立提交；状态隔离、版本校验和撤销由代码保证。
 
-## 本轮实现进度（更新于 2026-11-03 19:50，Asia/Shanghai）
+## 当前进度（更新于 2026-11-04，Asia/Tokyo）
 
-- 阶段一/H4 已通过本机隔离 DSH `0.2.0-rc.2` 桌面验收：真实模型 A/B 消息隔离两次通过；停用后侧栏/探针入口消失，重新启用后恢复，Host RPC `observed:true`，重新启用后的 A/B 再测仍只有 2 条任务请求与 2 条标题辅助请求，无重复注册或标记串线。机器收据见 `docs/acceptance/forward-step-dsh/phase1-acceptance-status-20261103.md` 与 `.verification/phase1-desktop-probe-20261102/desktop-real-model-ab-isolation-20261103.json`、`desktop-plugin-disabled-20261103.json`、`desktop-plugin-enabled-after-cycle-20261103.json`、`desktop-real-model-ab-after-reenable-20261103.json`。
-- 本机 DSH Plugin Manager 的启停语义与 Cordis 异步 effect 释放依据已按用户认可的 `0.2.0-rc.2` 本机源码记录；插件 effect 的 `dispose()` 等待活动 Agent/持久化收尾，自动化卸载测试通过。固定 GitHub commit 精确源码对照及 Windows MCP 专属回执以用户允许的替代依据处理，不作为继续阻塞；桌面交互明确标注为 UI Automation，不冒称 Windows MCP。
-- 当前构建对应 Host RPC 14 个，Client bundle 构建成功；最新专项测试 `node --test tests/dsh-plugin/*.test.mjs tests/prompt-agent-coordinator-prepared-request.test.mjs` 为 91/91 通过；在插件目录执行 `pnpm pack --dry-run` 成功，包清单含 39 个运行文件。隔离 profile Junction 指向插件副本，当前隔离 DSH PID `16324`、Host PID `29384` 于本轮构建后启动并完成验收。
-- 阶段二现在开始；先按 `2026-11-02-forward-step-dsh-02-agent-tasks.md` 审计实际代码、设计、测试和计划差异。任务/RPC 与侧栏已有实现，不重复造轮子；只补剩余断点。阶段三至五按依赖顺序推进，文章/PPT 首版仍只输出规划和外部 AI 执行提示词，直接调用 DSH 制作成品保留为后续方向。
-- 原应用继续保留且本轮未修改；插件副本保持在本计划指定路径。提交仍遵守只选择插件与必要设计、计划、验收文件并推到现有仓库独立分支；不把原应用改造夹入，不拆仓。
-
-## 当前执行状态（更新于 2026-11-03 19:50，Asia/Shanghai）
-
-- 阶段一/H4 已通过并可进入阶段二。已通过项包括真实模型消息 A/B 审计、隔离任务/会话恢复、RPC/取消、存储读写与重启恢复、插件安装卸载/重新启用、停用/启用 UI 差异和重新挂载只注册一次。固定提交源码精确对照按用户明确允许的本机源码/既有验收证据替代口径记录。
-- 当前隔离实例路径为 `.verification/dsh-desktop-isolated-20261102/profiles/desktop`，Electron userData 位于同根下 `electron-user-data`；普通 DSH profile 不参与本轮验收。当前 UI 操作使用 Windows UI Automation，Windows MCP 未暴露。
-- 文章/PPT 成品首版仍输出规划与外部 AI 执行提示词；“插件直接调用 DSH 生成成品”继续保留为后续设计方向。长期记忆/画像和撤销仍是阶段四待实现/验收范围，未因 H4 通过而标完成。
+- 2026-11-03 的隔离 DSH H4 桌面验收曾通过：真实模型 A/B 两次通过，停用后侧栏消失、重新启用后恢复，RPC `observed:true`，重新启用后再次 A/B 未见重复请求；历史原始收据仍见 `docs/acceptance/forward-step-dsh/phase1-acceptance-status-20261103.md` 和 `.verification/phase1-desktop-probe-20261102/` 下 4 份对应 JSON。
+- 2026-11-04 最新源码 Host/Client 构建成功，专项回归 100/100 通过，插件目录 `pnpm pack --dry-run` 成功。详情见 `docs/acceptance/forward-step-dsh/phase1-regression-check-20261104.md`。
+- 隔离 DSH 主进程 PID `15748` 启动于最新 Client bundle 构建之前；profile 插件目录 Junction 指向当前工作区副本，但磁盘文件一致不能证明运行中 renderer/Host 已加载最新构建。Windows MCP 已暴露，当前截图显示 DSH 最小化、前台为 StudentGrowthApp，控制状态为 user；尚未重启或在最新构建上复跑真实模型 A/B 和启停循环。
+- 阶段一/H4 在 11 月 3 日通过后已进入阶段二；阶段二 A5 本轮完成了本机草稿持久化自动化实现。最新构建的 H4 隔离桌面复验仍是下一次桌面交互的优先项；在新收据通过前，不把最新构建标成阶段一运行态复核通过，也不以 11 月 3 日旧构建的结果代替。后续功能仍按 1→2→3→4→5 的门槛推进。
+- H4 的 DSH 本机源码/接口及既有桌面证据替代口径按用户认可执行；不声称已取得固定 GitHub commit 的精确源码。文章/PPT 首版仍只输出规划和外部 AI 执行提示词，直接调用 DSH 生成成品保留为后续方向。长期记忆/画像及撤销仍属阶段四待实现/验收范围。
+- 原应用继续保留且本轮未修改；插件副本保持在本计划指定路径。提交仅选择插件与必要设计、计划、验收文件并推到现有仓库独立分支，不夹带原应用改造，也不拆仓。
 ---
 ## 1. 执行边界与入口
 
@@ -317,3 +312,15 @@ const initialState = {
 - 隔离 Host 127.0.0.1:19387 的只读 HTTP 探查：GET /json/version 超时、GET /json/list 返回 404、GET / 返回 401；该端口是 DSH Host 服务，不是 Chromium DevTools/CDP 入口。
 - 当前 UI 仍停在插件管理页，向前一步 Prompt Agent 显示已安装并启用；本轮桌面输入未成功切换到业务面板，因此不新增 RPC 或真实模型通过结论。
 - 当前进程未完整退出且 Host 仍运行；不并发启动同一 profile 的第二个 Desktop Host。后续继续使用既有 UI Automation 方式或等待可调用的 Windows MCP 工具，不把 Host API 端口误当作 renderer 调试接口。
+
+## 2026-11-04 最新构建复核
+
+- 最新插件 Host/Client 构建成功；专项回归 100/100 通过；插件目录内 `pnpm pack --dry-run` 成功，详见 `docs/acceptance/forward-step-dsh/phase1-regression-check-20261104.md`。
+- 隔离 profile Junction 与插件源目录一致，但当前隔离 DSH 进程早于最近 Client bundle 构建启动。历史 H4 真实模型和启停收据仍有效于当时构建；最新构建的运行态 A/B 与停用/重新启用复核尚未完成，不将磁盘文件一致误记为进程已加载。
+- Windows MCP 已暴露；当前前台由其他应用占用，切换 DSH 返回 `USER_CONTROL`。未强制结束或重启 DSH。下一步先在隔离桌面完成最新构建复验，再按阶段计划继续 A5 草稿/外部结果恢复和后续阶段。
+
+## 2026-11-04 A5 草稿恢复实现
+
+- 阶段二 A5 新增按项目和任务隔离的本机未保存草稿存储；任务重命名、外部 AI 结果、复盘反馈及 step/promptVersion 选择在重新打开面板并读取项目任务后恢复。保存成功和确认删除分别清理对应草稿；不保存模型选项、不进入学习记忆。实现及验收项见 `docs/superpowers/plans/2026-11-02-forward-step-dsh-02-agent-tasks.md` 与 `docs/acceptance/forward-step-dsh/phase2-a5-draft-recovery-20261104.md`。
+- 当前 A5 自动化证据为 105 项专项测试全通过、Host/Client 构建成功、打包清单包含 `client/drafts.js`。DSH 实际关闭/重启后的草稿恢复及 320/480/800px 侧栏检查仍未验收。
+- 阶段一最新构建的 H4 桌面复核仍待完成；历史 11 月 3 日 H4 收据与最新构建的运行态复验分别记录，不能互相替代。原应用未改，继续只在插件副本开发。

@@ -26,6 +26,12 @@ test('切换任务保留各自草稿，迟到请求不覆盖当前输出', () =>
   assert.equal(afterLate.draftsByTask['task-b'], 'B 草稿')
 })
 
+test('从持久化状态恢复名称草稿后仍标记为未同步', () => {
+  const restored = reduceClient(createClientState(), { type: 'draft.restored', taskId: 'task-a', draft: '恢复的名称' })
+  assert.equal(restored.draftsByTask['task-a'], '恢复的名称')
+  assert.equal(restored.saveStatusByTask['task-a'], 'unsaved')
+})
+
 test('冲突同时保留本地草稿和服务器版本供用户处理', () => {
   const state = reduceClient(createClientState(), { type: 'conflict', taskId: 'task-a', localDraft: '本地内容', serverVersion: { revision: 9, title: '服务器标题' } })
   assert.equal(state.saveStatusByTask['task-a'], 'conflict')

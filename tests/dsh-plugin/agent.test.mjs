@@ -118,3 +118,31 @@ test('Agent 仅注入当前范围内 active 记忆', async t => {
   assert.ok(result.version.omissions.some(item => item.id === 'm-other' && item.reason === 'scope'));
   assert.ok(result.version.omissions.some(item => item.id === 'm-candidate' && item.reason === 'inactive'));
 });
+
+
+test('真实任务 Agent 将完整上下文经 coordinator preparedRequest 发送并保存结果', async t => {
+  const { dir, store } = fixture(t)
+  const task = await create(store, dir)
+  let call
+  const result = await runAgent({
+    store,
+    taskId: task.taskId,
+    taskRevision: task.revision,
+    stage: 'planning',
+    requestId: 'prepared-task-run',
+    projectId: task.projectId,
+    conversationId: 'c1',
+    generate: async (messages, options) => {
+      call = { messages, options }
+      return '路线已按任务目标整理'
+    },
+  })
+  assert.equal(call.options.preparedRequest, true)
+  assert.equal(call.options.stage, 'planning')
+  assert.equal(call.options.requestId, 'prepared-task-run')
+  assert.equal(call.messages.length, 1)
+  assert.match(call.messages[0].content, new RegExp(task.originalInput))
+  assert.match(call.messages[0].content, /首版交付边界/)
+  assert.equal(result.version.content, '路线已按任务目标整理')
+  assert.equal(result.version.requestId, 'prepared-task-run')
+})

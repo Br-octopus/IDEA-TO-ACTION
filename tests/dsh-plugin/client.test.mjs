@@ -7,7 +7,7 @@ const clientPath = new URL('../../dsh-plugin/forward-step-dsh/client.js', import
 const panelId = 'forward-step-dsh';
 const success = value => ({ ok: true, value });
 
-async function loadClient() {
+async function loadClient(localStorage = new Map()) {
   const source = await readFile(clientPath, 'utf8');
   let registration;
   const state = [];
@@ -23,7 +23,14 @@ async function loadClient() {
   let nextTimerId = 0;
   const timers = new Map();
   const context = vm.createContext({
-    window: { __ModuleLoader__: { load(value) { registration = value; } } },
+    window: {
+      __ModuleLoader__: { load(value) { registration = value; } },
+      localStorage: {
+        getItem(key) { return localStorage.get(key) ?? null; },
+        setItem(key, value) { localStorage.set(key, String(value)); },
+        removeItem(key) { localStorage.delete(key); },
+      },
+    },
     AbortController,
     crypto: { randomUUID: () => 'test-event-id' },
     setTimeout(callback, delay) {
@@ -155,6 +162,59 @@ test('侧栏 client 挂载生成的 Remote 并注册唯一主面板和 sidebar.p
   assert.match(state[0], /已恢复当前对话任务/);
 });
 
+test('面板重开后按项目和任务恢复名称、外部结果与复盘草稿', async () => {
+  const storage = new Map();
+  const task = {
+    taskId: 'task-draft', title: '原始标题', domain: 'writing', entryType: 'advance-idea',
+    originalInput: '文章主题', currentRequirements: [], projectId: 'project-draft', revision: 2,
+    versions: [{ versionId: 'prompt-v1', kind: 'agent-output', stage: 'planning', content: '规划', createdAt: '2026-11-04T00:00:00Z' }],
+    agent: { steps: [{ id: 'step-outline', title: '大纲' }] },
+  };
+  const remote = {
+    async echo() { return success({ marker: 'unused', observed: true }); },
+    async wait() { return success({ marker: 'unused', observed: true }); },
+    async storageWrite(input) { return success({ marker: input.marker, stored: true }); },
+    async storageRead() { return success({ marker: 'unused', stored: true }); },
+    async listTasks() { return success({ projectId: 'project-draft', revision: 2, tasks: [task] }); },
+    async getCurrentBinding() { return success({ binding: { taskId: task.taskId } }); },
+    async bindTask() { return success({ binding: {}, revision: 2 }); },
+  };
+
+  async function openPanel() {
+    const loaded = await loadClient(storage);
+    const { ctx, injectedSlots, registrations } = makeContext(remote);
+    await loaded.module.apply(ctx);
+    for (const item of injectedSlots) item.factory();
+    const element = registrations[0].component();
+    return { ...loaded, element };
+  }
+
+  async function loadBoundTask(panelInstance) {
+    let panel = panelInstance.render(panelInstance.element.type, panelInstance.element.props);
+    findNode(panel, node => node.type === 'input' && node.props.placeholder === '例如 D:/work/project').props.onChange({ target: { value: process.cwd() } });
+    panel = panelInstance.render(panelInstance.element.type, panelInstance.element.props);
+    findNode(panel, node => node.type === 'input' && node.props.placeholder === '粘贴当前 DSH 对话 ID').props.onChange({ target: { value: 'conversation-draft' } });
+    panel = panelInstance.render(panelInstance.element.type, panelInstance.element.props);
+    await findNode(panel, node => node.type === 'button' && flattenText(node).join('') === '读取项目任务').props.onClick();
+    return panelInstance.render(panelInstance.element.type, panelInstance.element.props);
+  }
+
+  const first = await openPanel();
+  let panel = await loadBoundTask(first);
+  findNode(panel, node => node.type === 'input' && node.props.value === '原始标题').props.onChange({ target: { value: '未提交标题' } });
+  panel = first.render(first.element.type, first.element.props);
+  findNode(panel, node => node.type === 'textarea' && node.props['aria-label'] === '外部 AI 结果').props.onChange({ target: { value: '外部正文草稿' } });
+  panel = first.render(first.element.type, first.element.props);
+  findNode(panel, node => node.type === 'textarea' && node.props['aria-label'] === '复盘反馈').props.onChange({ target: { value: '补充一个例子' } });
+
+  const reopened = await openPanel();
+  panel = await loadBoundTask(reopened);
+  assert.equal(findNode(panel, node => node.type === 'input' && node.props.value === '未提交标题')?.props.value, '未提交标题');
+  assert.equal(findNode(panel, node => node.type === 'textarea' && node.props['aria-label'] === '外部 AI 结果')?.props.value, '外部正文草稿');
+  assert.equal(findNode(panel, node => node.type === 'textarea' && node.props['aria-label'] === '复盘反馈')?.props.value, '补充一个例子');
+  assert.match(flattenText(panel).join(' '), /已保存在本机/);
+});
+
 test('Agent / Session 按钮会把有时限的取消信号传给 Host，超时后恢复界面', async () => {
   const { module, state, render, fireTimer } = await loadClient();
   let requestSignal;
@@ -265,7 +325,8 @@ test('未绑定的新对话读取任务时不自动继承或绑定最近任务',
 
 
 test('侧栏重命名与删除前预览使用当前任务修订和幂等事件标识', async () => {
-  const { module, render } = await loadClient()
+  const storage = new Map()
+  const { module, render } = await loadClient(storage)
   const task = { taskId: 'task-managed', revision: 4, title: '管理任务', domain: 'general', entryType: 'advance-idea', originalInput: '原始内容', archived: false, currentRequirements: [], versions: [], projectId: 'project-managed' }
   const calls = []
   const remote = {
@@ -298,6 +359,9 @@ test('侧栏重命名与删除前预览使用当前任务修订和幂等事件�
   assert.equal(calls[0][1].patch.title, '已重命名')
   assert.equal(calls[0][1].eventId, 'test-event-id')
   panel = getPanel()
+  findNode(panel, node => node.type === 'textarea' && node.props['aria-label'] === '外部 AI 结果').props.onChange({ target: { value: '待删除的本机草稿' } })
+  assert.equal(storage.size, 1)
+  panel = getPanel()
   await findNode(panel, node => node.type === 'button' && flattenText(node).join('') === '删除任务…').props.onClick()
   assert.equal(calls[1][0], 'previewDeleteTask')
   panel = getPanel()
@@ -306,6 +370,7 @@ test('侧栏重命名与删除前预览使用当前任务修订和幂等事件�
   assert.equal(calls[2][0], 'deleteTask')
   assert.equal(calls[2][1].confirmed, true)
   assert.equal(calls[2][1].eventId, 'test-event-id')
+  assert.equal(storage.size, 0, '删除任务成功后应清理仅属于该任务的本机草稿')
 })
 test('侧栏粘贴外部结果并关联步骤/提示词版本，保存失败保留草稿', async () => {
   const { module, render } = await loadClient()

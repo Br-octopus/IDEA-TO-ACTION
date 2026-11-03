@@ -8,6 +8,8 @@ export function reduceClient(state, event) {
       return { ...state, selectedTaskId: event.taskId }
     case 'draft.changed':
       return { ...state, draftsByTask: { ...state.draftsByTask, [event.taskId]: event.draft }, saveStatusByTask: { ...state.saveStatusByTask, [event.taskId]: 'unsaved' }, conflictsByTask: Object.fromEntries(Object.entries(state.conflictsByTask).filter(([taskId]) => taskId !== event.taskId)) }
+    case 'draft.restored':
+      return { ...state, draftsByTask: { ...state.draftsByTask, [event.taskId]: event.draft }, saveStatusByTask: { ...state.saveStatusByTask, [event.taskId]: 'unsaved' } }
     case 'save.started':
       return { ...state, saveStatusByTask: { ...state.saveStatusByTask, [event.taskId]: 'saving' } }
     case 'save.succeeded': {

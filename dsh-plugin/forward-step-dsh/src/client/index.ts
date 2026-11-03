@@ -3,6 +3,7 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import forwardStepRemote from '@local/forward-step-dsh/remote'
 import type {} from '@local/forward-step-dsh/remote'
 import { createClientState, reduceClient } from '../../client/state.js'
+import { deleteTaskDraft, readTaskDraft, writeTaskDraft } from '../../client/drafts.js'
 
 type PluginRemote = {
   echo(input: { marker: string }): Promise<RemoteResult<{ marker: string; observed: boolean }>>
@@ -28,6 +29,7 @@ type PluginRemote = {
 
 type TaskVersion = { versionId: string; requestId?: string; eventId?: string; kind?: 'agent-output' | 'external-result'; stage: string; stepId?: string; promptVersionId?: string; content: string; feedback?: string; createdAt: string }
 type Task = { taskId: string; revision: number; title: string; domain: string; entryType: string; originalInput: string; archived?: boolean; currentRequirements: string[]; versions: TaskVersion[]; projectId: string; agent?: { steps?: { id: string; title: string; status?: string }[]; currentStepId?: string } }
+type ExternalDraft = { content: string; feedback: string; stepId: string; promptVersionId: string }
 
 
 const { createElement: h, useState } = React
@@ -60,17 +62,34 @@ function Panel({ remote }: { remote: PluginRemote }) {
   const [projectId, setProjectId] = useState('')
   const [runningRequest, setRunningRequest] = useState('')
   const [sessionLoaded, setSessionLoaded] = useState(false)
-  const [externalDraftsByTask, setExternalDraftsByTask] = useState<Record<string, { content: string; feedback: string }>>({})
-  const [externalStepDraft, setExternalStepDraft] = useState('')
-  const [externalPromptDraft, setExternalPromptDraft] = useState('')
+  const [externalDraftsByTask, setExternalDraftsByTask] = useState<Record<string, ExternalDraft>>({})
+  const [draftStorageStatusByTask, setDraftStorageStatusByTask] = useState<Record<string, 'saved' | 'error'>>({})
   const selectedTask = tasks.find(task => task.taskId === selectedTaskId)
   const renameDraft = selectedTask ? (clientState.draftsByTask[selectedTaskId] ?? selectedTask.title) : ''
+  const externalDraft = selectedTask ? (externalDraftsByTask[selectedTask.taskId] ?? { content: '', feedback: '', stepId: '', promptVersionId: '' }) : { content: '', feedback: '', stepId: '', promptVersionId: '' }
   const externalSteps = selectedTask?.agent?.steps?.length ? selectedTask.agent.steps : [{ id: 'task', title: '整项任务' }]
-  const externalStepId = externalSteps.some(step => step.id === externalStepDraft) ? externalStepDraft : externalSteps[0].id
+  const externalStepId = externalSteps.some(step => step.id === externalDraft.stepId) ? externalDraft.stepId : externalSteps[0].id
   const promptVersions = selectedTask?.versions.filter(version => version.kind !== 'external-result') ?? []
-  const externalPromptVersionId = promptVersions.some(version => version.versionId === externalPromptDraft) ? externalPromptDraft : (promptVersions.at(-1)?.versionId ?? '')
-  const externalDraft = selectedTask ? (externalDraftsByTask[selectedTask.taskId] ?? { content: '', feedback: '' }) : { content: '', feedback: '' }
+  const externalPromptVersionId = promptVersions.some(version => version.versionId === externalDraft.promptVersionId) ? externalDraft.promptVersionId : (promptVersions.at(-1)?.versionId ?? '')
   function dispatchClient(event: any) { setClientState(current => reduceClient(current, event)) }
+
+  function persistTaskDraft(taskId: string, patch: { title?: string; externalResult?: Partial<ExternalDraft> }) {
+    if (!projectId) return false
+    try {
+      writeTaskDraft(window.localStorage, projectId, taskId, patch)
+      setDraftStorageStatusByTask(current => ({ ...current, [taskId]: 'saved' }))
+      return true
+    } catch (error) {
+      setDraftStorageStatusByTask(current => ({ ...current, [taskId]: 'error' }))
+      setResult(`本机草稿保存失败，当前输入仍保留在面板：${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }
+
+  function updateExternalDraft(task: Task, draft: ExternalDraft) {
+    setExternalDraftsByTask(current => ({ ...current, [task.taskId]: draft }))
+    persistTaskDraft(task.taskId, { externalResult: draft })
+  }
 
   async function loadTasks() {
     setBusy(true)
@@ -79,6 +98,33 @@ function Panel({ remote }: { remote: PluginRemote }) {
       setProjectId(response.projectId)
       setCwdLoaded(true)
       setTasks(response.tasks)
+      const restoredExternalDrafts: Record<string, ExternalDraft> = {}
+      const restoredTitles: { taskId: string; title: string }[] = []
+      const restoredDraftIds: string[] = []
+      let draftRestoreFailed = false
+      for (const task of response.tasks) {
+        try {
+          const draft = readTaskDraft(window.localStorage, response.projectId, task.taskId)
+          if (draft?.title) {
+            restoredTitles.push({ taskId: task.taskId, title: draft.title })
+            restoredDraftIds.push(task.taskId)
+          }
+          if (draft?.externalResult) {
+            restoredExternalDrafts[task.taskId] = {
+              content: typeof draft.externalResult.content === 'string' ? draft.externalResult.content : '',
+              feedback: typeof draft.externalResult.feedback === 'string' ? draft.externalResult.feedback : '',
+              stepId: typeof draft.externalResult.stepId === 'string' ? draft.externalResult.stepId : '',
+              promptVersionId: typeof draft.externalResult.promptVersionId === 'string' ? draft.externalResult.promptVersionId : '',
+            }
+            restoredDraftIds.push(task.taskId)
+          }
+        } catch {
+          draftRestoreFailed = true
+        }
+      }
+      setExternalDraftsByTask(restoredExternalDrafts)
+      setDraftStorageStatusByTask(Object.fromEntries(restoredDraftIds.map(taskId => [taskId, 'saved'])))
+      setClientState(current => restoredTitles.reduce((state, draft) => reduceClient(state, { type: 'draft.restored', taskId: draft.taskId, draft: draft.title }), current))
       const current = conversationId.trim()
         ? unwrapRemote(await remote.getCurrentBinding({ projectId: response.projectId, conversationId }))
         : { binding: null }
@@ -89,7 +135,9 @@ function Panel({ remote }: { remote: PluginRemote }) {
       setSelectedTaskId(nextTaskId)
       dispatchClient({ type: 'task.selected', taskId: nextTaskId })
       setSessionLoaded(true)
-      setResult(`已读取 ${response.tasks.length} 个任务；修订 ${response.revision}${boundTaskId ? '；已恢复当前对话任务' : ''}`)
+      setResult(draftRestoreFailed
+        ? `已读取 ${response.tasks.length} 个任务，但有本机草稿无法读取；请检查存储后再继续。`
+        : `已读取 ${response.tasks.length} 个任务；修订 ${response.revision}${boundTaskId ? '；已恢复当前对话任务' : ''}`)
     } catch (error) { setResult(`读取任务失败：${error instanceof Error ? error.message : String(error)}`) } finally { setBusy(false) }
   }
 
@@ -127,7 +175,8 @@ function Panel({ remote }: { remote: PluginRemote }) {
       const response = unwrapRemote(await remote.updateTask({ projectId: selectedTask.projectId, taskId: selectedTask.taskId, taskRevision: selectedTask.revision, conversationId, patch: { title: renameDraft.trim() }, eventId: globalThis.crypto.randomUUID() }))
       setTasks(current => current.map(task => task.taskId === response.task.taskId ? response.task : task))
       dispatchClient({ type: 'save.succeeded', taskId: response.task.taskId })
-      setResult('任务名称已保存。')
+      const draftCleared = persistTaskDraft(response.task.taskId, { title: '' })
+      setResult(draftCleared ? '任务名称已保存。' : '任务名称已保存，但本机草稿未能清理。')
     } catch (error) {
       const draft = renameDraft
       if ((error as any)?.code === 'conflict') {
@@ -179,8 +228,15 @@ function Panel({ remote }: { remote: PluginRemote }) {
       setTasks(current => current.filter(task => task.taskId !== selectedTask.taskId))
       setSelectedTaskId('')
       dispatchClient({ type: 'task.deleted', taskId: selectedTask.taskId })
+      let draftCleanupFailed = false
+      try {
+        deleteTaskDraft(window.localStorage, selectedTask.projectId, selectedTask.taskId)
+        setDraftStorageStatusByTask(current => { const next = { ...current }; delete next[selectedTask.taskId]; return next })
+      } catch {
+        draftCleanupFailed = true
+      }
       setDeleteImpact(null)
-      setResult('任务已删除。')
+      setResult(draftCleanupFailed ? '任务已删除，但本机草稿未能清理。' : '任务已删除。')
     } catch (error) { setResult(`删除失败：${error instanceof Error ? error.message : String(error)}`) }
     finally { setBusy(false) }
   }
@@ -228,8 +284,12 @@ function Panel({ remote }: { remote: PluginRemote }) {
         eventId: globalThis.crypto.randomUUID(),
       }))
       setTasks(current => current.map(task => task.taskId === response.task.taskId ? response.task : task))
-      setExternalDraftsByTask(current => ({ ...current, [selectedTask.taskId]: { content: '', feedback: '' } }))
-      setResult(`外部结果已保存并关联提示词版本 ${response.version.promptVersionId}。`)
+      const emptyDraft = { content: '', feedback: '', stepId: '', promptVersionId: '' }
+      setExternalDraftsByTask(current => ({ ...current, [selectedTask.taskId]: emptyDraft }))
+      const draftCleared = persistTaskDraft(selectedTask.taskId, { externalResult: emptyDraft })
+      setResult(draftCleared
+        ? `外部结果已保存并关联提示词版本 ${response.version.promptVersionId}。`
+        : `外部结果已保存，但本机草稿未能清理；关联提示词版本 ${response.version.promptVersionId}。`)
     } catch (error) {
       setResult(`外部结果保存失败，输入仍保留：${error instanceof Error ? error.message : String(error)}`)
     } finally { setBusy(false) }
@@ -329,9 +389,9 @@ function Panel({ remote }: { remote: PluginRemote }) {
   ),  h('div', null, h('button', { type: 'button', disabled: busy || !cwd.trim() || !conversationId.trim(), onClick: loadTasks }, '读取项目任务'), h('button', { type: 'button', disabled: busy || !cwd.trim() || !conversationId.trim() || !input.trim(), onClick: createTask }, '创建任务')),
   h('button', { type: 'button', disabled: busy || !cwd.trim(), onClick: () => { setShowArchived(value => !value); setSelectedTaskId(''); setTasks([]) } }, showArchived ? '查看未归档任务' : '查看归档任务'),  h('label', null, '任务 ', h('select', { value: selectedTaskId, onChange: (event: any) => void selectTask(event.target.value) }, h('option', { value: '' }, '选择任务'), ...tasks.map(task => h('option', { key: task.taskId, value: task.taskId }, `${task.title} · ${task.domain}`)))),
   selectedTask ? h('section', null,
-    h('label', null, '任务名称 ', h('input', { value: renameDraft, onChange: (event: any) => dispatchClient({ type: 'draft.changed', taskId: selectedTask.taskId, draft: event.target.value }) })),
+    h('label', null, '任务名称 ', h('input', { value: renameDraft, onChange: (event: any) => { dispatchClient({ type: 'draft.changed', taskId: selectedTask.taskId, draft: event.target.value }); persistTaskDraft(selectedTask.taskId, { title: event.target.value }) } })),
     h('button', { type: 'button', disabled: busy || !renameDraft.trim() || renameDraft.trim() === selectedTask.title, onClick: saveTaskTitle }, '保存名称'),
-    clientState.saveStatusByTask[selectedTask.taskId] === 'unsaved' ? h('small', { role: 'status' }, '名称草稿尚未保存') : clientState.saveStatusByTask[selectedTask.taskId] === 'conflict' ? h('small', { role: 'alert' }, '任务版本已冲突；本地草稿仍保留') : null,
+    clientState.saveStatusByTask[selectedTask.taskId] === 'unsaved' ? h('small', { role: 'status' }, draftStorageStatusByTask[selectedTask.taskId] === 'saved' ? '名称草稿已保存在本机，尚未同步到任务' : '名称草稿尚未保存') : clientState.saveStatusByTask[selectedTask.taskId] === 'conflict' ? h('small', { role: 'alert' }, '任务版本已冲突；本地草稿仍保留') : null,
     h('button', { type: 'button', disabled: busy, onClick: toggleArchive }, selectedTask.archived ? '恢复任务' : '归档任务'),
     deleteImpact ? h('div', { role: 'alert' }, h('p', null, `确认删除“${deleteImpact.title}”？将移除 ${deleteImpact.bindingCount} 个绑定、${deleteImpact.versionCount} 个版本、${deleteImpact.reviewCount} 条复盘记录和 ${deleteImpact.sourceCount} 个来源。`), h('button', { type: 'button', disabled: busy, onClick: confirmDeleteTask }, '确认删除'), h('button', { type: 'button', disabled: busy, onClick: () => setDeleteImpact(null) }, '取消')) : h('button', { type: 'button', disabled: busy, onClick: requestDeletePreview }, '删除任务…'),
   ) : null,  h('label', null, '新任务内容 ', h('textarea', { value: input, rows: 4, onChange: (event: any) => setInput(event.target.value), placeholder: '描述想法、提示词或待诊断结果' })),
@@ -342,11 +402,12 @@ function Panel({ remote }: { remote: PluginRemote }) {
     h('p', null, `进度修订 ${selectedTask.revision} · ${selectedTask.versions.length} 个版本`),
     h('section', { 'aria-label': '外部结果回填' },
       h('h3', null, '外部结果回填'),
-      h('label', null, '关联步骤 ', h('select', { 'aria-label': '关联步骤', value: externalStepId, onChange: (event: any) => setExternalStepDraft(event.target.value) }, ...externalSteps.map(step => h('option', { key: step.id, value: step.id }, step.title || step.id)))),
-      h('label', null, '对应提示词版本 ', h('select', { 'aria-label': '对应提示词版本', value: externalPromptVersionId, disabled: promptVersions.length === 0 || busy, onChange: (event: any) => setExternalPromptDraft(event.target.value) }, ...promptVersions.map(version => h('option', { key: version.versionId, value: version.versionId }, `${version.stage} · ${version.versionId.slice(0, 8)}`)))),
+      h('label', null, '关联步骤 ', h('select', { 'aria-label': '关联步骤', value: externalStepId, onChange: (event: any) => updateExternalDraft(selectedTask, { ...externalDraft, stepId: event.target.value }) }, ...externalSteps.map(step => h('option', { key: step.id, value: step.id }, step.title || step.id)))),
+      h('label', null, '对应提示词版本 ', h('select', { 'aria-label': '对应提示词版本', value: externalPromptVersionId, disabled: promptVersions.length === 0 || busy, onChange: (event: any) => updateExternalDraft(selectedTask, { ...externalDraft, promptVersionId: event.target.value }) }, ...promptVersions.map(version => h('option', { key: version.versionId, value: version.versionId }, `${version.stage} · ${version.versionId.slice(0, 8)}`)))),
       promptVersions.length ? null : h('small', null, '请先运行一个阶段生成可关联的提示词版本。'),
-      h('label', null, '外部 AI 结果 ', h('textarea', { 'aria-label': '外部 AI 结果', value: externalDraft.content, rows: 5, onChange: (event: any) => setExternalDraftsByTask(current => ({ ...current, [selectedTask.taskId]: { ...externalDraft, content: event.target.value } })) })),
-      h('label', null, '复盘反馈 ', h('textarea', { 'aria-label': '复盘反馈', value: externalDraft.feedback, rows: 2, onChange: (event: any) => setExternalDraftsByTask(current => ({ ...current, [selectedTask.taskId]: { ...externalDraft, feedback: event.target.value } })) })),
+      h('label', null, '外部 AI 结果 ', h('textarea', { 'aria-label': '外部 AI 结果', value: externalDraft.content, rows: 5, onChange: (event: any) => updateExternalDraft(selectedTask, { ...externalDraft, content: event.target.value }) })),
+      h('label', null, '复盘反馈 ', h('textarea', { 'aria-label': '复盘反馈', value: externalDraft.feedback, rows: 2, onChange: (event: any) => updateExternalDraft(selectedTask, { ...externalDraft, feedback: event.target.value }) })),
+      draftStorageStatusByTask[selectedTask.taskId] === 'saved' ? h('small', { role: 'status' }, '未提交输入已保存在本机') : draftStorageStatusByTask[selectedTask.taskId] === 'error' ? h('small', { role: 'alert' }, '本机草稿保存失败；当前输入仍保留在面板') : null,
       h('button', { type: 'button', disabled: busy || !externalDraft.content.trim() || !externalPromptVersionId, onClick: saveExternalResult }, '保存外部结果')),
     ...selectedTask.versions.map(version => h('details', { key: version.versionId }, h('summary', null, `${version.kind === 'external-result' ? '外部结果' : version.stage} · ${new Date(version.createdAt).toLocaleString()}${version.promptVersionId ? ` · 关联 ${version.promptVersionId.slice(0, 8)}` : ''}`), h('pre', { style: { whiteSpace: 'pre-wrap' } }, version.content)))) : null,
   h('button', { type: 'button', disabled: busy || !cwdLoaded, onClick: runAgentIsolationProbe }, '验证 Agent / Session 消息隔离（测试适配器）'),

@@ -1,0 +1,103 @@
+{
+  "receiptId": "phase2-a5-desktop-crud-restart-20261103",
+  "date": "2026-11-03",
+  "timezone": "Asia/Shanghai",
+  "desktop": {
+    "product": "DeepSeek Harness",
+    "version": "0.2.0-rc.2",
+    "electronPidBeforeRestart": 16596,
+    "hostPidBeforeRestart": 2520,
+    "electronPidAfterRestart": 4464,
+    "hostPidAfterRestart": 34020,
+    "profile": "D:/VScode/项目/提示词工具/.dsh-workspace/.verification/dsh-desktop-isolated-20261102/profiles/desktop",
+    "userData": "D:/VScode/项目/提示词工具/.dsh-workspace/.verification/dsh-desktop-isolated-20261102/electron-user-data",
+    "plugin": "D:/VScode/项目/提示词工具/.dsh-workspace/dsh-plugin/forward-step-dsh",
+    "interaction": "Windows UI Automation; Windows MCP was not invoked in this turn"
+  },
+  "binding": {
+    "projectDirectory": "D:/VScode/项目/提示词工具/.dsh-workspace",
+    "conversationId": "phase2-a5-desktop-20261104"
+  },
+  "results": [
+    {
+      "id": "switch-writing-task",
+      "status": "pass",
+      "observed": "文章 B 选中后，任务标题显示唯一标记；列表项显示 writing；当前任务标题与 PPT 任务不同"
+    },
+    {
+      "id": "delete-preview-article-b",
+      "status": "pass",
+      "observed": "预览显示将删除 2 个绑定、0 个版本、0 条复盘、0 个来源；确认后任务列表由 3 减至 2"
+    },
+    {
+      "id": "delete-preview-article-a",
+      "status": "pass",
+      "observed": "预览显示将删除 2 个绑定、0 个版本、0 条复盘、0 个来源；确认后任务列表由 2 减至 1"
+    },
+    {
+      "id": "delete-preview-ppt",
+      "status": "pass",
+      "observed": "预览显示将删除 1 个绑定、0 个版本、0 条复盘、0 个来源；确认后任务列表为 0"
+    },
+    {
+      "id": "restart-restore",
+      "status": "pass",
+      "observed": "正常选择“应用→退出”；以 launch-isolated-dsh.ps1 重启同一隔离 profile；相同 projectDirectory/conversationId 读取后恢复“验收重启恢复-20261103：验证插件任务在重启后恢复。”，1 个任务，修订 17，并自动恢复当前对话任务"
+    },
+    {
+      "id": "post-restart-cleanup",
+      "status": "pass",
+      "observed": "删除预览显示 1 个绑定；确认后重新读取 0 个任务，修订 18"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": ".dsh-workspace/.verification/dsh-desktop-isolated-20261102/desktop-delete-preview-20261103.png",
+      "sha256": "8672B10BAF98B037EAD075A9E632CA06C00D4DB27C2FC4E1200197215B5B7352",
+      "evidence": "删除任务确认前预览"
+    },
+    {
+      "path": ".dsh-workspace/.verification/dsh-desktop-isolated-20261102/desktop-after-restart-task-restored-20261103.png",
+      "sha256": "C574CD93115F8EF561C88407B319C9200E9BF323D87CD9F8F5029E1FDE4CBA8F",
+      "evidence": "重启后唯一任务和当前对话绑定恢复"
+    },
+    {
+      "path": ".dsh-workspace/.verification/dsh-desktop-isolated-20261102/desktop-after-final-test-cleanup-20261103.png",
+      "sha256": "18728159C354206C92E3A1EA2147B87779F2ED41826320687EB9F90A016FECC4",
+      "evidence": "临时任务清理后列表归零"
+    },
+    {
+      "path": ".dsh-workspace/.verification/dsh-desktop-isolated-20261102/desktop-task-switch-20261103.png",
+      "sha256": "606DE43D2517A4403EDAB7A1A8639F5607BF429009515D7E4FECCF701FD3F83F",
+      "evidence": "任务切换后文章B标题与writing标签显示"
+    },
+    {
+      "path": ".dsh-workspace/.verification/dsh-desktop-isolated-20261102/desktop-after-delete-20261103.png",
+      "sha256": "2BD925AA61677B0DE83B2C867CF724000DA1C1B4B44319F478DE44E8AEF5AE4B",
+      "evidence": "删除临时文章任务后，当前PPT任务继续选中"
+    }
+  ],
+  "notRun": [
+    "真实模型业务任务端到端效果；多任务 draft/version/export 闭环；320/480/800px 侧栏宽度；关闭/重启后草稿恢复；A6 研究 UI"
+  ],
+  "automated": {
+    "build": {
+      "command": "pnpm run build",
+      "workingDirectory": "D:/VScode/项目/提示词工具/.dsh-workspace/dsh-plugin/forward-step-dsh",
+      "result": "stage core 21 files; Typert Host/Remote invocations 18; Client bundle build complete",
+      "exitCode": 0
+    },
+    "tests": {
+      "command": "node --test tests/dsh-plugin/*.test.mjs tests/prompt-agent-coordinator-prepared-request.test.mjs",
+      "workingDirectory": "D:/VScode/项目/提示词工具/.dsh-workspace",
+      "result": "96 tests; 96 pass; 0 fail; 0 cancelled",
+      "exitCode": 0
+    },
+    "pack": {
+      "command": "pnpm pack --dry-run",
+      "workingDirectory": "D:/VScode/项目/提示词工具/.dsh-workspace/dsh-plugin/forward-step-dsh",
+      "result": "success; tarball contents listed 39 files",
+      "exitCode": 0
+    }
+  }
+}

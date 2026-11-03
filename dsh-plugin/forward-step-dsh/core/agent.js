@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { buildContext } from './context.js'
 import { buildMethodPrompt } from './methods.js'
 import { getCurrentBinding, updateTask } from './tasks.js'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { createPromptAgentCoordinator } = require('../vendor/core/prompt-agent-coordinator.js')
 
 const activeRuns = new Map()
 
@@ -89,9 +93,51 @@ export async function runAgent({
       ...(memoryContext ? { memoryState: initial, memoryContext, overrides: task.methodState?.currentOverrides ?? [] } : {}),
       ...(maxChars === undefined ? {} : { maxChars }),
     })
-    const output = await generate(context.messages, { signal: composedSignal, requestId, taskId, stage, cwd: project?.cwd })
+    const coordinator = createPromptAgentCoordinator({
+      timeoutMs: 120_000,
+      requestModel: request => generate(request.messages, {
+        signal: request.signal,
+        requestId,
+        taskId,
+        stage: request.stage,
+        cwd: project?.cwd,
+        preparedRequest: true,
+      }),
+    })
+    const legacyTask = {
+      id: task.taskId,
+      type: task.entryType,
+      domain: task.domain,
+      goal: task.originalInput,
+      target: task.target ?? '',
+      currentState: task.currentState ?? '',
+      constraints: (task.currentRequirements ?? []).join('\n'),
+      successCriteria: task.successCriteria ?? [],
+      preserveItems: task.preserveItems ?? [],
+      facts: task.facts ?? [],
+      assumptions: task.assumptions ?? [],
+      missingInfo: task.missingInfo ?? [],
+      steps: task.agent?.steps ?? [],
+      currentStepId: task.agent?.currentStepId ?? '',
+      review: task.reviews?.at(-1) ?? task.agent?.review ?? {},
+    }
+    const coordinated = await coordinator.runStage(legacyTask, {
+      stage,
+      runId: requestId,
+      signal: composedSignal,
+      preparedRequest: {
+        messages: context.messages,
+        selectedSources: sources,
+      },
+    })
     throwIfAborted()
-    const content = normalizeResult(output)
+    if (coordinated.error) {
+      const code = coordinated.error.code === 'timeout' ? 'model_timeout'
+        : coordinated.error.code === 'cancelled' ? 'cancelled'
+          : coordinated.error.code ?? 'model_failure'
+      throw failure(code, coordinated.error.message || 'Prompt Agent 执行失败')
+    }
+    const content = normalizeResult(coordinated.draft)
     if (!content.trim()) throw failure('invalid_result', 'Agent 返回空结果')
 
     const current = store.read()

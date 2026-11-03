@@ -28,7 +28,7 @@ window.__ModuleLoader__.load({
 		//#endregion
 		let react = require("react");
 		react = __toESM(react, 1);
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/core.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/core.js
 		var _a$1;
 		function $constructor(name, initializer, params) {
 			function init(inst, def) {
@@ -87,7 +87,7 @@ window.__ModuleLoader__.load({
 			return globalConfig;
 		}
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js
 		function getEnumValues(entries) {
 			const numericValues = Object.values(entries).filter((v) => typeof v === "number");
 			return Object.entries(entries).filter(([k, _]) => numericValues.indexOf(+k) === -1).map(([_, v]) => v);
@@ -402,7 +402,7 @@ window.__ModuleLoader__.load({
 			return { ...iss };
 		}
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/errors.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/errors.js
 		const initializer$1 = (inst, def) => {
 			inst.name = "$ZodError";
 			Object.defineProperty(inst, "_zod", {
@@ -462,7 +462,7 @@ window.__ModuleLoader__.load({
 			return fieldErrors;
 		}
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/parse.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/parse.js
 		const _parse = (_Err) => (schema, value, _ctx, _params) => {
 			const ctx = _ctx ? {
 				..._ctx,
@@ -576,7 +576,7 @@ window.__ModuleLoader__.load({
 			return _safeParseAsync(_Err)(schema, value, _ctx);
 		};
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/regexes.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/regexes.js
 		/**
 		* @deprecated CUID v1 is deprecated by its authors due to information leakage
 		* (timestamps embedded in the id). Use {@link cuid2} instead.
@@ -641,7 +641,7 @@ window.__ModuleLoader__.load({
 		const lowercase = /^[^A-Z]*$/;
 		const uppercase = /^[^a-z]*$/;
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/checks.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/checks.js
 		const $ZodCheck = /*@__PURE__*/ $constructor("$ZodCheck", (inst, def) => {
 			var _a;
 			inst._zod ?? (inst._zod = {});
@@ -999,7 +999,7 @@ window.__ModuleLoader__.load({
 			};
 		});
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/doc.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/doc.js
 		var Doc = class {
 			constructor(args = []) {
 				this.content = [];
@@ -1030,14 +1030,14 @@ window.__ModuleLoader__.load({
 			}
 		};
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/versions.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/versions.js
 		const version = {
 			major: 4,
 			minor: 4,
 			patch: 3
 		};
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/schemas.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/schemas.js
 		const $ZodType = /*@__PURE__*/ $constructor("$ZodType", (inst, def) => {
 			var _a;
 			inst ?? (inst = {});
@@ -1669,7 +1669,7 @@ window.__ModuleLoader__.load({
             })));
           }
         }
-
+        
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -1677,7 +1677,7 @@ window.__ModuleLoader__.load({
         } else {
           newResult[${k}] = ${id}.value;
         }
-
+        
       `);
 					else if (!isOptionalIn) doc.write(`
         const ${id}_present = ${k} in input;
@@ -1712,7 +1712,7 @@ window.__ModuleLoader__.load({
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-
+        
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -1720,7 +1720,7 @@ window.__ModuleLoader__.load({
         } else {
           newResult[${k}] = ${id}.value;
         }
-
+        
       `);
 				}
 				doc.write(`payload.value = newResult;`);
@@ -2283,7 +2283,7 @@ window.__ModuleLoader__.load({
 			}
 		}
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/registries.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/registries.js
 		var _a;
 		var $ZodRegistry = class {
 			constructor() {
@@ -2330,7 +2330,7 @@ window.__ModuleLoader__.load({
 		(_a = globalThis).__zod_globalRegistry ?? (_a.__zod_globalRegistry = registry());
 		const globalRegistry = globalThis.__zod_globalRegistry;
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/api.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/api.js
 		// @__NO_SIDE_EFFECTS__
 		function _string(Class, params) {
 			return new Class({
@@ -2842,7 +2842,7 @@ window.__ModuleLoader__.load({
 			return ch;
 		}
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/to-json-schema.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/to-json-schema.js
 		function initializeContext(params) {
 			let target = params?.target ?? "draft-2020-12";
 			if (target === "draft-4") target = "draft-04";
@@ -3135,7 +3135,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			return finalize(ctx, schema);
 		};
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema-processors.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema-processors.js
 		const formatMap = {
 			guid: "uuid",
 			url: "uri",
@@ -3400,7 +3400,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			seen.ref = def.innerType;
 		};
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/iso.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/iso.js
 		const ZodISODateTime = /*@__PURE__*/ $constructor("ZodISODateTime", (inst, def) => {
 			$ZodISODateTime.init(inst, def);
 			ZodStringFormat.init(inst, def);
@@ -3430,7 +3430,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			return /* @__PURE__ */ _isoDuration(ZodISODuration, params);
 		}
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/errors.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/errors.js
 		const initializer = (inst, issues) => {
 			$ZodError.init(inst, issues);
 			inst.name = "ZodError";
@@ -3452,7 +3452,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 		};
 		const ZodRealError = /*@__PURE__*/ $constructor("ZodError", initializer, { Parent: Error });
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/parse.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/parse.js
 		const parse = /* @__PURE__ */ _parse(ZodRealError);
 		const parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 		const safeParse = /* @__PURE__ */ _safeParse(ZodRealError);
@@ -3466,7 +3466,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 		const safeEncodeAsync = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 		const safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 		//#endregion
-		//#region D:/VScode/项目/提示词工具/.dsh-workspace/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
+		//#region ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
 		const _installedGroups = /* @__PURE__ */ new WeakMap();
 		function _installLazyMethods(inst, group, methods) {
 			const proto = Object.getPrototypeOf(inst);
@@ -5469,6 +5469,17 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 					},
 					conflictsByTask: Object.fromEntries(Object.entries(state.conflictsByTask).filter(([taskId]) => taskId !== event.taskId))
 				};
+				case "draft.restored": return {
+					...state,
+					draftsByTask: {
+						...state.draftsByTask,
+						[event.taskId]: event.draft
+					},
+					saveStatusByTask: {
+						...state.saveStatusByTask,
+						[event.taskId]: "unsaved"
+					}
+				};
 				case "save.started": return {
 					...state,
 					saveStatusByTask: {
@@ -5562,6 +5573,45 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			}
 		}
 		//#endregion
+		//#region client/drafts.js
+		const STORAGE_PREFIX = "forward-step-dsh:draft:v1:";
+		function storageKey(projectId, taskId) {
+			if (!projectId || !taskId) throw new TypeError("projectId and taskId are required");
+			return `${STORAGE_PREFIX}${encodeURIComponent(projectId)}:${encodeURIComponent(taskId)}`;
+		}
+		function readRecord(storage, projectId, taskId) {
+			const raw = storage.getItem(storageKey(projectId, taskId));
+			if (!raw) return null;
+			const draft = JSON.parse(raw);
+			if (!draft || typeof draft !== "object" || Array.isArray(draft)) throw new TypeError("invalid task draft");
+			return draft;
+		}
+		function readTaskDraft(storage, projectId, taskId) {
+			return readRecord(storage, projectId, taskId);
+		}
+		function writeTaskDraft(storage, projectId, taskId, patch) {
+			const key = storageKey(projectId, taskId);
+			const current = readRecord(storage, projectId, taskId) ?? {};
+			const next = {
+				...current,
+				...patch
+			};
+			if (patch.externalResult) {
+				next.externalResult = {
+					...current.externalResult ?? {},
+					...patch.externalResult
+				};
+				if (Object.values(next.externalResult).every((value) => !value)) delete next.externalResult;
+			}
+			if (typeof next.title !== "string" || !next.title) delete next.title;
+			if (Object.keys(next).length === 0) storage.removeItem(key);
+			else storage.setItem(key, JSON.stringify(next));
+			return next;
+		}
+		function deleteTaskDraft(storage, projectId, taskId) {
+			storage.removeItem(storageKey(projectId, taskId));
+		}
+		//#endregion
 		//#region src/client/index.ts
 		const { createElement: h, useState } = react;
 		const panelId = "forward-step-dsh";
@@ -5592,26 +5642,54 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			const [runningRequest, setRunningRequest] = useState("");
 			const [sessionLoaded, setSessionLoaded] = useState(false);
 			const [externalDraftsByTask, setExternalDraftsByTask] = useState({});
-			const [externalStepDraft, setExternalStepDraft] = useState("");
-			const [externalPromptDraft, setExternalPromptDraft] = useState("");
+			const [draftStorageStatusByTask, setDraftStorageStatusByTask] = useState({});
 			const selectedTask = tasks.find((task) => task.taskId === selectedTaskId);
 			const renameDraft = selectedTask ? clientState.draftsByTask[selectedTaskId] ?? selectedTask.title : "";
+			const externalDraft = selectedTask ? externalDraftsByTask[selectedTask.taskId] ?? {
+				content: "",
+				feedback: "",
+				stepId: "",
+				promptVersionId: ""
+			} : {
+				content: "",
+				feedback: "",
+				stepId: "",
+				promptVersionId: ""
+			};
 			const externalSteps = selectedTask?.agent?.steps?.length ? selectedTask.agent.steps : [{
 				id: "task",
 				title: "整项任务"
 			}];
-			const externalStepId = externalSteps.some((step) => step.id === externalStepDraft) ? externalStepDraft : externalSteps[0].id;
+			const externalStepId = externalSteps.some((step) => step.id === externalDraft.stepId) ? externalDraft.stepId : externalSteps[0].id;
 			const promptVersions = selectedTask?.versions.filter((version) => version.kind !== "external-result") ?? [];
-			const externalPromptVersionId = promptVersions.some((version) => version.versionId === externalPromptDraft) ? externalPromptDraft : promptVersions.at(-1)?.versionId ?? "";
-			const externalDraft = selectedTask ? externalDraftsByTask[selectedTask.taskId] ?? {
-				content: "",
-				feedback: ""
-			} : {
-				content: "",
-				feedback: ""
-			};
+			const externalPromptVersionId = promptVersions.some((version) => version.versionId === externalDraft.promptVersionId) ? externalDraft.promptVersionId : promptVersions.at(-1)?.versionId ?? "";
 			function dispatchClient(event) {
 				setClientState((current) => reduceClient(current, event));
+			}
+			function persistTaskDraft(taskId, patch) {
+				if (!projectId) return false;
+				try {
+					writeTaskDraft(window.localStorage, projectId, taskId, patch);
+					setDraftStorageStatusByTask((current) => ({
+						...current,
+						[taskId]: "saved"
+					}));
+					return true;
+				} catch (error) {
+					setDraftStorageStatusByTask((current) => ({
+						...current,
+						[taskId]: "error"
+					}));
+					setResult(`本机草稿保存失败，当前输入仍保留在面板：${error instanceof Error ? error.message : String(error)}`);
+					return false;
+				}
+			}
+			function updateExternalDraft(task, draft) {
+				setExternalDraftsByTask((current) => ({
+					...current,
+					[task.taskId]: draft
+				}));
+				persistTaskDraft(task.taskId, { externalResult: draft });
 			}
 			async function loadTasks() {
 				setBusy(true);
@@ -5623,6 +5701,38 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 					setProjectId(response.projectId);
 					setCwdLoaded(true);
 					setTasks(response.tasks);
+					const restoredExternalDrafts = {};
+					const restoredTitles = [];
+					const restoredDraftIds = [];
+					let draftRestoreFailed = false;
+					for (const task of response.tasks) try {
+						const draft = readTaskDraft(window.localStorage, response.projectId, task.taskId);
+						if (draft?.title) {
+							restoredTitles.push({
+								taskId: task.taskId,
+								title: draft.title
+							});
+							restoredDraftIds.push(task.taskId);
+						}
+						if (draft?.externalResult) {
+							restoredExternalDrafts[task.taskId] = {
+								content: typeof draft.externalResult.content === "string" ? draft.externalResult.content : "",
+								feedback: typeof draft.externalResult.feedback === "string" ? draft.externalResult.feedback : "",
+								stepId: typeof draft.externalResult.stepId === "string" ? draft.externalResult.stepId : "",
+								promptVersionId: typeof draft.externalResult.promptVersionId === "string" ? draft.externalResult.promptVersionId : ""
+							};
+							restoredDraftIds.push(task.taskId);
+						}
+					} catch {
+						draftRestoreFailed = true;
+					}
+					setExternalDraftsByTask(restoredExternalDrafts);
+					setDraftStorageStatusByTask(Object.fromEntries(restoredDraftIds.map((taskId) => [taskId, "saved"])));
+					setClientState((current) => restoredTitles.reduce((state, draft) => reduceClient(state, {
+						type: "draft.restored",
+						taskId: draft.taskId,
+						draft: draft.title
+					}), current));
 					const boundTaskId = (conversationId.trim() ? unwrapRemote(await remote.getCurrentBinding({
 						projectId: response.projectId,
 						conversationId
@@ -5634,7 +5744,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 						taskId: nextTaskId
 					});
 					setSessionLoaded(true);
-					setResult(`已读取 ${response.tasks.length} 个任务；修订 ${response.revision}${boundTaskId ? "；已恢复当前对话任务" : ""}`);
+					setResult(draftRestoreFailed ? `已读取 ${response.tasks.length} 个任务，但有本机草稿无法读取；请检查存储后再继续。` : `已读取 ${response.tasks.length} 个任务；修订 ${response.revision}${boundTaskId ? "；已恢复当前对话任务" : ""}`);
 				} catch (error) {
 					setResult(`读取任务失败：${error instanceof Error ? error.message : String(error)}`);
 				} finally {
@@ -5711,7 +5821,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 						type: "save.succeeded",
 						taskId: response.task.taskId
 					});
-					setResult("任务名称已保存。");
+					const draftCleared = persistTaskDraft(response.task.taskId, { title: "" });
+					setResult(draftCleared ? "任务名称已保存。" : "任务名称已保存，但本机草稿未能清理。");
 				} catch (error) {
 					const draft = renameDraft;
 					if (error?.code === "conflict") try {
@@ -5800,8 +5911,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 						type: "task.deleted",
 						taskId: selectedTask.taskId
 					});
+					let draftCleanupFailed = false;
+					try {
+						deleteTaskDraft(window.localStorage, selectedTask.projectId, selectedTask.taskId);
+						setDraftStorageStatusByTask((current) => {
+							const next = { ...current };
+							delete next[selectedTask.taskId];
+							return next;
+						});
+					} catch {
+						draftCleanupFailed = true;
+					}
 					setDeleteImpact(null);
-					setResult("任务已删除。");
+					setResult(draftCleanupFailed ? "任务已删除，但本机草稿未能清理。" : "任务已删除。");
 				} catch (error) {
 					setResult(`删除失败：${error instanceof Error ? error.message : String(error)}`);
 				} finally {
@@ -5854,14 +5976,18 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 						eventId: globalThis.crypto.randomUUID()
 					}));
 					setTasks((current) => current.map((task) => task.taskId === response.task.taskId ? response.task : task));
+					const emptyDraft = {
+						content: "",
+						feedback: "",
+						stepId: "",
+						promptVersionId: ""
+					};
 					setExternalDraftsByTask((current) => ({
 						...current,
-						[selectedTask.taskId]: {
-							content: "",
-							feedback: ""
-						}
+						[selectedTask.taskId]: emptyDraft
 					}));
-					setResult(`外部结果已保存并关联提示词版本 ${response.version.promptVersionId}。`);
+					const draftCleared = persistTaskDraft(selectedTask.taskId, { externalResult: emptyDraft });
+					setResult(draftCleared ? `外部结果已保存并关联提示词版本 ${response.version.promptVersionId}。` : `外部结果已保存，但本机草稿未能清理；关联提示词版本 ${response.version.promptVersionId}。`);
 				} catch (error) {
 					setResult(`外部结果保存失败，输入仍保留：${error instanceof Error ? error.message : String(error)}`);
 				} finally {
@@ -6032,16 +6158,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				value: task.taskId
 			}, `${task.title} · ${task.domain}`)))), selectedTask ? h("section", null, h("label", null, "任务名称 ", h("input", {
 				value: renameDraft,
-				onChange: (event) => dispatchClient({
-					type: "draft.changed",
-					taskId: selectedTask.taskId,
-					draft: event.target.value
-				})
+				onChange: (event) => {
+					dispatchClient({
+						type: "draft.changed",
+						taskId: selectedTask.taskId,
+						draft: event.target.value
+					});
+					persistTaskDraft(selectedTask.taskId, { title: event.target.value });
+				}
 			})), h("button", {
 				type: "button",
 				disabled: busy || !renameDraft.trim() || renameDraft.trim() === selectedTask.title,
 				onClick: saveTaskTitle
-			}, "保存名称"), clientState.saveStatusByTask[selectedTask.taskId] === "unsaved" ? h("small", { role: "status" }, "名称草稿尚未保存") : clientState.saveStatusByTask[selectedTask.taskId] === "conflict" ? h("small", { role: "alert" }, "任务版本已冲突；本地草稿仍保留") : null, h("button", {
+			}, "保存名称"), clientState.saveStatusByTask[selectedTask.taskId] === "unsaved" ? h("small", { role: "status" }, draftStorageStatusByTask[selectedTask.taskId] === "saved" ? "名称草稿已保存在本机，尚未同步到任务" : "名称草稿尚未保存") : clientState.saveStatusByTask[selectedTask.taskId] === "conflict" ? h("small", { role: "alert" }, "任务版本已冲突；本地草稿仍保留") : null, h("button", {
 				type: "button",
 				disabled: busy,
 				onClick: toggleArchive
@@ -6104,7 +6233,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			}, "取消运行")), selectedTask ? h("section", null, h("h2", null, selectedTask.title), h("p", null, `进度修订 ${selectedTask.revision} · ${selectedTask.versions.length} 个版本`), h("section", { "aria-label": "外部结果回填" }, h("h3", null, "外部结果回填"), h("label", null, "关联步骤 ", h("select", {
 				"aria-label": "关联步骤",
 				value: externalStepId,
-				onChange: (event) => setExternalStepDraft(event.target.value)
+				onChange: (event) => updateExternalDraft(selectedTask, {
+					...externalDraft,
+					stepId: event.target.value
+				})
 			}, ...externalSteps.map((step) => h("option", {
 				key: step.id,
 				value: step.id
@@ -6112,7 +6244,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				"aria-label": "对应提示词版本",
 				value: externalPromptVersionId,
 				disabled: promptVersions.length === 0 || busy,
-				onChange: (event) => setExternalPromptDraft(event.target.value)
+				onChange: (event) => updateExternalDraft(selectedTask, {
+					...externalDraft,
+					promptVersionId: event.target.value
+				})
 			}, ...promptVersions.map((version) => h("option", {
 				key: version.versionId,
 				value: version.versionId
@@ -6120,25 +6255,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				"aria-label": "外部 AI 结果",
 				value: externalDraft.content,
 				rows: 5,
-				onChange: (event) => setExternalDraftsByTask((current) => ({
-					...current,
-					[selectedTask.taskId]: {
-						...externalDraft,
-						content: event.target.value
-					}
-				}))
+				onChange: (event) => updateExternalDraft(selectedTask, {
+					...externalDraft,
+					content: event.target.value
+				})
 			})), h("label", null, "复盘反馈 ", h("textarea", {
 				"aria-label": "复盘反馈",
 				value: externalDraft.feedback,
 				rows: 2,
-				onChange: (event) => setExternalDraftsByTask((current) => ({
-					...current,
-					[selectedTask.taskId]: {
-						...externalDraft,
-						feedback: event.target.value
-					}
-				}))
-			})), h("button", {
+				onChange: (event) => updateExternalDraft(selectedTask, {
+					...externalDraft,
+					feedback: event.target.value
+				})
+			})), draftStorageStatusByTask[selectedTask.taskId] === "saved" ? h("small", { role: "status" }, "未提交输入已保存在本机") : draftStorageStatusByTask[selectedTask.taskId] === "error" ? h("small", { role: "alert" }, "本机草稿保存失败；当前输入仍保留在面板") : null, h("button", {
 				type: "button",
 				disabled: busy || !externalDraft.content.trim() || !externalPromptVersionId,
 				onClick: saveExternalResult
