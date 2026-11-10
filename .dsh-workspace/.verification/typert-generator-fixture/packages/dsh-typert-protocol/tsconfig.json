@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "composite": true, "declaration": true, "skipLibCheck": true, "module": "NodeNext", "moduleResolution": "NodeNext", "target": "ES2022" },
+  "include": ["lib/**/*.d.ts"]
+}

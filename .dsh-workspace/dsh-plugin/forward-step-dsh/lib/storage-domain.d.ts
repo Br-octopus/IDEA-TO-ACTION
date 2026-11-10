@@ -1,0 +1,41 @@
+export declare const forwardStepDomainSpec: {
+    name: string;
+    version: number;
+    layout: "single";
+    tables: {
+        state: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
+            schemaVersion: number;
+            revision: number;
+            projects: unknown[];
+            tasks: unknown[];
+            prompts: unknown[];
+            cases: unknown[];
+            references: unknown[];
+            knowledgeEntries: unknown[];
+            knowledgeMetadata: unknown;
+            researchTasks: unknown[];
+            researchAttachments: unknown[];
+            promptAgentTasks: unknown[];
+            promptAgentSources: unknown[];
+            writingArticles: unknown[];
+            writingMemories: unknown[];
+            writingPacks: unknown[];
+            writingPackSettings: unknown[];
+            writingReviews: unknown[];
+            academicResponseProjects: unknown[];
+            researchSelection: unknown[];
+            knowledgeSelection: unknown[];
+            knowledgeFilters: unknown;
+            preferences: unknown;
+            serviceConfig: unknown;
+            importReceipts: unknown[];
+            bindings: unknown[];
+            memories: unknown[];
+            changes: unknown[];
+            suppressions: unknown[];
+            sources: unknown[];
+            learning: unknown;
+            processedEvents: string[];
+        }>;
+    };
+};

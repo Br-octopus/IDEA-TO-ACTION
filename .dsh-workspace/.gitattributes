@@ -1,0 +1,6 @@
+/vendor/mediacrawler/** text eol=lf
+/vendor/mediacrawler-bridge/** text eol=lf
+
+# 保留来源文件字节，确保跨平台检出后仍能校验 vendor 清单中的 SHA256。
+/prototype/*.js -text
+/dsh-plugin/forward-step-dsh/vendor/core/*.js -text
