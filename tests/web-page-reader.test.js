@@ -1,9 +1,12 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
 const http = require('node:http');
+const https = require('node:https');
 const test = require('node:test');
-const { createWebPageReader, extractHtml, isPublicAddress, validateUrl } = require('../server/web-page-reader');
+const { createWebPageReader, requestPinned, extractHtml, isPublicAddress, validateUrl } = require('../server/web-page-reader');
 const { startServer } = require('../server');
 
 const htmlResponse = (html, extraHeaders = {}) => ({ statusCode: 200,
@@ -21,6 +24,39 @@ test('网页地址只接受无凭证、默认端口的标准 HTTP(S) 公网目�
   assert.equal(isPublicAddress('2001:db8::1'), false);
 });
 
+test('固定 DNS lookup 支持 Node all:true 地址数组和单地址回调', async () => {
+  const originalRequest = https.request;
+  https.request = (_url, options, onResponse) => {
+    const request = new EventEmitter();
+    request.end = () => {
+      options.lookup('example.com', { all: true }, (error, addresses) => {
+        assert.ifError(error);
+        assert.deepEqual(addresses, [{ address: '93.184.216.34', family: 4 }]);
+      });
+      options.lookup('example.com', { all: false }, (error, address, family) => {
+        assert.ifError(error);
+        assert.equal(address, '93.184.216.34');
+        assert.equal(family, 4);
+      });
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      response.headers = { 'content-encoding': 'identity', 'content-type': 'text/html' };
+      onResponse(response);
+      response.emit('data', Buffer.from(longText));
+      response.emit('end');
+    };
+    return request;
+  };
+
+  try {
+    const result = await requestPinned(new URL('https://example.com/'), '93.184.216.34', 4, new AbortController().signal);
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(result.body, Buffer.from(longText));
+  } finally {
+    https.request = originalRequest;
+  }
+});
+
 test('混合公网和私网 DNS 答案整体拒绝，未发起连接', async () => {
   let requests = 0;
   const reader = createWebPageReader({ lookupImpl: async () => [
@@ -32,19 +68,37 @@ test('混合公网和私网 DNS 答案整体拒绝，未发起连接', async () 
 
 test('每跳连接固定到已验证 DNS 地址且保留 URL 主机名', async () => {
   const calls = [];
+  const pageHtml = `<title>安全标题</title><main>${longText}<script>不应提取</script></main>`;
   const reader = createWebPageReader({ lookupImpl: async host => {
     assert.equal(host, 'example.com');
     return [{ address: '93.184.216.34', family: 4 }];
-  }, requestImpl: async (url, address, family) => {
+  }, now: () => '2026-11-12T01:02:03.000Z', requestImpl: async (url, address, family) => {
     calls.push({ hostname: url.hostname, address, family });
-    return htmlResponse(`<title>安全标题</title><main>${longText}<script>不应提取</script></main>`);
+    return htmlResponse(pageHtml);
   } });
   const result = await reader.read('https://example.com/article');
   assert.equal(result.ok, true);
   assert.equal(result.title, '安全标题');
+  assert.equal(result.mimeType, 'text/html');
+  assert.equal(result.fetchedAt, '2026-11-12T01:02:03.000Z');
+  assert.equal(result.contentHash, `sha256:${crypto.createHash('sha256').update(Buffer.from(pageHtml)).digest('hex')}`);
+  assert.equal(result.renderMode, 'static-html');
+  assert.equal(result.html, pageHtml);
   assert.match(result.text, /公开网页正文/);
   assert.doesNotMatch(result.text, /不应提取/);
   assert.deepEqual(calls, [{ hostname: 'example.com', address: '93.184.216.34', family: 4 }]);
+});
+
+test('网页快照版本基于原始 HTML 字节，结构变化会产生新版本', async () => {
+  let body = `<title>版本页面</title><main>${longText}</main>`;
+  const reader = createWebPageReader({ lookupImpl: async () => [{ address: '93.184.216.34', family: 4 }],
+    requestImpl: async () => htmlResponse(body) });
+  const first = await reader.read('https://example.com/article');
+  const same = await reader.read('https://example.com/article');
+  body = `<title>版本页面</title><main>${longText}新增事实。</main>`;
+  const changed = await reader.read('https://example.com/article');
+  assert.equal(first.contentHash, same.contentHash);
+  assert.notEqual(first.contentHash, changed.contentHash);
 });
 
 test('每次重定向重新校验目标并阻止私网跳转和 HTTPS 降级', async () => {
@@ -66,7 +120,9 @@ test('不接受压缩、非 HTML、超限或过短正文，超时与取消给出
   assert.equal((await makeReader(htmlResponse(longText, { 'content-encoding': 'gzip' })).read('https://example.com/')).code, 'UNSUPPORTED_CONTENT');
   assert.equal((await makeReader({ statusCode: 200, headers: { 'content-type': 'application/pdf' }, body: Buffer.from(longText) }).read('https://example.com/')).code, 'UNSUPPORTED_CONTENT');
   assert.equal((await makeReader({ statusCode: 200, headers: { 'content-type': 'text/html' }, tooLarge: true }).read('https://example.com/')).code, 'TOO_LARGE');
-  assert.equal((await makeReader(htmlResponse('<title>空</title><p>太短</p>')).read('https://example.com/')).code, 'CONTENT_TOO_SHORT');
+  const shortPage = await makeReader(htmlResponse('<title>空</title><p>太短</p>')).read('https://example.com/');
+  assert.equal(shortPage.code, 'CONTENT_TOO_SHORT');
+  assert.match(shortPage.message, /可能依赖脚本渲染/);
 
   const timeout = createWebPageReader({ timeoutMs: 5, lookupImpl: () => new Promise(() => {}) });
   assert.equal((await timeout.read('https://example.com/')).code, 'TIMEOUT');
@@ -87,7 +143,7 @@ test('HTML 文本提取排除可执行内容并解码实体', () => {
 test('本机读取 API 拒绝跨站、缺失 Origin 和伪造 Host 请求', async t => {
   let reads = 0;
   const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} },
-    webPageReader: { async read(url) { reads++; return { ok: true, title: '标题', finalUrl: url, text: longText, characterCount: longText.length, truncated: false, incomplete: false }; } } });
+    webPageReader: { async read(url) { reads++; return { ok: true, title: '标题', finalUrl: url, mimeType: 'text/html', fetchedAt: '2026-11-12T01:02:03.000Z', contentHash: `sha256:${'a'.repeat(64)}`, renderMode: 'static-html', html: `<main>${longText}</main>`, text: longText, characterCount: longText.length, truncated: false, incomplete: false }; } } });
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   const body = JSON.stringify({ url: 'https://example.com/?token=private' });
@@ -108,6 +164,12 @@ test('本机读取 API 拒绝跨站、缺失 Origin 和伪造 Host 请求', asyn
   assert.equal(reads, 0);
   const allowed = await request({ origin: baseUrl, 'sec-fetch-site': 'same-origin' });
   assert.equal(allowed.status, 200);
-  assert.equal((await allowed.json()).characterCount, longText.length);
+  const bodyResult = await allowed.json();
+  assert.equal(bodyResult.characterCount, longText.length);
+  assert.equal(bodyResult.fetchedAt, '2026-11-12T01:02:03.000Z');
+  assert.equal(bodyResult.mimeType, 'text/html');
+  assert.equal(bodyResult.contentHash, `sha256:${'a'.repeat(64)}`);
+  assert.equal(bodyResult.renderMode, 'static-html');
+  assert.equal(bodyResult.html, `<main>${longText}</main>`);
   assert.equal(reads, 1);
 });

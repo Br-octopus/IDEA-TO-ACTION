@@ -4,6 +4,7 @@ const dns = require('node:dns').promises;
 const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
+const crypto = require('node:crypto');
 
 const MAX_BYTES = 1024 * 1024;
 const MAX_REDIRECTS = 3;
@@ -94,7 +95,9 @@ function requestPinned(url, address, family, signal, maxBytes = MAX_BYTES) {
     const request = client.request(url, {
       method: 'GET', signal, agent: false,
       headers: { 'user-agent': 'ForwardStep/1.0 (public page text reader)', accept: 'text/html, application/xhtml+xml', 'accept-encoding': 'identity', connection: 'close' },
-      lookup: (_hostname, _options, callback) => callback(null, address, family)
+      lookup: (_hostname, options, callback) => options?.all
+        ? callback(null, [{ address, family }])
+        : callback(null, address, family)
     }, response => {
       const chunks = [];
       let size = 0;
@@ -120,7 +123,7 @@ function requestPinned(url, address, family, signal, maxBytes = MAX_BYTES) {
   });
 }
 
-function createWebPageReader({ lookupImpl = dns.lookup, requestImpl = requestPinned, timeoutMs = TIMEOUT_MS, maxBytes = MAX_BYTES, maxRedirects = MAX_REDIRECTS } = {}) {
+function createWebPageReader({ lookupImpl = dns.lookup, requestImpl = requestPinned, timeoutMs = TIMEOUT_MS, maxBytes = MAX_BYTES, maxRedirects = MAX_REDIRECTS, now = () => new Date().toISOString() } = {}) {
   let active = 0;
   return {
     async read(value, { signal } = {}) {
@@ -176,9 +179,12 @@ function createWebPageReader({ lookupImpl = dns.lookup, requestImpl = requestPin
           if (response.statusCode < 200 || response.statusCode >= 300) return { ok: false, code: 'UNAVAILABLE', message: '网页当前无法读取。' };
           const type = String(response.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
           if (!['text/html', 'application/xhtml+xml'].includes(type)) return { ok: false, code: 'UNSUPPORTED_CONTENT', message: '目标不是可读取的 HTML 网页。' };
-          const { title, text } = extractHtml(Buffer.from(response.body || '').toString('utf8'));
-          if (text.length < MIN_TEXT_CHARS) return { ok: false, code: 'CONTENT_TOO_SHORT', message: '网页正文过短，未提供可选摘录。' };
-          return { ok: true, title: title || url.hostname, finalUrl: url.href, text: text.slice(0, 20_000), characterCount: text.length,
+          const html = Buffer.from(response.body || '').toString('utf8');
+          const { title, text } = extractHtml(html);
+          if (text.length < MIN_TEXT_CHARS) return { ok: false, code: 'CONTENT_TOO_SHORT', message: '网页静态 HTML 正文过短；该页面可能依赖脚本渲染，当前未提供可选摘录。' };
+          const resolvedTitle = title || url.hostname;
+          const contentHash = `sha256:${crypto.createHash('sha256').update(Buffer.from(html, 'utf8')).digest('hex')}`;
+          return { ok: true, title: resolvedTitle, finalUrl: url.href, mimeType: type, fetchedAt: now(), contentHash, renderMode: 'static-html', html, text: text.slice(0, 20_000), characterCount: text.length,
             truncated: text.length > 20_000, incomplete: text.length > 20_000 };
         }
         return { ok: false, code: 'UNAVAILABLE', message: '网页当前无法读取。' };
@@ -191,4 +197,4 @@ function createWebPageReader({ lookupImpl = dns.lookup, requestImpl = requestPin
   };
 }
 
-module.exports = { createWebPageReader, validateUrl, isPublicAddress, extractHtml, MAX_BYTES, MAX_REDIRECTS, TIMEOUT_MS };
+module.exports = { createWebPageReader, requestPinned, validateUrl, isPublicAddress, extractHtml, MAX_BYTES, MAX_REDIRECTS, TIMEOUT_MS };

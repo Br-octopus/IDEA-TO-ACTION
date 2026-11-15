@@ -7,6 +7,43 @@ const { MODEL_CODES, createModelClient, normalizeModelError } = require('../serv
 const { SEARCH_CODES, createSearchClient, normalizeResult } = require('../server/search-client');
 const { SOCIAL_API_CODES } = require('../server/social-api-client');
 
+test('桌面主页面返回禁止内联脚本和外部资源的内容安全策略', async t => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} } });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const response = await fetch(`${baseUrl}/`);
+  const policy = response.headers.get('content-security-policy');
+  assert.equal(response.status, 200);
+  assert.match(policy, /default-src 'none'/);
+  assert.match(policy, /script-src 'self'/);
+  assert.match(policy, /worker-src 'self' blob:/);
+  assert.doesNotMatch(policy, /script-src[^;]*'unsafe-eval'/);
+  assert.equal((await fetch(`${baseUrl}/prototype/app.js`)).headers.get('content-security-policy'), null);
+});
+
+test('服务端以对应 MIME 提供 PDF.js viewer、样式与 worker 模块', async t => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} } });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  for (const [asset, expectedExport] of [
+    ['/node_modules/pdfjs-dist/legacy/build/pdf.mjs', 'getDocument'],
+    ['/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs', 'WorkerMessageHandler'],
+    ['/node_modules/pdfjs-dist/web/pdf_viewer.mjs', 'PDFViewer']
+  ]) {
+    const response = await fetch(`${baseUrl}${asset}`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /^text\/javascript/);
+    const source = await response.text();
+    assert.match(source, new RegExp(expectedExport));
+    assert.match(source, /getOrInsertComputed/);
+  }
+  const stylesheet = await fetch(`${baseUrl}/node_modules/pdfjs-dist/web/pdf_viewer.css`);
+  assert.equal(stylesheet.status, 200);
+  assert.match(stylesheet.headers.get('content-type'), /^text\/css/);
+  assert.match(await stylesheet.text(), /\.pdfViewer/);
+});
+
 test('写作材料解析 API 统一限制 30,000 字符并透传 DOCX 标题与截断状态', async t => {
   const source = '甲'.repeat(30_010);
   const server = await startServer({ port: 0, host: '127.0.0.1', config: { model: {}, search: {} }, writingMaterialParser: {
@@ -38,6 +75,24 @@ test('写作材料解析 API 保留 PDF 页定位和 OCR 页标记', async t => 
   assert.equal(result.segments[0].locator, '第1页 · OCR');
   assert.equal(result.segments[1].locator, '第2页');
   assert.deepEqual(result.warnings, ['OCR 需核对']);
+});
+
+test('写作材料解析 API 可校验长 DOCX Base64 请求而不触发正则调用栈溢出', async t => {
+  const server = await startServer({ port: 0, writingMaterialParser: {
+    async parse() { return { ok: false, error: { code: 'PARSE_FAILED', message: '材料无法解析，请检查文件是否完整。' } }; }
+  } });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const { port } = server.address();
+  const bytes = Buffer.alloc(7 * 1024 * 1024);
+  bytes[0] = 0x50; bytes[1] = 0x4b;
+  const response = await fetch(`http://127.0.0.1:${port}/api/writing-materials/parse`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ fileName: 'large.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', dataBase64: bytes.toString('base64') })
+  });
+
+  assert.equal(response.status, 422);
+  assert.equal((await response.json()).code, 'WRITING_MATERIAL_PARSE_FAILED');
 });
 
 function response(body, status = 200) {
@@ -266,9 +321,63 @@ test('搜索结果页面、远程结果 id 和发送上下文统一使用 url', 
 test('设置页区分浏览器开发模式和 Windows 桌面安全存储文案', () => {
   const appSource = fs.readFileSync(path.join(__dirname, '..', 'prototype', 'app.js'), 'utf8');
   assert.match(appSource, /function settingsStorageMessage\(config\)/);
-  assert.match(appSource, /if \(!desktopApi\) return "当前是浏览器开发模式，不能安全保存密钥，请使用 Windows 桌面应用。"/);
+  assert.match(appSource, /if \(!desktopApi\) return "浏览器开发模式：模型和搜索配置仅保存在本机服务内存中，服务重启后需重新输入；密钥不会写入浏览器存储。"/);
   assert.match(appSource, /config\?\.safeStorageAvailable === false/);
   assert.match(appSource, /密钥只交给桌面主进程保存，不会进入本地计划或提示词库。/);
+});
+
+test('辅助判断浏览器配置只返回非敏感状态，并支持显式复用主模型连接', async t => {
+  const server = await startServer({
+    port: 0, host: '127.0.0.1',
+    config: { model: { baseUrl: 'https://model.example/v1', name: 'main', apiKey: 'main-secret' }, search: {} }
+  });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const save = await fetch(`${baseUrl}/api/config/services`, {
+    method: 'POST', headers: { origin: baseUrl, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' },
+    body: JSON.stringify({ writingAssistant: { mode: 'openai-chat-completions', modelId: 'jev-alias', reuseModelConnection: true } })
+  });
+  const saved = await save.json();
+  assert.equal(save.status, 200);
+  assert.equal(saved.writingAssistant.configured, true);
+  assert.equal(saved.writingAssistant.baseUrl, 'https://model.example/v1');
+  assert.equal(saved.writingAssistant.modelId, 'jev-alias');
+  assert.doesNotMatch(JSON.stringify(saved), /main-secret/);
+  const config = await (await fetch(`${baseUrl}/api/config`)).json();
+  assert.equal(config.writingAssistant.configured, true);
+  assert.doesNotMatch(JSON.stringify(config), /main-secret/);
+});
+
+test('辅助判断连接测试拒绝任务内容并只发送固定探测请求', async t => {
+  let upstreamBody;
+  const server = await startServer({
+    port: 0, host: '127.0.0.1',
+    config: { model: {}, search: {} },
+    writingAssistantFetchImpl: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return response({ answers: { connection_check: { type: 'Choice', choice: 'ready' } } });
+    }
+  });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const resultResponse = await fetch(`${baseUrl}/api/writing-assistant/test`, {
+    method: 'POST', headers: { origin: baseUrl, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' },
+    body: JSON.stringify({ writingAssistant: { mode: 'decisions', baseUrl: 'https://jev.example', modelId: 'jev', apiKey: 'assistant-secret' } })
+  });
+  const result = await resultResponse.json();
+  assert.equal(resultResponse.status, 200);
+  assert.equal(result.ok, true);
+  assert.match(upstreamBody.state, /连接检查/);
+  assert.doesNotMatch(JSON.stringify(upstreamBody), /用户任务|文件正文/);
+  assert.doesNotMatch(JSON.stringify(result), /assistant-secret/);
+  assert.doesNotMatch(JSON.stringify(upstreamBody), /assistant-secret/);
+
+  const rejected = await fetch(`${baseUrl}/api/writing-assistant/test`, {
+    method: 'POST', headers: { origin: baseUrl, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' },
+    body: JSON.stringify({ task: 'private-task', file: 'private-file' })
+  });
+  assert.equal(rejected.status, 400);
+  assert.doesNotMatch(await rejected.text(), /private-task|private-file|assistant-secret/);
 });
 
 test('发送失败时保留面板，只有成功收到非空模型文本才关闭', () => {
@@ -276,7 +385,7 @@ test('发送失败时保留面板，只有成功收到非空模型文本才关�
   assert.match(appSource, /const succeeded = await requestModel\(text, draft\.onModelResult, draft\.onModelError\);\s*draft\.sending = false;\s*if \(sendDraft !== draft\) return;\s*if \(succeeded\) closeSendPanel\(\{ cancelled: false \}\);/);
   assert.match(appSource, /if \(data\.code\) \{[\s\S]*return false;/);
   assert.match(appSource, /if \(!text\) \{[\s\S]*return false;/);
-  assert.match(appSource, /output\.textContent = text;\s*onSuccess\?\.\(text\);\s*return true;/);
+  assert.match(appSource, /output\.textContent = text;\s*setSendStatus\("success", "模型已返回结果。"\);\s*onSuccess\?\.\(sendDraft\?\.includeUsage \? \{ text,[\s\S]*: text\);\s*return true;/);
   assert.match(appSource, /if \(options\.cancelled !== false && sendDraft\?\.onCancel\) sendDraft\.onCancel\(new Error\("用户取消发送"\)\);/);
   assert.doesNotMatch(appSource, /closeSendPanel\([^;]*\);\s*(?:const succeeded = )?await requestModel\(text[,)]/);
 });

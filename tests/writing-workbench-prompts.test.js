@@ -515,7 +515,7 @@ test('不适用文体档案先隔离样本和更正，本轮风格材料仍可�
   }
 });
 
-test('完整保留用户更正尾部强约束，超出固定预算明确要求精简', () => {
+test('完整保留用户更正尾部强约束，诊断超限报错且改写按预算裁剪', () => {
   const corrections = '风格'.repeat(240) + '禁止删除结论';
   const input = { article: { draft: '正文'.repeat(4000), successCriteria: Array(20).fill('标准'.repeat(250)),
     preserveItems: Array(30).fill('保留'.repeat(250)) }, styleProfile: { userCorrections: corrections } };
@@ -524,11 +524,17 @@ test('完整保留用户更正尾部强约束，超出固定预算明确要求�
     assert.ok(prompt.includes(corrections));
     assert.ok(prompt.length <= 8000);
     const overloaded = { ...input, article: { ...input.article, constraints: '约束'.repeat(250) },
-      styleProfile: { userCorrections: '更正'.repeat(1000) },
+      styleProfile: { userCorrections: '更正'.repeat(5000) },
       round: { feedback: '反馈'.repeat(1000), userFeedback: '用户'.repeat(1000), sources: Array.from({ length: 3 }, () => ({
         title: '标题'.repeat(80), url: 'https://example.org/' + 'path'.repeat(100), purpose: 'content', excerpt: '证据'
       })) } };
-    assert.throws(() => build(overloaded), error => error instanceof RangeError && /8000.*精简/.test(error.message));
+    if (build === diagnose) {
+      assert.throws(() => build(overloaded), error => error instanceof RangeError && /8000.*精简/.test(error.message));
+    } else {
+      const overloadedPrompt = build(overloaded);
+      assert.ok(overloadedPrompt.length <= 8000);
+      assert.ok(overloadedPrompt.includes('用户风格更正（优先于样本）：' + '更正'.repeat(1000)));
+    }
   }
 });
 
@@ -543,10 +549,11 @@ test('近似UUID材料使用S序号并在元数据中保留原ID，内容和元�
       assert.match(prompt, new RegExp(`内容来源\\[S${i + 1}\\]：证据句${i}`));
       assert.match(prompt, new RegExp(`来源\\[S${i + 1}\\]`));
     });
-    const excluded = build({ round: { sources: [0, 1, 2].map(i => ({ purpose: 'style', title: `样本${i}`, excerpt: '隔离的样本观点。' }))
+    const supplied = build({ round: { sources: [0, 1, 2].map(i => ({ purpose: 'style', title: `样本${i}`, excerpt: '隔离的样本观点。' }))
       .concat({ purpose: 'content', title: '第四条标题', excerpt: '第四条脱离元数据的内容' }) } });
-    assert.doesNotMatch(excluded, /第四条标题|第四条脱离元数据的内容|隔离的样本观点/);
-    assert.match(excluded, /选取3\/4/);
+    assert.match(supplied, /第四条标题|第四条脱离元数据的内容/);
+    assert.doesNotMatch(supplied, /隔离的样本观点/);
+    assert.match(supplied, /选取4\/4/);
   }
 });
 
@@ -631,6 +638,21 @@ test('提示词只消费选中包和历史快照，保留普通文章基线与�
   assert.match(prompt, /临时修正哨兵/);
 });
 
+test('提示词带入按任务筛选的资源摘要，不把资源正文当作项目事实', () => {
+  const selected = selectWritingPacks({
+    workspace: schema.normalizeWritingWorkspace({ article: { id: 'resource-prompt', genre: 'article' } }),
+    packs: [{ id: 'resource-pack', name: '资源包', layer: 'task', genre: 'article', taskType: 'revision', version: 1,
+      checks: [{ id: 'resource-check', statement: '资源规则' }],
+      resources: [{ id: 'template-resource', kind: 'template', title: '章节模板', purpose: '章节结构', relativePath: 'template.md', taskTypes: ['revision'], summary: '结构参考' },
+        { id: 'other-resource', kind: 'reference', title: '其他任务', purpose: '其他', relativePath: 'other.md', taskTypes: ['technical-design'] }] }],
+    selectedIds: ['resource-pack'], taskType: 'revision'
+  });
+  const prompt = revise({ article: { id: 'resource-prompt', genre: 'article' }, round: { packSnapshot: selected.snapshot }, writingPacks: [], packSelections: [] });
+  assert.match(prompt, /章节模板/);
+  assert.match(prompt, /不能替代用户事实/);
+  assert.doesNotMatch(prompt, /其他任务/);
+});
+
 test('合并所有适用基础包提示词，不让内置提示词遮住核心包指令', () => {
   const prompt = revise({
     article: { id: 'article-prompt-composition', genre: 'article' },
@@ -704,7 +726,7 @@ test('提示词来源摘要包含来源元数据并明确未核验，轮次快�
   assert.equal(round.sources[0].limitations, metadata.limitations);
 });
 
-test('超出材料上限时按任务关键词推荐并说明理由，未匹配材料不进入提示词', () => {
+test('用户提供的材料默认保留，关键词推荐只作为可调整理由而不静默排除', () => {
   const prompt = api.buildWritingRevisionPrompt({
     article: { id: 'material-rank', genre: 'article', goal: '核对预算依据' },
     round: { id: 'material-rank-round', materials: [
@@ -715,8 +737,18 @@ test('超出材料上限时按任务关键词推荐并说明理由，未匹配�
     ] }
   });
   assert.match(prompt, /预算基准/);
-  assert.match(prompt, /关键词建议/);
-  assert.doesNotMatch(prompt, /园艺随笔|旅行见闻|语气样本/);
+  assert.match(prompt, /园艺随笔|旅行见闻|语气样本/);
+  assert.match(prompt, /没有因其他单元范围而排除的材料/);
+  assert.match(prompt, /来源元数据：选取4\/4条/);
+});
+
+test('没有检索词命中时不自动推荐候选材料', () => {
+  const materials = [
+    { id: 'manual-a', title: '候选甲', excerpt: '第一份可读材料。' },
+    { id: 'manual-b', title: '候选乙', excerpt: '第二份可读材料。' }
+  ];
+
+  assert.deepEqual(api.recommendMaterials(materials, {}, '').map(item => item.id), []);
 });
 
 test('文件型原文提示词要求附原件并明确整本或选章范围，不嵌入全文', () => {
@@ -745,4 +777,68 @@ test('文件型任务分析仅接收有界预览与目录，明确预览可能�
   assert.match(prompt, /可能不完整/);
   assert.match(prompt, /安装（第2页）/);
   assert.ok(prompt.length < 12000, '分析只使用8000字以内预览和有限目录');
+});
+
+test('提示词收藏作为来源时，任务分析保留 8000 字内完整正文而不影响普通材料限制', () => {
+  const excerpt = `提示词正文起始：${'完整内容'.repeat(1990)}提示词正文末尾哨兵`;
+  const prompt = api.buildWritingTaskAnalysisPrompt({ goal: '使用已填充提示词', materials: [{
+    id: 'prompt-1', title: '提示词收藏', sourceType: 'prompt-library', excerpt
+  }] });
+  assert.ok(excerpt.length <= 8000);
+  assert.ok(prompt.includes(excerpt));
+  assert.match(prompt, /提示词正文末尾哨兵/);
+  const ordinary = api.buildWritingTaskAnalysisPrompt({ goal: '检查材料', materials: [{
+    id: 'ordinary-1', title: '普通材料', excerpt: '普'.repeat(5000)
+  }] });
+  assert.doesNotMatch(ordinary, /普{4001}/);
+});
+
+test('普通、领域和学术写作提示词复用工作台批注格式并保留附件提示', () => {
+  const source = {
+    id: 'writing-attachment-1', title: '需求截图.png', sourceId: 'attachment-1',
+    sourceVersion: 'sha256:annotation-version', sourceType: 'image', origin: 'manual',
+    purpose: 'content', contentStatus: 'reference-only', attachmentRequired: true, selectedForPrompt: true,
+    annotationSnapshot: [{
+      id: 'note-1', attachmentId: 'attachment-1', contentHash: 'sha256:annotation-version', pageIndex: 1,
+      target: { kind: 'region', x: 0.1, y: 0.2, width: 0.3, height: 0.2 },
+      comment: '这里保留原始数据，调整图注措辞', category: 'style', intent: 'modify', selected: true, status: 'active'
+    }]
+  };
+  const workspace = (genre, taskType) => ({
+    article: { id: `article-${genre}`, genre, goal: '根据批注修改所附原文' },
+    round: { id: `round-${genre}`, taskType, sources: [source] }
+  });
+  const academic = workspace('academic-paper', 'revision');
+  academic.article.academicTarget = { requirements: [] };
+  const prompts = [
+    api.buildWritingRevisionPrompt(workspace('article', 'revision')),
+    api.buildDomainWritingPrompt(workspace('business-document', 'business-proposal'), 'business-proposal'),
+    api.buildAcademicWritingPrompt(academic, 'revision')
+  ];
+
+  for (const prompt of prompts) {
+    assert.match(prompt, /批注 ID：note-1/);
+    assert.match(prompt, /资料版本 SHA-256：sha256:annotation-version/);
+    assert.match(prompt, /第 2 页/);
+    assert.match(prompt, /保留原始数据，调整图注措辞/);
+    assert.match(prompt, /原文件需由用户另行附加/);
+  }
+});
+
+test('批注快照超过提示词预算时明确报错，不截断用户意见', () => {
+  const source = {
+    id: 'writing-attachment-1', title: '需求截图.png', sourceId: 'attachment-1',
+    sourceVersion: 'sha256:annotation-version', sourceType: 'image', origin: 'manual',
+    purpose: 'content', contentStatus: 'reference-only', attachmentRequired: true, selectedForPrompt: true,
+    annotationSnapshot: Array.from({ length: 5 }, (_, index) => ({
+      id: `note-${index + 1}`, attachmentId: 'attachment-1', contentHash: 'sha256:annotation-version', pageIndex: 0,
+      target: { kind: 'region', x: 0.1, y: 0.2, width: 0.3, height: 0.2 },
+      comment: '批'.repeat(1800), category: 'style', intent: 'modify', selected: true, status: 'active'
+    }))
+  };
+
+  assert.throws(() => api.buildWritingRevisionPrompt({
+    article: { id: 'article-annotations', genre: 'article', goal: '根据批注修改所附原文' },
+    round: { id: 'round-annotations', taskType: 'revision', sources: [source] }
+  }), error => error instanceof RangeError && /批注快照超过 8000 字/.test(error.message));
 });

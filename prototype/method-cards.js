@@ -99,6 +99,21 @@
     }
   };
 
+  const taskDomainSignals = [
+    { domain: "PPT", patterns: [/\bppt\b/i, /幻灯片/u, /演示文稿/u, /演示文档/u] },
+    { domain: "写作", patterns: [/文章/u, /文案/u, /写作/u, /润色/u, /改写/u, /改稿/u, /稿件/u, /博客/u] },
+    { domain: "软件开发", patterns: [/开发/u, /编程/u, /程序/u, /软件/u, /网站/u, /\bapp\b/i, /应用程序/u] },
+    { domain: "产品构想", patterns: [/产品发布/u, /产品规划/u, /产品构想/u, /产品需求/u, /创业/u, /商业模式/u, /用户需求/u] },
+    { domain: "工作任务", patterns: [/周报/u, /工作流程/u, /工作任务/u, /团队流程/u, /交付流程/u, /项目推进/u] },
+    { domain: "学习目标", patterns: [/学习/u, /学会/u, /课程/u, /掌握/u, /练习/u, /备考/u, /考试/u] }
+  ];
+
+  function inferTaskDomains(description) {
+    const text = String(description || "").trim();
+    if (!text) return [];
+    return taskDomainSignals.filter(item => item.patterns.some(pattern => pattern.test(text))).map(item => item.domain);
+  }
+
   function getMethodCard(domain) {
     const aliases = { "文章写作": "写作", "内容写作": "写作", "演示文稿": "PPT", "产品/工作": "产品构想" };
     const key = aliases[domain] || domain;
@@ -115,6 +130,7 @@
     const sourceId = String(id || "").trim();
     return normalizeKnowledgeEntry({
       id: sourceId ? (sourceId.startsWith("method-") ? sourceId : `method-${sourceId}`) : "",
+      version: card.version,
       type: "method-card",
       title: card.title || card.name || id,
       domains: card.domains || card.domain,
@@ -132,5 +148,5 @@
     return Object.entries(source || {}).map(([id, card]) => toKnowledgeEntry(card, id));
   }
 
-  return { getMethodCard, methodCardsToKnowledgeEntries };
+  return { getMethodCard, inferTaskDomains, methodCardsToKnowledgeEntries };
 });

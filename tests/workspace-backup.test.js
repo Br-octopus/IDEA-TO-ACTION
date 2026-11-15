@@ -45,6 +45,7 @@ function createState() {
     }],
     prompts: [{
       id: 'prompt-1',
+      favorite: true,
       token: '提示词业务 token',
       secret: '提示词业务 secret',
       apiKey: '提示词业务 apiKey',
@@ -198,6 +199,7 @@ test('完整工作区备份包含业务数据但不包含凭证', () => {
   assert.equal(backup.scope, 'workspace');
   assert.equal(backup.data.projects.length, 1);
   assert.equal(backup.data.prompts.length, 1);
+  assert.equal(backup.data.prompts[0].favorite, true);
   assert.deepEqual(backup.data.knowledgeSelection, ['entry-1']);
   assert.deepEqual(backup.data.knowledgeFilters, state.knowledgeFilters);
   const serialized = JSON.stringify(backup);
@@ -406,6 +408,123 @@ test('替换和合并外部手工备份时清洗条目内敏感字段', () => {
   }
 });
 
+test('工作区备份往返保留工作台对话、提示词历史快照与按资料隔离的查看位置', () => {
+  const sourceProject = {
+    id: 'workbench-project',
+    idea: '修改产品方案',
+    conversation: [
+      { id: 'user-1', role: 'user', text: '修改产品方案' },
+      { id: 'assistant-1', role: 'assistant', text: '我建议先调整结论页。', recommendation: { text: '先调整结论页。', reason: '最能回应你的目标。' }, unknownField: '不应导出' },
+      { id: 'conflict-1', role: 'assistant', kind: 'annotation-conflict-resolution', text: '已保留意见。', annotationConflictKey: 'keep-note,remove-note:abc', annotationConflictChoice: 'keep', annotationConflictKeepId: 'keep-note' }
+    ],
+    conversationDraft: '保留未发送的补充',
+    workbenchLayout: 'split',
+    workbenchPreviewMode: 'prompt',
+    workbenchAttachmentId: 'attachment-a',
+    workbenchViewerState: {
+      'attachment-a': { zoom: 1.25, pageIndex: 2, scrollLeft: 12, scrollTop: 180, localPath: '不应导出' },
+      'attachment-b': { zoom: 0.9, pageIndex: 0, scrollLeft: 0, scrollTop: 44 },
+      '../private': { zoom: 9, pageIndex: 0, scrollLeft: 0, scrollTop: 0 }
+    },
+    workbenchGeneratedPrompt: '根据对话和已选批注修改方案。',
+    workbenchPromptDraft: '用户手改后的提示词',
+    workbenchKnowledgeSources: [{
+      sourceId: 'manual-source', version: 4, title: '检查方法', sourceUpdatedAt: '2026-11-10T08:00:00.000Z', importedAt: exportedAt
+    }],
+    workbenchPromptVersions: Array.from({ length: 12 }, (_, index) => ({
+      id: `prompt-version-${index + 1}`,
+      version: index + 1,
+      createdAt: exportedAt,
+      prompt: `历史提示词第 ${index + 1} 版`,
+      citations: [{
+        annotationId: 'note-a', attachmentId: 'attachment-a', attachmentName: '方案.png',
+        contentHash: 'sha256:a', pageIndex: 1, targetSnapshot: '{"kind":"region","x":0.1}',
+        comment: '保留图例', category: 'style', intent: 'keep', unknownField: '应清理'
+      }],
+      unknownField: '应清理'
+    })),
+    apiKey: '不应导出'
+  };
+  const backup = createBackup({ projects: [sourceProject] }, { scope: 'workspace', now: exportedAt });
+  const restored = replaceState({}, backup).projects[0];
+  assert.deepEqual(restored.conversation, [
+    { id: 'user-1', role: 'user', text: '修改产品方案' },
+    { id: 'assistant-1', role: 'assistant', text: '我建议先调整结论页。', recommendation: { text: '先调整结论页。', reason: '最能回应你的目标。' } },
+    { id: 'conflict-1', role: 'assistant', kind: 'annotation-conflict-resolution', text: '已保留意见。', annotationConflictKey: 'keep-note,remove-note:abc', annotationConflictChoice: 'keep', annotationConflictKeepId: 'keep-note' }
+  ]);
+  assert.equal(restored.conversationDraft, '保留未发送的补充');
+  assert.equal(restored.workbenchPreviewMode, 'prompt');
+  assert.equal(restored.workbenchAttachmentId, 'attachment-a');
+  assert.deepEqual(restored.workbenchViewerState, {
+    'attachment-a': { zoom: 1.25, pageIndex: 2, scrollLeft: 12, scrollTop: 180 },
+    'attachment-b': { zoom: 0.9, pageIndex: 0, scrollLeft: 0, scrollTop: 44 }
+  });
+  assert.equal(restored.workbenchGeneratedPrompt, '根据对话和已选批注修改方案。');
+  assert.equal(restored.workbenchPromptDraft, '用户手改后的提示词');
+  assert.deepEqual(restored.workbenchKnowledgeSources, [{
+    sourceId: 'manual-source', version: 4, title: '检查方法', sourceUpdatedAt: '2026-11-10T08:00:00.000Z', importedAt: exportedAt
+  }]);
+  assert.equal(restored.workbenchPromptVersions.length, 10);
+  assert.equal(restored.workbenchPromptVersions[0].id, 'prompt-version-3');
+  assert.equal(restored.workbenchPromptVersions.at(-1).prompt, '历史提示词第 12 版');
+  assert.deepEqual(restored.workbenchPromptVersions.at(-1).citations[0], {
+    annotationId: 'note-a', attachmentId: 'attachment-a', attachmentName: '方案.png',
+    contentHash: 'sha256:a', pageIndex: 1, targetSnapshot: '{"kind":"region","x":0.1}',
+    comment: '保留图例', category: 'style', intent: 'keep'
+  });
+  assertNoKeys(backup, ['apiKey', 'unknownField', 'localPath']);
+});
+
+test('工作区备份保留工作台附件索引与可识别批注类型，不保留未知嵌套字段', () => {
+  const backup = createBackup({
+    projects: [{ id: 'task-1', idea: '修订方案', workbenchAttachmentIds: ['asset-1'] }],
+    workbenchAttachments: [{
+      id: 'asset-1', archiveId: 'task-1_123e4567-e89b-12d3-a456-426614174000.png', taskId: 'task-1',
+      displayName: '方案.png', kind: 'image', mimeType: 'image/png', size: 123, sha256: 'a'.repeat(64),
+      version: 'a'.repeat(64), createdAt: exportedAt, deleted: true, localPath: '不应导出'
+    }],
+    workbenchAnnotations: [{
+      id: 'note-1', taskId: 'task-1', attachmentId: 'asset-1', contentHash: 'a'.repeat(64), pageIndex: 0,
+      target: { kind: 'region', x: 0.1, y: 0.2, width: 0.3, height: 0.4, localSelector: '不应导出' },
+      comment: '保留图例', category: 'style', intent: 'keep', createdAt: exportedAt, updatedAt: '2026-11-10T09:00:00.000Z',
+      status: 'active', selected: true, reassociatedFromId: 'note-old', password: '不应导出'
+    }]
+  }, { scope: 'workspace', now: exportedAt });
+  assert.equal(backup.counts.workbenchAttachments, 1);
+  assert.equal(backup.counts.workbenchAnnotations, 1);
+  const restored = replaceState({}, backup);
+  assert.deepEqual(restored.workbenchAttachments[0], {
+    id: 'asset-1', archiveId: 'task-1_123e4567-e89b-12d3-a456-426614174000.png', taskId: 'task-1',
+    displayName: '方案.png', kind: 'image', mimeType: 'image/png', size: 123, sha256: 'a'.repeat(64),
+    version: 'a'.repeat(64), createdAt: exportedAt, deleted: true
+  });
+  assert.deepEqual(restored.workbenchAnnotations[0].target, { kind: 'region', x: 0.1, y: 0.2, width: 0.3, height: 0.4 });
+  assert.equal(restored.workbenchAnnotations[0].intent, 'keep');
+  assert.equal(restored.workbenchAnnotations[0].updatedAt, '2026-11-10T09:00:00.000Z');
+  assert.equal(restored.workbenchAnnotations[0].reassociatedFromId, 'note-old');
+  assertNoKeys(backup, ['localPath', 'localSelector', 'password']);
+});
+
+test('网页选区批注的来源网址、抓取时间和网页版本随工作区备份保留', () => {
+  const source = { url: 'https://example.com/article', fetchedAt: exportedAt, contentHash: `sha256:${'b'.repeat(64)}` };
+  const backup = createBackup({
+    projects: [{ id: 'task-web', idea: '修订网页资料', workbenchAttachmentIds: ['web-asset'] }],
+    workbenchAttachments: [{
+      id: 'web-asset', archiveId: 'task-web_123e4567-e89b-12d3-a456-426614174000.html', taskId: 'task-web',
+      displayName: '参考页面.html', kind: 'html', mimeType: 'text/html', size: 100, sha256: 'a'.repeat(64),
+      version: 'a'.repeat(64), createdAt: exportedAt, deleted: false
+    }],
+    workbenchAnnotations: [{
+      id: 'web-note', taskId: 'task-web', attachmentId: 'web-asset', contentHash: 'a'.repeat(64), pageIndex: 0,
+      target: { kind: 'text', selector: 'main > p', exact: '原文', prefix: '', suffix: '', source },
+      comment: '改写这句', category: 'readability', intent: 'modify', createdAt: exportedAt,
+      updatedAt: exportedAt, status: 'active', selected: true
+    }]
+  }, { scope: 'workspace', now: exportedAt });
+  const restored = replaceState({}, backup);
+  assert.deepEqual(restored.workbenchAnnotations[0].target.source, source);
+});
+
 test('合并顶层合法但条目含未知和敏感字段的外部备份时按条目 schema 清洗', () => {
   const backup = createBackup({
     projects: [{ id: 'external-project', title: '外部项目' }]
@@ -519,6 +638,16 @@ test('资料库备份只包含资料、案例和资料相关状态', () => {
   assert.equal(Object.hasOwn(backup.data, 'projects'), false);
   assert.equal(Object.hasOwn(backup.data, 'prompts'), false);
   assert.equal(Object.hasOwn(backup.data, 'references'), false);
+});
+
+test('资料库备份往返保留安全的来源路径、抓取时间、内容版本、格式和能力元数据', () => {
+  const current = { knowledgeEntries: [{ id: 'source-1', sourcePath: 'guides/writing.md',
+    sourceFetchedAt: '2026-11-12T01:02:03.000Z', sourceFormat: 'Markdown',
+    sourceVersion: `sha256:${'a'.repeat(64)}`,
+    sourceCapabilities: ['已保存摘要/摘录', '本机相对路径可追溯'] }], cases: [] };
+  const backup = createBackup(current, { scope: 'knowledge-base', now: exportedAt });
+  validateBackup(backup);
+  assert.deepEqual(backup.data.knowledgeEntries[0], current.knowledgeEntries[0]);
 });
 
 test('空 workspace 备份包含合法的选择和筛选状态，knowledge-base 只保留资料字段', () => {
@@ -991,9 +1120,12 @@ test('严格校验和替换拒绝集合内重复 id，合并则报告重复条�
 
 function backupWritingSnapshot(id = 'article-1', saveEnabled = true) {
   return {
-    id, genre: 'article', article: { id, draft: '文章正文', saveEnabled },
+    id, genre: 'article', article: { id, draft: '改稿', draftRoundId: 'r2', saveEnabled },
     rounds: [{ id: 'r1', draft: '初稿', feedback: '反馈', diagnosis: '诊断', prompt: '提示词' },
-      { id: 'r2', draft: '改稿', userFeedback: '用户意见' }],
+      { id: 'r2', draft: '改稿', userFeedback: '用户意见', draftDecision: {
+        status: 'adopted', previousDraft: '初稿', previousDraftRoundId: 'r1', adoptedAt: '2026-11-11T10:00:00.000Z'
+      } },
+      { id: 'r3', draft: '待比较稿', draftDecision: { status: 'pending' } }],
     styleProfile: { id: 'style-1', source: 'user', traits: ['口语'] }
   };
 }
@@ -1094,6 +1226,9 @@ test('写作完整备份含历史快照和记忆及摘要计数，资料库备�
   };
   const backup = createBackup(state);
   assert.deepEqual(backup.data.writingArticles, state.writingArticles.map(schema.normalizeWritingWorkspace));
+  assert.equal(backup.data.writingArticles[0].article.draftRoundId, 'r2');
+  assert.equal(backup.data.writingArticles[0].rounds[1].draftDecision.status, 'adopted');
+  assert.equal(backup.data.writingArticles[0].rounds[2].draftDecision.status, 'pending');
   assert.equal(backup.counts.writingArticles, 2);
   assert.equal(getBackupSummary(backup).counts.writingMemories, 1);
   assert.deepEqual(replaceState({}, JSON.parse(JSON.stringify(backup))).writingArticles, backup.data.writingArticles);

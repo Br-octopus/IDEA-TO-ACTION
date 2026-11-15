@@ -295,6 +295,14 @@ test('提示词覆盖四种模板并要求结构化输出、证据边界和来�
   }
 });
 
+test('自动计划要求 Agent 返回有效研究类型，并只从候选平台中推荐', () => {
+  const prompt = prompts.buildResearchPlanPrompt({
+    topic: '分析订阅退款体验', template: 'auto', candidatePlatforms: ['weibo', 'zhihu']
+  });
+  assert.match(prompt, /researchType 必须为 trends、pain-points、content-competitors、fact-check 之一/);
+  assert.match(prompt, /从 candidatePlatforms 中选择最合适且最少的平台/);
+});
+
 test('工作流和提示词同时支持浏览器全局导出', () => {
   for (const [file, globalName, exportName] of [
     ['social-research-workflow.js', 'ForwardStepSocialResearchWorkflow', 'createResearchPlan'],

@@ -388,13 +388,51 @@ test('模型计划字段使用白名单，用户连接偏好和 profileId 优先
   assert.equal(task.unexpected, undefined);
 });
 
+test('Agent 从候选平台中推荐并校验研究类型，空查询使用模型生成的查询词', async () => {
+  const model = makeModelClient({ planResponse: {
+    platforms: ['weibo'], objective: '分析开发者订阅服务的退款体验', researchType: 'fact-check',
+    platformRoles: [{ platform: 'weibo', role: '查找退款争议与官方回应', queries: ['订阅退款'] }],
+    queries: ['订阅退款'], budget: { maxPlatforms: 2, maxQueriesPerPlatform: 2 }
+  } });
+  const harness = makeHarness({ model });
+  const task = await harness.coordinator.createPlan({
+    topic: '分析开发者订阅服务的退款体验', template: 'auto',
+    candidatePlatforms: ['xiaohongshu', 'weibo'], queries: []
+  });
+
+  assert.deepEqual(task.platforms, ['weibo']);
+  assert.equal(task.template, 'fact-check');
+  assert.equal(task.plan.researchType, 'fact-check');
+  assert.deepEqual(task.plan.queries, ['订阅退款']);
+  assert.deepEqual(task.plan.platformRoles.map(item => item.platform), ['weibo']);
+  assert.equal(task.status, 'awaiting-plan-confirmation');
+  assert.equal(harness.coordinator.getState().researchTasks.length, 1);
+});
+
+test('Agent 缺少推荐、推荐越界、研究类型无效或模型失败时不创建社媒任务', async () => {
+  const cases = [
+    { response: { researchType: 'trends' }, error: /没有给出推荐平台/ },
+    { response: { platforms: ['zhihu'], researchType: 'trends' }, error: /不在当前可用来源范围内/ },
+    { response: { platforms: ['weibo'], researchType: 'unknown' }, error: /没有给出有效研究类型/ },
+    { planError: '模型连接中断', error: /没有生成计划，也不会开始采集/ }
+  ];
+  for (const item of cases) {
+    const model = makeModelClient({ planResponse: item.response, planError: item.planError });
+    const harness = makeHarness({ model });
+    await assert.rejects(() => harness.coordinator.createPlan({
+      topic: '分析订阅退款体验', template: 'auto', candidatePlatforms: ['weibo']
+    }), item.error);
+    assert.equal(harness.coordinator.getState().researchTasks.length, 0);
+  }
+});
+
 test('空平台、未知平台和国际平台在调用模型前拒绝；模型生成的平台再次校验', async () => {
   const model = makeModelClient();
   const harness = makeHarness({ model });
   for (const platforms of [undefined, [], ['reddit'], ['xiaohongshu', 'youtube'], ['unknown']]) {
     await assert.rejects(
       () => harness.coordinator.createPlan({ topic: '平台校验', template: 'trends', ...(platforms === undefined ? {} : { platforms }) }),
-      /国内社媒平台|仅支持小红书、B 站、微博和知乎/
+      /研究计划缺少可用平台范围|国内社媒平台|仅支持小红书、B 站、微博和知乎/
     );
   }
   assert.equal(model.calls.length, 0);

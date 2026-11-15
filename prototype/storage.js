@@ -174,6 +174,7 @@
       nextAction: source.nextAction ?? "",
       reply: source.reply ?? "",
       createdAt: source.createdAt ?? "",
+      archivedAt: typeof source.archivedAt === "string" ? source.archivedAt : "",
       materials: source.materials ?? "",
       success: source.success ?? "",
       time: source.time ?? "",
@@ -602,9 +603,92 @@
     const version = next.prompts
       .filter(item => (item.groupId || "manual") === groupId)
       .reduce((max, item) => Math.max(max, Number(item.version) || 0), 0) + 1;
-    const saved = { ...prompt, groupId, version, verified: false, note: "" };
+    const favorite = prompt.favorite === true || next.prompts.some(item => (item.groupId || "manual") === groupId && item.favorite === true);
+    const saved = { ...prompt, groupId, version, favorite, verified: false, note: "" };
     next.prompts.unshift(saved);
     return { state: next, prompt: saved };
+  }
+
+  function promptGroupKey(prompt = {}) {
+    const groupId = String(prompt.groupId || "manual");
+    return groupId === "manual" ? `${groupId}:${String(prompt.title || prompt.id || "未命名提示词")}` : groupId;
+  }
+
+  function listPromptGroups(prompts) {
+    const groups = new Map();
+    for (const prompt of Array.isArray(prompts) ? prompts : []) {
+      if (!prompt || typeof prompt !== "object") continue;
+      const groupKey = promptGroupKey(prompt);
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey).push(prompt);
+    }
+    return [...groups].map(([groupKey, versions]) => {
+      versions.sort((left, right) => (Number(right.version) || 0) - (Number(left.version) || 0)
+        || String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+      return { groupKey, groupId: versions[0].groupId || "manual", versions, latest: versions[0], favorite: versions.some(item => item.favorite === true) };
+    }).sort((left, right) => String(right.latest.createdAt || "").localeCompare(String(left.latest.createdAt || "")));
+  }
+
+  function togglePromptFavorite(state, groupKey) {
+    const next = migrateState(state);
+    const group = listPromptGroups(next.prompts).find(item => item.groupKey === String(groupKey || ""));
+    if (!group) return { state: next, favorite: false };
+    const favorite = !group.favorite;
+    next.prompts = next.prompts.map(item => promptGroupKey(item) === group.groupKey ? { ...item, favorite } : item);
+    return { state: next, favorite };
+  }
+
+  function getPromptVariables(prompt) {
+    const variables = new Set();
+    for (const match of String(prompt || "").matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+      const name = match[1].trim();
+      if (name) variables.add(name);
+    }
+    return [...variables];
+  }
+
+  function fillPromptTemplate(prompt, values = {}) {
+    const source = String(prompt || "");
+    const normalized = values && typeof values === "object" && !Array.isArray(values) ? values : {};
+    const variables = getPromptVariables(source);
+    const missing = variables.filter(name => !String(normalized[name] ?? "").trim());
+    const text = source.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (placeholder, rawName) => {
+      const name = rawName.trim();
+      return String(normalized[name] ?? placeholder);
+    });
+    return { text, missing };
+  }
+
+  function comparePromptTexts(before, after, maxCells = 500000) {
+    const left = String(before || "").split(/\r?\n/);
+    const right = String(after || "").split(/\r?\n/);
+    if ((left.length + 1) * (right.length + 1) > maxCells) return { supported: false, changes: [] };
+    const width = right.length + 1;
+    const table = new Uint16Array((left.length + 1) * width);
+    for (let i = left.length - 1; i >= 0; i -= 1) {
+      for (let j = right.length - 1; j >= 0; j -= 1) {
+        const offset = i * width + j;
+        table[offset] = left[i] === right[j]
+          ? table[(i + 1) * width + j + 1] + 1
+          : Math.max(table[(i + 1) * width + j], table[i * width + j + 1]);
+      }
+    }
+    const changes = [];
+    let i = 0;
+    let j = 0;
+    while (i < left.length && j < right.length) {
+      if (left[i] === right[j]) {
+        changes.push({ kind: "same", text: left[i++] });
+        j += 1;
+      } else if (table[(i + 1) * width + j] >= table[i * width + j + 1]) {
+        changes.push({ kind: "remove", text: left[i++] });
+      } else {
+        changes.push({ kind: "add", text: right[j++] });
+      }
+    }
+    while (i < left.length) changes.push({ kind: "remove", text: left[i++] });
+    while (j < right.length) changes.push({ kind: "add", text: right[j++] });
+    return { supported: true, changes };
   }
 
   function confirmCase(state, reviewedCase, confirmed) {
@@ -789,5 +873,5 @@
   }
 
 
-  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, sanitizePromptAgentState, sanitizeWritingState, sanitizeAcademicPublishingState, migrateState, loadState, saveState, addPromptVersion, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
+  return { STORAGE_KEY, LEGACY_STORAGE_KEY, CASE_FIELDS, createEmptyState, stripModelKeys, sanitizeResearchState, sanitizePromptAgentState, sanitizeWritingState, sanitizeAcademicPublishingState, migrateState, loadState, saveState, addPromptVersion, promptGroupKey, listPromptGroups, togglePromptFavorite, getPromptVariables, fillPromptTemplate, comparePromptTexts, confirmCase, updateCase, upsertKnowledgeEntry, buildResearchKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse };
 });

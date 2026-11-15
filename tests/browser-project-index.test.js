@@ -48,6 +48,25 @@ test('浏览器项目索引拒绝超过单文件上限并可响应取消', async
   await assert.rejects(indexBrowserProjectFiles([projectFile('src/app.js', '内容')], { signal: controller.signal }), { name: 'AbortError' });
 });
 
+test('目录扫描会报告跳过项进度，并按批次让出事件循环', async () => {
+  const progress = [];
+  let yielded = false;
+  const files = Array.from({ length: 130 }, (_, index) => index % 2 === 0
+    ? projectFile(`src/file-${index}.js`, 'export const value = true;')
+    : projectFile(`assets/file-${index}.png`, 'unsupported'));
+  const resultPromise = indexBrowserProjectFiles(files, {
+    onProgress: state => progress.push(state.scanned)
+  });
+  setTimeout(() => { yielded = true; }, 0);
+  const result = await resultPromise;
+
+  assert.equal(progress.length, 130);
+  assert.equal(progress.at(-1), 130);
+  assert.equal(result.files.length, 65);
+  assert.equal(result.inventory.filter(item => item.status === 'unsupported').length, 65);
+  assert.equal(yielded, true);
+});
+
 test('生成和临时噪声不读取正文，且仅可恢复非敏感生成项', async () => {
   const generated = projectFile('build_v8.js', '应在恢复前不读取');
   const minified = projectFile('vendor.min.js', 'minified content');

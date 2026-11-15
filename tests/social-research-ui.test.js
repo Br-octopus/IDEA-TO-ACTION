@@ -10,6 +10,7 @@ const root = path.resolve(__dirname, '..');
 function makeUiDocument({ checkedPlatforms = [] } = {}) {
   const nodes = new Map();
   const getNode = id => {
+    if (["social-research-platforms", "social-research-template"].includes(id)) return null;
     if (!nodes.has(id)) nodes.set(id, {
       id, value: '', innerHTML: '', textContent: '', disabled: false, style: {}, dataset: {}, listeners: {},
       addEventListener(type, listener) { this.listeners[type] = listener; }
@@ -66,23 +67,79 @@ async function checkPlatformConnection(checked) {
 test('研究页包含工作流、平台准备、结果和报告入口及明确的只读提示', () => {
   const html = fs.readFileSync(path.join(root, 'prototype/index.html'), 'utf8');
   for (const id of [
-    'social-research-entry', 'social-research-template', 'social-research-platforms',
+    'social-research-entry', 'social-research-entry-status',
     'social-research-plan', 'social-research-plan-confirm', 'social-platform-preparation',
     'social-research-operations',
     'social-research-status', 'social-research-results', 'social-research-report',
     'social-research-save-selection', 'social-research-read-details', 'social-research-read-comments',
     'social-research-save-materials', 'social-research-regenerate-report', 'social-research-read-transcript'
   ]) assert.ok(html.includes(`id="${id}"`), `缺少研究 UI 入口 ${id}`);
+  assert.doesNotMatch(html, /id="social-research-(?:template|platforms)"/, '研究目标页不应要求用户先选模板或平台');
   assert.match(html, /id="social-research-read-transcript"[^>]*disabled/);
   assert.match(html, /读取 B 站字幕（不可用）/);
-  for (const copy of ['API', '真实浏览器', '自动回退', '独立 profile', '只读', '登录状态', '未核验', '不会自动发布']) {
+  for (const copy of ['API', '独立 profile', '只读', '不会点赞、评论或发布']) {
     assert.ok(html.includes(copy), `缺少边界说明：${copy}`);
   }
+  const socialUiSource = fs.readFileSync(path.join(root, 'prototype/social-research-ui.js'), 'utf8');
+  for (const copy of ['真实浏览器', '自动回退', '已登录', '待实测']) assert.ok(socialUiSource.includes(copy), `缺少运行时平台说明：${copy}`);
   const schema = html.indexOf('src="/prototype/social-research-schema.js"');
   const workflow = html.indexOf('src="/prototype/social-research-workflow.js"');
   const uiScript = html.indexOf('src="/prototype/social-research-ui.js"');
   const app = html.indexOf('src="/prototype/app.js"');
   assert.ok(schema >= 0 && schema < workflow && workflow < uiScript && uiScript < app, '研究模块必须按 schema、workflow、UI、app 顺序加载');
+});
+
+test('社媒研究只收自然语言目标，并把可用来源作为 Agent 候选而非用户选项', async () => {
+  const { document, getNode } = makeUiDocument();
+  const state = { researchTasks: [] };
+  let request;
+  const task = {
+    id: 'agent-social-plan', topic: '分析开发者订阅痛点', template: 'trends',
+    status: 'awaiting-plan-confirmation', platforms: ['weibo'], queries: ['订阅退款'],
+    plan: { objective: '分析订阅痛点', researchType: 'trends', platformRoles: [], queries: ['订阅退款'], timeRange: {}, budget: { maxPlatforms: 1, maxQueriesPerPlatform: 2, maxResultsPerQuery: 10, maxPages: 5, maxDetails: 3 }, stopConditions: ['达到预算'] },
+    results: [], savedResultIds: [], selectedResultIds: [], report: null
+  };
+  const instance = ui.createSocialResearchUI({
+    document,
+    desktopApi: { social: { listPlatforms: async () => [
+      { platform: 'weibo', domestic: true, supportsSearch: true, browserSearchRegistered: true },
+      { platform: 'zhihu', domestic: true, supportsSearch: true, apiAvailable: true },
+      { platform: 'reddit', domestic: false, supportsSearch: true, apiAvailable: true }
+    ] } },
+    coordinator: { async createPlan(input) { request = input; state.researchTasks.push(task); return task; } },
+    getState: () => state
+  });
+  await instance.refreshPlatforms();
+  getNode('social-research-topic').value = '分析开发者订阅痛点';
+  await getNode('social-research-entry').listeners.submit({ preventDefault() {} });
+
+  assert.deepEqual(request.candidatePlatforms, ['weibo', 'zhihu']);
+  assert.equal(request.template, 'auto');
+  assert.equal(Object.hasOwn(request, 'platforms'), false);
+  assert.equal(getNode('social-research-topic').value, '分析开发者订阅痛点');
+  assert.equal(task.status, 'awaiting-plan-confirmation');
+  assert.match(getNode('social-platform-cards').innerHTML, /微博/);
+  assert.doesNotMatch(getNode('social-platform-cards').innerHTML, /知乎/);
+  assert.match(getNode('social-research-status').textContent, /Agent 已根据目标推荐研究类型、平台和范围/);
+});
+
+test('计划生成失败显示在目标输入区并保留用户原文', async () => {
+  const { document, getNode } = makeUiDocument();
+  const instance = ui.createSocialResearchUI({
+    document,
+    desktopApi: { social: { listPlatforms: async () => [
+      { platform: 'weibo', domestic: true, supportsSearch: true, browserSearchRegistered: true }
+    ] } },
+    coordinator: { async createPlan() { throw new Error('模型服务未配置'); } },
+    getState: () => ({ researchTasks: [] })
+  });
+  await instance.refreshPlatforms();
+  getNode('social-research-topic').value = '我需要核对用户退款争议';
+  await getNode('social-research-entry').listeners.submit({ preventDefault() {} });
+
+  assert.equal(getNode('social-research-topic').value, '我需要核对用户退款争议');
+  assert.equal(getNode('social-research-entry-status').textContent, '模型服务未配置');
+  assert.equal(getNode('social-research-plan').hidden, true);
 });
 
 test('来源面板恢复中断操作，展示进度和操作 ID，且字幕候选保持禁用', async () => {
@@ -873,5 +930,7 @@ test('Prompt Agent 新社媒入口只发送四个国内平台 ID，非法旧平�
   const socialUiSource = fs.readFileSync(path.join(root, 'prototype/social-research-ui.js'), 'utf8');
   assert.match(promptSource, /platforms: sourceType === "social" \|\| sourceType === "mixed" \? \["xiaohongshu", "bilibili", "weibo", "zhihu"\] : \[\]/);
   assert.ok(socialUiSource.includes('if (!domesticPlatformIds.length) domesticPlatformIds = [...DOMESTIC_PLATFORM_IDS]'));
-  assert.ok(socialUiSource.includes('definition?.browserSearchRegistered === true && definition.supportsSearch === true'));
+  assert.ok(socialUiSource.includes('definition?.supportsSearch === true'));
+  assert.ok(socialUiSource.includes('definition.browserSearchRegistered === true || definition.apiAvailable === true'));
+  assert.ok(socialUiSource.includes('candidatePlatforms: domesticPlatformIds'));
 });

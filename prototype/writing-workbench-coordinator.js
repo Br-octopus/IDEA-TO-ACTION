@@ -18,6 +18,40 @@
     'packId', 'sourceId', 'suggestion', 'priority'
   ]);
 
+  function extractJsonDocument(raw) {
+    const text = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    if (!text) return null;
+    try { return JSON.parse(text); } catch {}
+    const start = text.indexOf('{');
+    if (start < 0) return null;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') quoted = false;
+        continue;
+      }
+      if (character === '"') quoted = true;
+      else if (character === '{') depth += 1;
+      else if (character === '}' && --depth === 0) {
+        try { return JSON.parse(text.slice(start, index + 1)); } catch { return null; }
+      }
+    }
+    return null;
+  }
+
+  function taskSuggestionError(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '模型返回的 JSON 不是对象';
+    const fields = Object.keys(parsed).slice(0, 12).join('、') || '无字段';
+    const genre = typeof parsed.genre === 'string' ? parsed.genre : '缺少 genre';
+    const taskType = typeof parsed.taskType === 'string' ? parsed.taskType : '缺少 taskType';
+    return `模型返回了 JSON，但最终任务判断字段无效（字段：${fields}；文体：${genre}；任务类型：${taskType}）`;
+  }
+
   function parseDiagnosisIssueCandidates(raw, round) {
     let parsed;
     try { parsed = JSON.parse(raw); } catch { return null; }
@@ -137,8 +171,9 @@
     async function saveMemory(memory) {
       pendingMemories.add(memory.id);
       const snapshot = copy(memory);
-      await persist(s => ({ ...s, writingMemories: [...(s.writingMemories || []).filter(m => m.id !== memory.id), snapshot] }), { memoryId: memory.id });
-      pendingMemories.delete(memory.id);
+      try {
+        await persist(s => ({ ...s, writingMemories: [...(s.writingMemories || []).filter(m => m.id !== memory.id), snapshot] }), { memoryId: memory.id });
+      } finally { pendingMemories.delete(memory.id); }
     }
     function getWorkspace(id) { return copy(workspace(id)); }
     async function addUnit(id, input = {}) {
@@ -413,10 +448,14 @@
       for (const [id, w] of sessions) all.set(id, w);
       return [...all.values()].map(w => copy(w.article));
     }
-    function getRelevantMemories(genre = 'article', articleId) {
+    function listMemories() { return [...memories.values()].map(copy); }
+    function getRelevantMemories(genre = 'article', articleId, options = {}) {
       const config = schema.getWritingGenreConfig(genre);
       const priority = { article: 0, project: 1, genre: 2, general: 3 };
-      return [...memories.values()].filter(m => m.preference && !m.undo?.undoneAt && (
+      const article = sessions.get(articleId)?.article || (state().writingArticles || []).find(item => item.id === articleId)?.article;
+      const skipped = new Set(article?.skippedMemoryIds || []);
+      return [...memories.values()].filter(m => m.preference && m.status === 'confirmed' && m.enabled !== false && !m.undo?.undoneAt
+        && (options.includeSkipped === true || !skipped.has(m.id)) && (
         m.scope === 'general' || config && (m.scope === 'genre' && m.genre === config.memoryNamespace
           || m.scope === 'project' && m.projectId === articleId
           || m.scope === 'article' && m.articleId === articleId)
@@ -583,7 +622,12 @@
         selectedIds: selectedPackIds(w, round), taskType, snapshot: round?.packSnapshot });
     }
     function ensurePackSnapshot(w, round) {
-      if (round.packSnapshot) return round.packSnapshot;
+      if (round.packSnapshot) {
+        if (!round.resourceSnapshot) round.resourceSnapshot = round.packSnapshot.resources || [];
+        if (!round.resourceUsage) round.resourceUsage = (round.resourceSnapshot || []).map(resource => ({ id: resource.id, kind: resource.kind, status: 'used',
+          sourceIds: resource.sourceIds, actionId: resource.actionId, updatedAt: now() }));
+        return round.packSnapshot;
+      }
       const genreConfig = schema.getWritingGenreConfig(w.article.genre);
       const taskTypes = w.article.genre === 'academic-paper' ? [...ACADEMIC_TASK_TYPES]
         : w.article.genre === 'article' ? ['revision', 'diagnosis'] : genreConfig?.taskTypes || [];
@@ -595,12 +639,19 @@
       // 来源 ID 只在包内唯一，快照按“包 + 来源”保留，避免跨包同名互相覆盖。
       const sources = selections.flatMap(selection => selection.sources).filter((item, index, all) =>
         all.findIndex(other => `${other.packId}:${other.id}` === `${item.packId}:${item.id}`) === index);
+      const resources = selections.flatMap(selection => selection.resources || selection.resourceSelection?.resources || []).filter((item, index, all) =>
+        all.findIndex(other => `${other.packId || ''}:${other.id}` === `${item.packId || ''}:${item.id}`) === index);
       const skipped = selections.flatMap(selection => selection.skipped).filter((item, index, all) =>
         all.findIndex(other => `${other.id}:${other.reason}` === `${item.id}:${item.reason}`) === index);
       round.packSnapshot = schema.normalizeWritingPackSnapshot({
         packs: [...packIds].map(id => packs.find(item => item.id === id)),
-        entries, sources, skipped
+        entries, sources, resources, skipped
       });
+      round.resourceSnapshot = round.packSnapshot.resources;
+      round.resourceUsage = round.packSnapshot.resources.map(resource => ({ id: resource.id, kind: resource.kind, status: 'used',
+        sourceIds: resource.sourceIds, actionId: resource.actionId, updatedAt: now() }));
+      round.skippedResources = round.packSnapshot.skipped.filter(item => item.kind || item.reason?.includes('mismatch'))
+        .map(item => ({ ...item, status: 'skipped', updatedAt: now() }));
       return round.packSnapshot;
     }
     function validateProfile(profile, articleId, genre = 'article') {
@@ -624,8 +675,6 @@
     }
     function references(input) {
       const r = schema.normalizeWritingRound(input);
-      r.materials = r.materials.slice(0, 3);
-      r.sources = r.sources.slice(0, 3 - r.materials.length);
       return { materials: r.materials, sources: r.sources };
     }
     function applyProfile(w, profile) {
@@ -699,13 +748,12 @@
         excerpt: `公开线索（未验证，不升级为个人记忆）；适用：${item.applicability || '普通文章，需结合原文判断'}；局限：${item.limitations || '搜索摘要未经独立核验'}；摘要：${String(item.summary || '').slice(0, 600)}`,
         purpose: 'content', verificationStatus: 'unverified', origin: 'public-research'
       })).filter(item => item.url);
-      // 手工及风格来源不可挤掉；自动内容来源为本次公开线索至少留一个名额。
+      // 手工、风格和自动来源全部保留，重复来源按 URL 去重。
       const protectedSources = round.sources.filter(s => ['style', 'both'].includes(s.purpose) || !s.origin);
       const automatic = round.sources.filter(s => !protectedSources.includes(s));
-      const slots = Math.max(0, 3 - round.materials.length - protectedSources.length);
       const seen = new Set(protectedSources.map(s => s.url).filter(Boolean));
       const incoming = sources.filter(s => !seen.has(s.url));
-      const merged = [...protectedSources, ...automatic.slice(0, Math.max(0, slots - (incoming.length ? 1 : 0))), ...incoming];
+      const merged = [...protectedSources, ...automatic, ...incoming];
       const refs = references({ materials: round.materials, sources: merged.filter(s => {
         const identity = s.url || JSON.stringify([s.title, s.excerpt, s.purpose]);
         const duplicate = merged.findIndex(m => (m.url || JSON.stringify([m.title, m.excerpt, m.purpose])) === identity);
@@ -714,8 +762,8 @@
       Object.assign(round, refs);
       const includedSources = refs.sources.filter(s => incoming.some(m => m.url === s.url)).length;
       return { ...refs, includedSources, contextNote: sources.length && !includedSources
-        ? '公开摘要未纳入提示词：三份上下文已由手工材料或风格样本占用，原资料保留。'
-        : `本次公开摘要纳入提示词${includedSources}份；手工材料和风格样本保留，合计最多3份。` };
+        ? '公开摘要未纳入提示词；原资料保留，可调整材料后重试。'
+        : `本次公开摘要纳入提示词${includedSources}份；未纳入的材料仍保留在资料列表中。` };
     }
     function previewResearch(id, options = {}) {
       const w = workspace(id);
@@ -804,10 +852,13 @@
       const defaultTaskType = w.article.genre === 'academic-paper' ? 'academic-planning'
         : w.article.genre === 'article' ? 'revision' : genreConfig?.taskTypes?.[0];
       const taskType = requestedTaskType || round.taskType || defaultTaskType;
+      const input = inputFor(w, round);
+      round.memorySnapshot = input.memories.map(memory => ({ id: memory.id, preference: memory.preference, scope: memory.scope,
+        sourceArticleId: memory.sourceArticleId, origin: memory.origin, updatedAt: memory.updatedAt }));
       if (w.article.genre === 'academic-paper') {
         if (!ACADEMIC_TASK_TYPES.has(taskType)) throw failure('INVALID_TASK_TYPE', '不支持的学术写作任务', { articleId: w.id, taskType });
         ensurePackSnapshot(w, round);
-        const prompt = prompts.buildAcademicWritingPrompt(inputFor(w, round), taskType);
+        const prompt = prompts.buildAcademicWritingPrompt(input, taskType);
         round.taskType = taskType;
         round.prompt = prompt;
         const previousPrompt = round.promptVersions?.at(-1);
@@ -822,12 +873,12 @@
         if (!genreConfig?.taskTypes?.includes(taskType)) throw failure('INVALID_TASK_TYPE', '当前文体不支持该专属任务', { articleId: w.id, taskType });
         ensurePackSnapshot(w, round);
         round.longformSnapshot = storySnapshot(w, round, taskType);
-        const localDiagnosis = prompts.buildLocalWritingDiagnosis(inputFor(w, round));
+        const localDiagnosis = prompts.buildLocalWritingDiagnosis(input);
         const isLocal = round.diagnosis.startsWith(`${localDiagnosis.label}\n`);
         const diagnosis = (!refreshDiagnosis && !isLocal && round.diagnosis) || `${localDiagnosis.label}\n${localDiagnosis.dimensions.map(d =>
           `${d.name}：${d.findings.length ? d.findings.map(f => `${f.quote}：${f.observation}；${f.direction}`).join('；') : d.note}`).join('\n')}`;
         round.diagnosis = diagnosis;
-        const prompt = prompts.buildDomainWritingPrompt(inputFor(w, round), taskType);
+        const prompt = prompts.buildDomainWritingPrompt(input, taskType);
         round.taskType = taskType;
         round.prompt = prompt;
         const previousPrompt = round.promptVersions?.at(-1);
@@ -839,7 +890,6 @@
         return { localDiagnosis, diagnosis, prompt, taskType };
       }
       ensurePackSnapshot(w, round);
-      const input = inputFor(w, round);
       const localDiagnosis = prompts.buildLocalWritingDiagnosis(input);
       const isLocal = round.diagnosis.startsWith(`${localDiagnosis.label}\n`);
       const diagnosis = (!refreshDiagnosis && !isLocal && round.diagnosis) || `${localDiagnosis.label}\n${localDiagnosis.dimensions.map(d =>
@@ -880,26 +930,152 @@
       taskAnalysisToken = token;
       const signal = options.signal;
       if (signal?.aborted) throw failure('MODEL_CANCELLED', '任务分析已取消');
-      const prompt = prompts.buildWritingTaskAnalysisPrompt(input);
+      const candidates = new Map((Array.isArray(input.uploadCandidates) ? input.uploadCandidates : [])
+        .filter(item => item?.id && item?.excerpt).map(item => [String(item.id), { ...item }]));
+      const sentIds = new Set();
+      const sentEvidence = new Map();
+      const omittedCandidates = new Map();
+      const requestBodyLimit = 1_800_000;
+      const inputTokenBudget = Number.isSafeInteger(options.inputTokenBudget) && options.inputTokenBudget > 1000
+        ? Math.min(options.inputTokenBudget, 32000) : 8000;
+      const estimateTokens = value => {
+        const cjk = (String(value).match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || []).length;
+        return cjk + Math.ceil((String(value).length - cjk) / 3);
+      };
+      const safeMaterialList = Array.isArray(input.materials) ? input.materials : [];
+      const followupFragments = [];
+      let observedPromptTokens = 0;
+      let estimatedPromptTokens = 0;
+      const buildBoundedPrompt = remainingTokenBudget => {
+        let excerptLimit = 1200;
+        let manualLimit = 1200;
+        let goalLimit = 4000;
+        let draftLimit = 6000;
+        let sourcePreviewLimit = 3000;
+        let retrievalLimit = 6000;
+        let candidateList = [...candidates.values()].sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+        let prompt = '';
+        let requestBytes = 0;
+        let estimatedTokens = 0;
+        for (let attempt = 0; attempt < 24; attempt++) {
+          const boundedInput = {
+            ...input,
+            goal: String(input.goal || '').slice(0, goalLimit),
+            draft: String(input.draft || '').slice(0, draftLimit),
+            sourceDocument: input.sourceDocument ? { ...input.sourceDocument,
+              preview: String(input.sourceDocument.preview || '').slice(0, sourcePreviewLimit),
+              outline: Array.isArray(input.sourceDocument.outline) ? input.sourceDocument.outline.slice(0, 40) : [] } : input.sourceDocument,
+            materials: safeMaterialList.map(item => ({ ...item, excerpt: String(item?.excerpt || '').slice(0, manualLimit) })),
+            uploadCandidates: candidateList.map(item => ({ ...item, excerpt: String(item.excerpt || '').slice(0, excerptLimit) })),
+            retrievalRound: followupFragments.join('\n\n').slice(0, retrievalLimit),
+            retrievalStatus: { ...(input.retrievalStatus || {}), omittedExcerptCount: omittedCandidates.size,
+              omittedCandidates: [...omittedCandidates.values()] }
+          };
+          prompt = prompts.buildWritingTaskAnalysisPrompt(boundedInput);
+          const serialized = JSON.stringify({ messages: [{ role: 'user', content: prompt }] });
+          requestBytes = new TextEncoder().encode(serialized).length;
+          // 预留 1,200 tokens 给服务端 system prompt、协议封装和估算误差。
+          estimatedTokens = estimateTokens(serialized) + 1200;
+          if (requestBytes <= requestBodyLimit && estimatedTokens <= remainingTokenBudget) {
+            return { prompt, requestBytes, estimatedTokens, candidates: boundedInput.uploadCandidates };
+          }
+          if (excerptLimit > 120) excerptLimit = Math.max(120, Math.floor(excerptLimit / 2));
+          else if (manualLimit > 120) manualLimit = Math.max(120, Math.floor(manualLimit / 2));
+          else if (retrievalLimit > 1000) retrievalLimit = Math.max(1000, Math.floor(retrievalLimit / 2));
+          else if (sourcePreviewLimit > 400) sourcePreviewLimit = Math.max(400, Math.floor(sourcePreviewLimit / 2));
+          else if (draftLimit > 1200) draftLimit = Math.max(1200, Math.floor(draftLimit / 2));
+          else if (goalLimit > 800) goalLimit = Math.max(800, Math.floor(goalLimit / 2));
+          else if (candidateList.length > 1) {
+            const omitted = candidateList.pop();
+            omittedCandidates.set(String(omitted.id), { id: String(omitted.id), reason: '主模型累计输入预算不足，未发送该候选摘录' });
+          }
+          else if (candidateList.length === 1 && candidateList[0].excerpt.length > 120) {
+            candidateList[0] = { ...candidateList[0], excerpt: candidateList[0].excerpt.slice(0, 120) };
+          } else break;
+        }
+        if (requestBytes > requestBodyLimit || estimatedTokens > inputTokenBudget) {
+          throw failure('UPLOAD_CONTEXT_TOO_LARGE', '任务说明和检索材料仍超过模型输入预算；请精简任务目标或减少手动加入的材料。未送达的片段会标记为未分析。');
+        }
+        return { prompt, requestBytes, estimatedTokens };
+      };
       let onAbort;
       try {
         const abort = new Promise((_, reject) => {
           onAbort = () => reject(failure('MODEL_CANCELLED', '任务分析已取消'));
           signal?.addEventListener('abort', onAbort, { once: true });
         });
-        const response = await Promise.race([dependencies.requestModel({
-          messages: [{ role: 'user', content: prompt }], signal, stage: 'writing-task-analysis'
-        }), abort]);
-        if (signal?.aborted || response?.cancelled) throw failure('MODEL_CANCELLED', '任务分析已取消');
-        if (taskAnalysisToken !== token) throw failure('STALE_RESULT', '任务分析结果已过期');
-        const raw = typeof response === 'string' ? response : response?.text;
-        if (typeof raw !== 'string' || !raw.trim()) throw failure('INVALID_TASK_SUGGESTION', '模型没有返回任务判断');
-        const json = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-        let parsed;
-        try { parsed = JSON.parse(json); } catch { throw failure('INVALID_TASK_SUGGESTION', '模型返回内容不是有效 JSON'); }
-        const suggestion = schema.normalizeWritingTaskSuggestion(parsed);
-        if (!suggestion) throw failure('INVALID_TASK_SUGGESTION', '模型返回的文体或任务类型不受支持');
-        return suggestion;
+        const executedSearches = new Set();
+        for (let turn = 0; turn <= 3; turn++) {
+          const remainingTokenBudget = inputTokenBudget - estimatedPromptTokens;
+          if (remainingTokenBudget <= 1200) {
+            throw failure('UPLOAD_CONTEXT_TOO_LARGE', '主模型累计输入预算已用尽，无法继续完成任务判断；可缩短目标或减少手动材料后重试。');
+          }
+          const bounded = buildBoundedPrompt(remainingTokenBudget);
+          for (const item of bounded.candidates) {
+            const id = String(item.id);
+            sentIds.add(id);
+            sentEvidence.set(id, { ...candidates.get(id), ...item });
+            omittedCandidates.delete(id);
+          }
+          estimatedPromptTokens += bounded.estimatedTokens;
+          const response = await Promise.race([dependencies.requestModel({
+            messages: [{ role: 'user', content: bounded.prompt }], signal, stage: 'writing-task-analysis',
+            inputTokenBudget: remainingTokenBudget, estimatedPromptTokens: bounded.estimatedTokens, requestBytes: bounded.requestBytes
+          }), abort]);
+          if (signal?.aborted || response?.cancelled) throw failure('MODEL_CANCELLED', '任务分析已取消');
+          if (taskAnalysisToken !== token) throw failure('STALE_RESULT', '任务分析结果已过期');
+          if (Number.isSafeInteger(response?.usage?.prompt_tokens)) observedPromptTokens += response.usage.prompt_tokens;
+          const raw = typeof response === 'string' ? response : response?.text;
+          if (typeof raw !== 'string' || !raw.trim()) throw failure('INVALID_TASK_SUGGESTION', '模型没有返回任务判断');
+          const parsed = extractJsonDocument(raw);
+          if (!parsed) throw failure('INVALID_TASK_SUGGESTION', '模型返回内容不是有效 JSON；请让模型只返回任务判断对象。');
+          const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+          const suggestion = schema.normalizeWritingTaskSuggestion(parsed);
+          const hasFinal = Boolean(suggestion);
+          if (hasFinal) {
+            const allowedUploadMaterialIds = new Set(sentIds);
+            const selectedUploadMaterialIds = [...new Set(Array.isArray(parsed.selectedUploadMaterialIds)
+              ? parsed.selectedUploadMaterialIds.filter(id => typeof id === 'string' && allowedUploadMaterialIds.has(id)) : [])];
+            const selectedUploadCandidates = selectedUploadMaterialIds
+              .map(id => sentEvidence.get(id))
+              .filter(item => item?.materialId && item?.excerpt)
+              .map(item => ({ id: String(item.id), materialId: String(item.materialId), title: String(item.title || ''),
+                relativePath: String(item.relativePath || ''), locator: String(item.locator || ''),
+                excerpt: String(item.excerpt || ''), selectionReason: String(item.selectionReason || '') }));
+            return { ...suggestion, selectedUploadMaterialIds, selectedUploadCandidates,
+              retrieval: { completedRounds: turn, omittedExcerptCount: omittedCandidates.size,
+                sentMaterialIds: [...sentIds], omittedCandidates: [...omittedCandidates.values()],
+                estimatedPromptTokens, ...(observedPromptTokens ? { observedPromptTokens } : {}) } };
+          }
+          if (turn < 3 && actions.length) {
+            const queries = [...new Set(actions.filter(action => action?.type === 'search')
+              .flatMap(action => Array.isArray(action.queries) ? action.queries : [action.query])
+              .filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean))].slice(0, 5);
+            if (queries.length && typeof options.searchMaterials === 'function') {
+              const key = queries.join('\n');
+              if (!executedSearches.has(key)) {
+                executedSearches.add(key);
+                const found = await options.searchMaterials(queries);
+                for (const item of Array.isArray(found) ? found : []) if (item?.id && item?.excerpt) candidates.set(String(item.id), { ...item });
+                followupFragments.push(...(Array.isArray(found) ? found : []).filter(item => item?.excerpt)
+                  .map(item => `文件 ID：${item.id}\n文件：${item.relativePath || item.title || ''}\n位置：${item.locator || '位置未识别'}\n摘录：\n${item.excerpt}`));
+              }
+            }
+            for (const action of actions.filter(item => item?.type === 'read').slice(0, 5)) {
+              const materialId = String(action.materialId || action.id || '');
+              const source = candidates.get(materialId);
+              const offset = Number(action.offset);
+              const length = Number(action.length);
+              if (!source || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1
+                || length > 1800 || typeof options.readMaterial !== 'function') continue;
+              const result = await options.readMaterial(materialId, offset, length);
+              if (result?.excerpt) followupFragments.push(`文件 ID：${materialId}\n文件：${result.relativePath || result.title || ''}\n位置：${result.locator || '位置未识别'}\n摘录：\n${result.excerpt}`);
+            }
+            continue;
+          }
+          throw failure('INVALID_TASK_SUGGESTION', taskSuggestionError(parsed));
+        }
+        throw failure('INVALID_TASK_SUGGESTION', '模型未在允许的检索轮次内给出最终任务判断');
       } catch (error) {
         if (error.code) throw error;
         throw failure('MODEL_FAILED', `任务分析失败：${error.message || error}`);
@@ -963,6 +1139,9 @@
     }
     async function appendRound(id, input = {}) {
       const w = workspace(id);
+      if (Object.hasOwn(input, 'draftDecision') && input.draftDecision?.status !== 'pending') {
+        throw failure('INVALID_INPUT', '新轮次只能以待决定状态接收外部稿件', { articleId: id });
+      }
       invalidateResearch(w);
       validateProfile(input.styleProfile, id, w.article.genre);
       const previous = w.rounds.at(-1);
@@ -996,6 +1175,7 @@
       }
       const round = schema.normalizeWritingRound({ ...roundInput, id: newId('round'), articleId: id,
         parentRoundId, draft: input.draft ?? w.article.draft, diagnosis: input.diagnosis || '', prompt: '', createdAt: now(), updatedAt: now() });
+      if (input.draftDecision) round.draftDecision = { status: 'pending', previousDraft: '', previousDraftRoundId: '', adoptedAt: '', undoneAt: '' };
       if (Object.hasOwn(input, 'packSelections')) w.article.packSelections = round.packSelections;
       else if (Array.isArray(w.article.packSelections)) round.packSelections = copy(w.article.packSelections);
       // 用户的原始强约束和正文不能在生成失败时被规范化截掉。
@@ -1003,7 +1183,10 @@
       if (input.draft === undefined) round.draft = w.article.draft;
       w.rounds.push(round);
       failedRounds.add(round);
-      w.article.draft = round.draft;
+      if (round.draftDecision?.status !== 'pending') {
+        w.article.draft = round.draft;
+        w.article.draftRoundId = round.id;
+      }
       w.article.updatedAt = now();
       if (input.styleProfile) applyProfile(w, input.styleProfile);
       derive(w, round, input.userCorrections);
@@ -1011,6 +1194,67 @@
       await saveWorkspace(w);
       const notifications = await promotePreferences();
       return copy({ articleId: id, round, notifications });
+    }
+    async function decideRoundDraft(id, roundId, decision) {
+      if (!['adopt', 'keep', 'undo'].includes(decision)) throw failure('INVALID_INPUT', '稿件决定无效', { articleId: id, roundId });
+      const w = workspace(id);
+      const round = roundFor(id, roundId);
+      if (!round.draftDecision) throw failure('DRAFT_DECISION_STALE', '这轮没有待决定的新稿', { articleId: id, roundId });
+      const current = round.draftDecision || { status: 'pending', previousDraft: '', previousDraftRoundId: '', adoptedAt: '', undoneAt: '' };
+      const previousDecision = copy(current);
+      const previousDraft = w.article.draft;
+      const previousDraftRoundId = w.article.draftRoundId || '';
+      const previousRoundUpdatedAt = round.updatedAt;
+      const time = now();
+      if (decision === 'keep') {
+        if (current.status !== 'pending') throw failure('DRAFT_DECISION_STALE', '这版稿件已处理，不能再次选择保留', { articleId: id, roundId });
+        round.draftDecision = { ...current, status: 'kept' };
+      } else if (decision === 'adopt') {
+        if (!['pending', 'kept', 'undone'].includes(current.status)) throw failure('DRAFT_DECISION_STALE', '这版稿件当前不能采用', { articleId: id, roundId });
+        round.draftDecision = { ...current, status: 'adopted', previousDraft, previousDraftRoundId,
+          adoptedAt: time, undoneAt: '' };
+        w.article.draft = round.draft;
+        w.article.draftRoundId = round.id;
+      } else {
+        if (current.status !== 'adopted' || previousDraftRoundId !== round.id) {
+          throw failure('DRAFT_DECISION_STALE', '当前稿件已基于后续版本变化；为避免覆盖新稿，不能撤销这次采用', { articleId: id, roundId });
+        }
+        round.draftDecision = { ...current, status: 'undone', undoneAt: time };
+        w.article.draft = current.previousDraft;
+        w.article.draftRoundId = current.previousDraftRoundId;
+      }
+      round.updatedAt = time;
+      w.article.updatedAt = time;
+      try {
+        await saveWorkspace(w);
+      } catch (error) {
+        round.draftDecision = previousDecision;
+        round.updatedAt = previousRoundUpdatedAt;
+        w.article.draft = previousDraft;
+        if (previousDraftRoundId) w.article.draftRoundId = previousDraftRoundId;
+        else delete w.article.draftRoundId;
+        throw error;
+      }
+      return copy({ round, articleDraft: w.article.draft, articleDraftRoundId: w.article.draftRoundId || '' });
+    }
+    async function recordResourceUsage(id, resourceId, patch = {}) {
+      const w = workspace(id);
+      const round = w.rounds.at(-1);
+      if (!round) throw failure('ROUND_NOT_FOUND', '当前没有可记录资源状态的轮次', { articleId: id });
+      const resource = (round.resourceSnapshot || round.packSnapshot?.resources || []).find(item => item.id === resourceId);
+      if (!resource) throw failure('RESOURCE_NOT_FOUND', '资源不在当前轮次快照中', { articleId: id, resourceId });
+      const allowed = new Set(['used', 'skipped', 'unavailable', 'pending', 'executed', 'failed']);
+      const state = schema.normalizeWritingRound({ ...round,
+        resourceUsage: [...(round.resourceUsage || []).filter(item => item.id !== resourceId), {
+          id: resourceId, kind: resource.kind, status: allowed.has(patch.status) ? patch.status : 'pending',
+          ...(patch.reason ? { reason: String(patch.reason) } : {}),
+          ...(patch.outputSummary ? { outputSummary: String(patch.outputSummary) } : {}),
+          ...(resource.actionId ? { actionId: resource.actionId } : {}), updatedAt: now()
+        }] }).resourceUsage;
+      round.resourceUsage = state;
+      round.updatedAt = now();
+      await saveWorkspace(w);
+      return copy(round);
     }
     async function setSaveEnabled(id, enabled) {
       if (typeof enabled !== 'boolean') throw failure('INVALID_INPUT', '保存开关必须为布尔值');
@@ -1132,7 +1376,7 @@
         currentState: `读者：${w.article.audience}；平台：${w.article.platform}`, allowResearch: false
       }, { stage: 'clarification' });
       assertCurrent(w, version);
-      const sources = (Array.isArray(selected) ? selected : []).slice(0, 3).map(m => {
+      const sources = (Array.isArray(selected) ? selected : []).map(m => {
         const authorizedDirectory = Boolean(m.relativePath) || m.origin === 'authorized-directory'
           || String(m.type || '').startsWith('local-source-');
         const libraryEntry = Boolean(m.type) && !authorizedDirectory;
@@ -1250,11 +1494,12 @@
       }
       if (typeof input.preference !== 'string' || !input.preference.trim()) throw failure('INVALID_INPUT', '记忆偏好不能为空');
       const memory = schema.normalizeWritingMemory({ ...input, id: newId('memory'), scope, genre: namespace,
+        origin: 'user-confirmed', status: 'confirmed', enabled: true,
         projectId: scope === 'project' ? id : '', articleId: scope === 'article' ? id : '',
         sourceArticleId: id, evidenceArticleIds: [id], createdAt: now(), updatedAt: now() });
       memory.sourcePreferenceKey = key(memory.preference);
-      memories.set(memory.id, memory);
       await saveMemory(memory);
+      memories.set(memory.id, memory);
       return copy(memory);
     }
     function findMemory(id) {
@@ -1267,18 +1512,97 @@
       if (Object.hasOwn(patch, 'preference') && !String(patch.preference || '').trim()) throw failure('INVALID_INPUT', '记忆偏好不能为空');
       const editable = Object.fromEntries(['preference', 'reason', 'example', 'counterexample'].filter(f => Object.hasOwn(patch, f)).map(f => [f, patch[f]]));
       const sourcePreferenceKey = memory.sourcePreferenceKey || key(memory.preference);
-      const updated = schema.normalizeWritingMemory({ ...memory, ...editable,
+      const currentContent = Object.fromEntries(['preference', 'reason', 'example', 'counterexample'].map(field => [field, memory[field] || '']));
+      const nextContent = { ...currentContent, ...editable };
+      const history = JSON.stringify(currentContent) === JSON.stringify(nextContent) ? (memory.history || [])
+        : [...(memory.history || []), { id: newId('memory-version'), ...currentContent, savedAt: memory.updatedAt || now() }].slice(-10);
+      const updated = schema.normalizeWritingMemory({ ...memory, ...editable, history,
         ...(sourcePreferenceKey ? { sourcePreferenceKey } : {}), updatedAt: now() });
-      memories.set(id, updated);
       await saveMemory(updated);
+      memories.set(id, updated);
       return copy(updated);
+    }
+    async function confirmMemory(id, patch = {}) {
+      const memory = findMemory(id);
+      if (memory.status !== 'pending') throw failure('MEMORY_STATUS_STALE', '这条建议已处理，请刷新后再试', { memoryId: id });
+      const scope = patch.scope || memory.scope;
+      if (!['general', 'genre'].includes(scope)) throw failure('INVALID_INPUT', '待确认建议只能应用于通用或当前文体范围');
+      if (Object.hasOwn(patch, 'preference') && !String(patch.preference || '').trim()) throw failure('INVALID_INPUT', '记忆偏好不能为空');
+      const namespace = schema.getWritingGenreConfig(memory.genre)?.memoryNamespace || '';
+      const updated = schema.normalizeWritingMemory({ ...memory, ...Object.fromEntries(['preference', 'reason', 'example', 'counterexample']
+        .filter(field => Object.hasOwn(patch, field)).map(field => [field, patch[field]])),
+      scope, genre: scope === 'genre' ? namespace : '', projectId: '', articleId: '', status: 'confirmed', enabled: true,
+      undo: {}, updatedAt: now(), sourcePreferenceKey: memory.sourcePreferenceKey || key(memory.preference) });
+      await saveMemory(updated);
+      memories.set(id, updated);
+      return copy(updated);
+    }
+    async function ignoreMemory(id) {
+      const memory = findMemory(id);
+      if (memory.status !== 'pending') throw failure('MEMORY_STATUS_STALE', '只有待确认建议可以忽略', { memoryId: id });
+      const updated = schema.normalizeWritingMemory({ ...memory, status: 'ignored', enabled: false, updatedAt: now() });
+      await saveMemory(updated);
+      memories.set(id, updated);
+      return copy(updated);
+    }
+    async function restoreMemory(id) {
+      const memory = findMemory(id);
+      if (memory.status === 'ignored') {
+        const updated = schema.normalizeWritingMemory({ ...memory,
+          status: memory.origin === 'repeated-round' ? 'pending' : 'confirmed',
+          enabled: memory.origin !== 'repeated-round', undo: {}, updatedAt: now() });
+        await saveMemory(updated);
+        memories.set(id, updated);
+        return copy(updated);
+      }
+      return setMemoryEnabled(id, true);
+    }
+    async function setMemoryEnabled(id, enabled) {
+      const memory = findMemory(id);
+      if (memory.status !== 'confirmed' || typeof enabled !== 'boolean') throw failure('INVALID_INPUT', '只能启用或停用已确认偏好');
+      const updated = schema.normalizeWritingMemory({ ...memory, enabled, undo: enabled ? {} : memory.undo, updatedAt: now() });
+      await saveMemory(updated);
+      memories.set(id, updated);
+      return copy(updated);
+    }
+    async function restoreMemoryVersion(id, versionId, expectedUpdatedAt) {
+      const memory = findMemory(id);
+      if (expectedUpdatedAt && memory.updatedAt !== expectedUpdatedAt) throw failure('MEMORY_VERSION_STALE', '此偏好已有更新，请刷新后重新选择版本', { memoryId: id });
+      const version = (memory.history || []).find(item => item.id === versionId);
+      if (!version) throw failure('MEMORY_VERSION_NOT_FOUND', '找不到要恢复的偏好版本', { memoryId: id, versionId });
+      const currentContent = Object.fromEntries(['preference', 'reason', 'example', 'counterexample'].map(field => [field, memory[field] || '']));
+      const history = [...(memory.history || []), { id: newId('memory-version'), ...currentContent, savedAt: memory.updatedAt || now() }].slice(-10);
+      const updated = schema.normalizeWritingMemory({ ...memory, ...Object.fromEntries(['preference', 'reason', 'example', 'counterexample']
+        .map(field => [field, version[field] || ''])), history, updatedAt: now() });
+      await saveMemory(updated);
+      memories.set(id, updated);
+      return copy(updated);
+    }
+    async function setMemorySkipped(id, memoryId, skipped) {
+      if (typeof skipped !== 'boolean') throw failure('INVALID_INPUT', '跳过状态必须是布尔值', { articleId: id, memoryId });
+      const w = workspace(id);
+      if (!getRelevantMemories(w.genre, id, { includeSkipped: true }).some(item => item.id === memoryId)) {
+        throw failure('MEMORY_NOT_APPLICABLE', '该偏好不适用于当前写作任务', { articleId: id, memoryId });
+      }
+      const excluded = new Set(w.article.skippedMemoryIds || []);
+      const previous = [...excluded];
+      const previousUpdatedAt = w.article.updatedAt;
+      if (skipped) excluded.add(memoryId); else excluded.delete(memoryId);
+      w.article.skippedMemoryIds = [...excluded];
+      w.article.updatedAt = now();
+      try { await saveWorkspace(w); }
+      catch (error) { w.article.skippedMemoryIds = previous; w.article.updatedAt = previousUpdatedAt; throw error; }
+      return getRelevantMemories(w.genre, id);
     }
     async function deleteMemory(id) {
       const memory = findMemory(id);
       // 跨篇记忆删除后保留原候选墓碑；单篇删除不扩大为全局抑制。
       if (memory.scope !== 'article') {
-        memory.sourcePreferenceKey ||= key(memory.preference);
-        await undoMemory(id);
+        const updated = schema.normalizeWritingMemory({ ...memory, sourcePreferenceKey: memory.sourcePreferenceKey || key(memory.preference),
+          status: memory.status === 'pending' ? 'ignored' : 'confirmed', enabled: false,
+          undo: { ...memory.undo, memoryId: id, undoneAt: now() }, updatedAt: now() });
+        await saveMemory(updated);
+        memories.set(id, updated);
         return { deleted: true, memoryId: id };
       }
       await persist(s => ({ ...s, writingMemories: (s.writingMemories || []).filter(m => m.id !== id) }), { memoryId: id });
@@ -1287,9 +1611,11 @@
     }
     async function undoMemory(id) {
       const memory = findMemory(id);
-      memory.undo = { ...memory.undo, memoryId: id, undoneAt: now() };
-      memory.updatedAt = now();
-      await saveMemory(memory);
+      const updated = schema.normalizeWritingMemory({ ...memory,
+        status: memory.status === 'pending' ? 'ignored' : 'confirmed', enabled: false,
+        undo: { ...memory.undo, memoryId: id, undoneAt: now() }, updatedAt: now() });
+      await saveMemory(updated);
+      memories.set(id, updated);
       return { undone: true, memoryId: id };
     }
     async function promotePreferences() {
@@ -1311,23 +1637,25 @@
         const namespace = schema.getWritingGenreConfig(genre)?.memoryNamespace || '';
         const existing = [...memories.values()].find(m => (m.scope === 'general' || m.scope === 'genre' && m.genre === namespace)
           && (key(m.preference) === normalizedKey || m.sourcePreferenceKey === normalizedKey));
-        if (existing?.undo?.undoneAt) continue;
+        if (existing?.status === 'ignored' || existing?.undo?.undoneAt) continue;
         if (existing) {
           const ids = [...new Set([...existing.evidenceArticleIds, ...candidate.ids])];
           if (ids.length !== existing.evidenceArticleIds.length || pendingMemories.has(existing.id)) {
-            existing.evidenceArticleIds = ids;
-            existing.updatedAt = now();
-            await saveMemory(existing);
+            const updated = schema.normalizeWritingMemory({ ...existing, evidenceArticleIds: ids, updatedAt: now() });
+            await saveMemory(updated);
+            memories.set(existing.id, updated);
           }
           continue;
         }
         const id = newId('memory');
         const memory = schema.normalizeWritingMemory({ ...candidate, id, scope: 'genre', genre: namespace, sourcePreferenceKey: normalizedKey,
           sourceArticleId: [...candidate.ids][0], evidenceArticleIds: [...candidate.ids],
+          origin: 'repeated-round', status: 'pending', enabled: false,
+          reason: '在多篇稿件中重复提交的本轮偏好，待用户确认后才会应用。',
           undo: { action: 'auto-promote', memoryId: id }, createdAt: now(), updatedAt: now() });
-        memories.set(id, memory);
         await saveMemory(memory);
-        notifications.push({ type: 'memory-promoted', message: '已记住跨文章重复偏好，可撤销', memoryId: id, undoId: id });
+        memories.set(id, memory);
+        notifications.push({ type: 'memory-candidate', message: '发现跨文章重复的偏好建议；确认后才会应用。', memoryId: id });
       }
       return notifications;
     }
@@ -1342,16 +1670,16 @@
       memories.clear(); pendingMemories.clear(); loadMemories();
       return listArticles();
     }
-    return { analyzeTask, createArticle, openArticle: getWorkspace, getWorkspace, listArticles, updateArticle, appendRound,
-      addUnit, updateUnit, archiveUnit, setMaterialUnits, addIssue, updateIssue, listRoutes, selectRoute, advanceRoute,
+    return { analyzeTask, createArticle, openArticle: getWorkspace, getWorkspace, listArticles, listMemories, updateArticle, appendRound, decideRoundDraft,
+      addUnit, updateUnit, archiveUnit, setMaterialUnits, addIssue, updateIssue, recordResourceUsage, listRoutes, selectRoute, advanceRoute,
       updateLongformProject, saveLongformItem, reviewLongformImpact,
       getMaterialCoverage, setMaterialCoverage, startMaterialBatch, recordMaterialBatchOutcome,
       confirmMaterialBatch, retryMaterialBatch, excludeMaterialFromCoverage,
       recordPromptVersion, markPromptVersionCopied, compareRounds, continueFromRound,
       setSaveEnabled, deleteArticle, getRounds: id => copy(workspace(id).rounds),
       readRound: (id, roundId) => copy(roundFor(id, roundId)), correctStyleProfile,
-      build, diagnose: build, runModelDiagnosis, selectMaterials, rememberPreference,
-      editMemory, deleteMemory, undoMemory, getRelevantMemories, refreshFromStorage, reset: refreshFromStorage,
+      build, diagnose: build, runModelDiagnosis, selectMaterials, rememberPreference, confirmMemory, ignoreMemory, restoreMemory,
+      setMemoryEnabled, setMemorySkipped, restoreMemoryVersion, editMemory, deleteMemory, undoMemory, getRelevantMemories, refreshFromStorage, reset: refreshFromStorage,
       previewResearch, approveResearch, rejectResearch, cancelResearch, getResearchState };
   }
   return { createWritingWorkbenchCoordinator };

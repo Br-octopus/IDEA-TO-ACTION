@@ -1,4 +1,5 @@
 const MODEL_TIMEOUT_MS = 30_000;
+const MAX_MODEL_TIMEOUT_MS = 120_000;
 
 const MODEL_CODES = Object.freeze({
   NOT_CONFIGURED: 'MODEL_NOT_CONFIGURED',
@@ -77,7 +78,7 @@ function createModelClient(config = {}, { fetchImpl = globalThis.fetch, timeoutM
 
     const requestedTimeout = Number(options.timeoutMs);
     const duration = Number.isFinite(requestedTimeout) && requestedTimeout > 0
-      ? Math.max(1, Math.floor(requestedTimeout)) : timeoutMs;
+      ? Math.min(MAX_MODEL_TIMEOUT_MS, Math.max(1, Math.floor(requestedTimeout))) : timeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), duration);
     try {
@@ -115,7 +116,7 @@ function createModelClient(config = {}, { fetchImpl = globalThis.fetch, timeoutM
     }
   }
 
-  return { configured: isConfigured(config), name, request };
+  return { configured: isConfigured(config), baseUrl, name, request };
 }
 
-module.exports = { MODEL_TIMEOUT_MS, MODEL_CODES, normalizeModelError, createModelClient, extractText, normalizeUsage };
+module.exports = { MODEL_TIMEOUT_MS, MAX_MODEL_TIMEOUT_MS, MODEL_CODES, normalizeModelError, createModelClient, extractText, normalizeUsage };

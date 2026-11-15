@@ -23,6 +23,7 @@
       .filter(Boolean);
     return knowledgeSchema.normalizeKnowledgeEntry({
       id: reference.id,
+      version: reference.version,
       type: reference.kind === "guide" || reference.sourceType?.includes("文章")
         ? "article-summary"
         : "github-summary",

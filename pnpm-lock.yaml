@@ -11,6 +11,9 @@ importers:
       '@napi-rs/canvas':
         specifier: 1.0.13
         version: 1.0.13
+      '@silurus/ooxml':
+        specifier: 0.89.9
+        version: 0.89.9
       '@tesseract.js-data/chi_sim':
         specifier: 1.0.0
         version: 1.0.0
@@ -188,6 +191,9 @@ packages:
   '@peculiar/webcrypto@1.7.1':
     resolution: {integrity: sha512-ODOov0sGMJMf3jPonOkgGqPknTsu+DdQ7kD++gz8aI+aFMOMHFbWAA2taqXXVTdP+OTOQR/znGvSpmkeI0WTYQ==}
     engines: {node: '>=14.18.0'}
+
+  '@silurus/ooxml@0.89.9':
+    resolution: {integrity: sha512-Qd+QNp8k9lKDmdUjlR48VqCNKeQpFItG5ySTthrPVlMg7OWrVoXEyEjrysSmKmChA567CstWIbVQase1NFFFoA==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -1398,6 +1404,8 @@ snapshots:
       '@peculiar/utils': 2.0.3
       tslib: 2.8.1
       webcrypto-core: 1.9.2
+
+  '@silurus/ooxml@0.89.9': {}
 
   '@sindresorhus/is@4.6.0': {}
 
