@@ -303,6 +303,7 @@ test('HTML 原生预览随工作台三态拖动隐藏、恢复，详情覆盖层
   const context = {
     activeView: 'project',
     currentLayoutMode: 'split',
+    workbenchDrag: null,
     desktopApi: { pptFeedback: {
       setPreviewBounds: (_id, value) => bounds.push(value),
       openPreview: async () => ({ status: 'opened' }),
