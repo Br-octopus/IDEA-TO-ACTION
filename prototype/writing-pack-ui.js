@@ -16,6 +16,7 @@
     let open = false;
     let editing = null; // { basePack: boolean, packId?: string, form: {...} }
     let detailId = '';
+    let refreshWorkbench = () => {};
     const state = () => getState() || {};
 
     function layerLabel(p) {
@@ -35,7 +36,11 @@
     }
 
     function render() {
-      if (!open) return;
+      refreshWorkbench();
+    }
+
+    function renderManager() {
+      if (!open) return '';
       const packs = packCoordinator.listPacks();
       const selection = packCoordinator.getSelection();
       const rows = packs.map(p => {
@@ -66,7 +71,7 @@
           </div>`;
       }).join('');
       const editor = editing ? renderEditor() : '';
-      mount.innerHTML = `
+      return `
         <section class="writing-pack-manager">
           <h2>专业基础包</h2>
           <div class="social-tools">
@@ -79,6 +84,12 @@
           ${rows || '<p>暂无包。</p>'}
         </section>`;
     }
+
+    mount.addEventListener('input', event => {
+      if (!editing || !event.target?.id?.startsWith('pack-field-')) return;
+      const field = event.target.id.slice('pack-field-'.length);
+      if (Object.hasOwn(editing.form, field)) editing.form[field] = event.target.value;
+    });
 
     function renderEditor() {
       const f = editing.form;
@@ -122,42 +133,42 @@
       } catch (error) {
         notify(`保存失败：${error.message}`);
       }
-      render();
+      refreshWorkbench();
     }
 
     async function handle(action, data) {
       if (action === 'pack-open') { open = true; render(); return; }
-      if (action === 'pack-close') { open = false; mount.innerHTML = ''; return; }
-      if (action === 'pack-new') { editing = { isNew: true, form: toForm({}) }; render(); return; }
+      if (action === 'pack-close') { open = false; refreshWorkbench(); return; }
+      if (action === 'pack-new') { editing = { isNew: true, form: toForm({}) }; refreshWorkbench(); return; }
       if (action === 'pack-edit') {
         const pack = packCoordinator.getPack(data.packId);
         editing = { packId: data.packId, builtinBase: pack?.builtin === true, form: toForm(pack || {}) };
-        render();
+        refreshWorkbench();
         return;
       }
-      if (action === 'pack-cancel') { editing = null; render(); return; }
+      if (action === 'pack-cancel') { editing = null; refreshWorkbench(); return; }
       if (action === 'pack-save') { await save(); return; }
-      if (action === 'pack-detail') { detailId = detailId === data.packId ? '' : data.packId; render(); return; }
-      if (action === 'pack-duplicate') { try { await packCoordinator.duplicatePack(data.packId); notify('已复制'); } catch (error) { notify(`复制失败：${error.message}`); } render(); return; }
+      if (action === 'pack-detail') { detailId = detailId === data.packId ? '' : data.packId; refreshWorkbench(); return; }
+      if (action === 'pack-duplicate') { try { await packCoordinator.duplicatePack(data.packId); notify('已复制'); } catch (error) { notify(`复制失败：${error.message}`); } refreshWorkbench(); return; }
       if (action === 'pack-toggle') {
         const pack = packCoordinator.getPack(data.packId);
         try { await packCoordinator.setPackEnabled(data.packId, !(pack?.enabled !== false)); notify(pack?.enabled !== false ? '已停用' : '已启用'); }
         catch (error) { notify(`操作失败：${error.message}`); }
-        render();
+        refreshWorkbench();
         return;
       }
       if (action === 'pack-restore') {
         if (!confirm('恢复内置包将丢弃该包的自定义副本，确定吗？')) return;
         try { await packCoordinator.restoreBuiltin(data.packId); notify('已恢复内置'); }
         catch (error) { notify(`恢复失败：${error.message}`); }
-        render();
+        refreshWorkbench();
         return;
       }
       if (action === 'pack-delete') {
         if (!confirm(`确定删除包 ${data.packId} 吗？此操作不可撤销。`)) return;
         try { await packCoordinator.deletePack(data.packId); notify('已删除'); }
         catch (error) { notify(`删除失败：${error.message}`); }
-        render();
+        refreshWorkbench();
         return;
       }
       if (action === 'pack-import-open') {
@@ -171,7 +182,7 @@
           await packCoordinator.confirmImport(preview);
           notify('导入成功');
         } catch (error) { notify(`导入失败：${error.message}`); }
-        render();
+        refreshWorkbench();
         return;
       }
       if (action === 'pack-export-open') {
@@ -186,15 +197,20 @@
       }
     }
 
-    function getSelection() { return packCoordinator.getSelection(); }
-
     mount.addEventListener('click', async event => {
       const target = event.target?.closest?.('[data-action]');
       if (!target || target.disabled) return;
       event.preventDefault();
       await handle(target.dataset.action, target.dataset);
     });
-    return { render, handle, getSelection, get isOpen() { return open; } };
+    return {
+      render,
+      renderManager,
+      connectWorkbenchRenderer(callback) { refreshWorkbench = typeof callback === 'function' ? callback : () => {}; },
+      get isOpen() { return open; },
+      getSelection() { return packCoordinator.getSelection(); },
+      async handle(action, data) { return handle(action, data); }
+    };
   }
 
   return { createWritingPackUI };

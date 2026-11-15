@@ -101,6 +101,8 @@
       const labels = config?.targetFields || articleConfig.targetFields;
       const locked = busy.has(articleId);
       const articles = coordinator.listArticles();
+      const packManager = packUI?.renderManager?.() || '';
+      if (packUI?.connectWorkbenchRenderer) packUI.connectWorkbenchRenderer(render);
       mount.innerHTML = `<section class="social-panel">
         <div class="social-tools"><h2>写作工作台</h2>${button('new', '新建文章')}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}${button('manage-packs', '专业基础包')}</div>
         <label class="field" for="writing-article-list"><span class="field-label">文章列表</span><select id="writing-article-list"><option value="">新文章</option>${articles.map(a => `<option value="${escape(a.id)}" ${a.id === articleId ? 'selected' : ''}>${escape(a.title || a.goal || '未命名文章')}</option>`).join('')}</select></label>
@@ -133,7 +135,7 @@
         <label class="field" for="writing-memory-scope"><span class="field-label">显式记忆范围</span><select id="writing-memory-scope" data-writing-field="scope">${Object.entries(scopeLabels).map(([value, label]) => `<option value="${value}" ${f.scope === value ? 'selected' : ''}>${escape(label)}</option>`).join('')}</select></label>
         ${button('remember', '记住这个偏好', '', !w || locked)}${renderNotifications(f)}
       </section>
-      ${renderHistory(w, f)}${renderMemories(w)}`;
+      ${renderHistory(w, f)}${renderMemories(w)}${packManager}`;
     }
     function renderMaterials(f) {
       return f.materials.map((m, i) => `<div class="writing-material"><h3>材料 ${i + 1}</h3>
@@ -194,6 +196,7 @@
       if (action === 'new') { if (articleId) coordinator.cancelResearch(articleId); articleId = ''; render(); return; }
       if (action === 'manage-memories') { managerOpen = !managerOpen; render(); return; }
       if (action === 'manage-packs') { packUI && packUI.handle('pack-open'); return; }
+      if (action.startsWith('pack-')) { await packUI?.handle(action, data); return; }
       const id = articleId;
       const f = form(id);
       if (action === 'cancel-research') { coordinator.cancelResearch(id); render(); return; }
@@ -308,10 +311,10 @@
       else capture(target);
     });
     mount.addEventListener('click', event => {
-      const target = event.target.closest('[data-writing-action]');
+      const target = event.target.closest('[data-writing-action], [data-action]');
       if (!target || target.disabled) return;
       event.preventDefault();
-      return operate(target.dataset.writingAction, target.dataset);
+      return operate(target.dataset.writingAction || target.dataset.action, target.dataset);
     });
     render();
     return { render, openArticle(id) { if (articleId && articleId !== id) coordinator.cancelResearch(articleId); articleId = id || ''; render(); },
