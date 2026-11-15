@@ -70,13 +70,20 @@ test('全部标签关闭后恢复原资料草稿，版本变化时不恢复旧�
 });
 function fixture() {
   assert.notEqual(start, -1, '标签开关实现存在');
-  const context = { window: { addEventListener() {} }, document: { addEventListener() {} } };
+  const layouts = new Map();
+  const context = {
+    window: { addEventListener() {} }, document: { addEventListener() {} },
+    getWorkbenchSessionLayout(project) {
+      if (!layouts.has(project.id)) layouts.set(project.id, { mode: 'chat', ratio: 0.5, lastSide: 'chat' });
+      return layouts.get(project.id);
+    }
+  };
   vm.createContext(context);
   vm.runInContext(app.slice(start, app.indexOf('  function renderWorkbenchMaterial(', start)), context);
   const attachments = ['a', 'b', 'c'].map(id => ({ id }));
-  const project = { id: 'task', workbenchAttachmentId: 'b', workbenchLayout: 'preview',
+  const project = { id: 'task', workbenchAttachmentId: 'b',
     conversationDraft: '未发送的想法', workbenchViewerState: { b: { pageIndex: 1, zoom: 1.25, scrollTop: 125 } } };
-  return { context, project, attachments };
+  return { context, project, attachments, layouts };
 }
 test('关闭当前资料选右侧相邻标签，原资料、意见草稿和查看位置仍保留', () => {
   const { context, project, attachments } = fixture();
@@ -95,18 +102,31 @@ test('关闭末尾当前标签改选左侧，关闭非当前标签保持当前�
   context.closeWorkbenchAttachment(project, 'c', attachments);
   assert.equal(project.workbenchAttachmentId, 'b');
 });
-test('全部标签关闭后回到对话，序列化重开任务保持关闭状态', () => {
-  const { context, project, attachments } = fixture();
+test('关闭最后资料回到对话；主动重开资料不改变布局', () => {
+  const { context, project, attachments, layouts } = fixture();
   for (const attachment of attachments) context.closeWorkbenchAttachment(project, attachment.id, attachments);
   assert.equal(project.workbenchAttachmentId, '');
-  assert.equal(project.workbenchLayout, 'chat');
+  assert.equal(layouts.get(project.id).mode, 'chat');
   const restored = JSON.parse(JSON.stringify(project));
   assert.equal(context.getWorkbenchOpenAttachments(restored, attachments).length, 0);
   context.openWorkbenchAttachment(restored, 'b');
-  assert.equal(restored.workbenchLayout, 'split');
+  assert.equal(layouts.get(project.id).mode, 'chat');
   assert.equal(restored.workbenchPreviewMode, 'material');
   assert.equal(restored.workbenchViewerState.b.pageIndex, 1);
   assert.equal(context.getWorkbenchOpenAttachments(restored, attachments)[0].id, 'b');
+});
+test('关闭最后资料时优先返回最近实际查看且仍有效的内容', () => {
+  const { context, project, attachments, layouts } = fixture();
+  context.getWorkbenchSessionLayout(project);
+  project.idea = '整理周报';
+  project.workbenchGeneratedPrompt = '已有提示词';
+  project.workbenchVisitedPreviewModes = ['task', 'prompt'];
+  layouts.get(project.id).mode = 'preview';
+  context.closeWorkbenchAttachment(project, 'b', attachments);
+  context.closeWorkbenchAttachment(project, 'c', attachments);
+  context.closeWorkbenchAttachment(project, 'a', attachments);
+  assert.equal(project.workbenchPreviewMode, 'prompt');
+  assert.equal(layouts.get(project.id).mode, 'preview');
 });
 test('已关闭资料由来源跳转重开时不清除其他资料的关闭状态', () => {
   const { context, project, attachments } = fixture();
