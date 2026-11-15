@@ -11,6 +11,22 @@ const {
 const { toKnowledgeEntry } = require('../prototype/research-catalog.js');
 const { methodCardsToKnowledgeEntries } = require('../prototype/method-cards.js');
 
+test('空搜索优先显示刚保存的资料，不把派生资料重新索引当成刚更新', () => {
+  const state = {
+    knowledgeEntries: [{ id: 'manual-new', title: '刚保存的资料', summary: '用于当前任务', updatedAt: '2026-11-13T05:00:00.000Z' }],
+    prompts: [{ id: 'saved-prompt', title: '旧提示词', createdAt: '2025-01-01T00:00:00.000Z' }],
+    cases: [{ id: 'saved-case', confirmed: true, goal: '旧案例', createdAt: '2025-01-01T00:00:00.000Z' }]
+  };
+  const sources = {
+    references: Array.from({ length: 13 }, (_, index) => ({ id: `reference-${index}`, title: `内置资料 ${index}`, updatedAt: '未核对' })),
+    methodCards: [{ id: 'method-old', title: '内置方法卡' }]
+  };
+  const first = collectKnowledgeEntries(state, sources);
+  const second = collectKnowledgeEntries(state, sources);
+  assert.deepEqual(second.map(entry => entry.updatedAt), first.map(entry => entry.updatedAt));
+  assert.equal(searchKnowledge(second, '', { limit: 12 })[0].id, 'manual-new');
+});
+
 function loadBrowserKnowledgeSearch(segmenter, { unstableSort = false, includeDictionary = true } = {}) {
   const intl = Object.create(Intl);
   if (arguments.length > 0) intl.Segmenter = segmenter;
@@ -210,6 +226,7 @@ test('不同来源使用同名 id 时各自保留，同一来源仍然去重', (
 test('转换公开资料和提示词时只保留摘要与正文摘录', () => {
   const reference = toKnowledgeEntry({
     id: 'guide-1',
+    version: 7,
     kind: 'guide',
     title: '文章教程',
     sourceType: '文章',
@@ -222,6 +239,7 @@ test('转换公开资料和提示词时只保留摘要与正文摘录', () => {
   }).find(item => item.id === 'prompt-p1');
 
   assert.equal(reference.type, 'article-summary');
+  assert.equal(reference.version, 7);
   assert.equal(reference.verificationStatus, 'unverified');
   assert.equal(reference.summary, '短摘要');
   assert.equal(prompt.summary, '测试记录');
@@ -232,9 +250,10 @@ test('转换公开资料和提示词时只保留摘要与正文摘录', () => {
 test('案例 nextPrompt 只保留有限长度摘要', () => {
   const nextPrompt = '案例中的完整下一步提示词和可能包含的敏感内容'.repeat(100);
   const entry = collectKnowledgeEntries({
-    cases: [{ id: 'long', confirmed: true, status: '成功', nextPrompt }]
+    cases: [{ id: 'long', confirmed: true, status: '成功', currentVersion: 4, nextPrompt }]
   }).find(item => item.id === 'case-long');
 
+  assert.equal(entry.version, 4);
   assert.equal(entry.contentExcerpt.length, 240);
   assert.equal(entry.contentExcerpt, nextPrompt.slice(0, 240));
   assert.equal(entry.contentExcerpt.includes(nextPrompt.slice(240)), false);
@@ -254,9 +273,10 @@ test('只有 verified === true 的提示词才标记为用户确认', () => {
   assert.equal(entries.find(item => item.id === 'prompt-missing').verificationStatus, 'unverified');
 });
 
-test('方法卡转换导出统一条目', () => {
-  const entries = methodCardsToKnowledgeEntries([{ id: 'writing', title: '写作方法', guidance: '检查句式' }]);
+test('方法卡转换导出统一条目并保留版本', () => {
+  const entries = methodCardsToKnowledgeEntries([{ id: 'writing', version: 3, title: '写作方法', guidance: '检查句式' }]);
   assert.deepEqual(entries.map(item => item.id), ['method-writing']);
+  assert.equal(entries[0].version, 3);
   assert.equal(entries[0].type, 'method-card');
   assert.equal(entries[0].verificationStatus, 'source-reviewed');
   assert.equal(entries[0].reusablePatterns, '检查句式');

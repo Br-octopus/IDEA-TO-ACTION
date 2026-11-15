@@ -9,15 +9,36 @@ const { normalizeSocialResult } = require('./prototype/social-research-schema');
 const { createAcademicLiteratureClient } = require('./server/academic-literature-client');
 const { createWritingMaterialParser } = require('./server/writing-material-parser');
 const { createWebPageReader } = require('./server/web-page-reader');
+const { createWritingAssistantClient, validateBaseUrl } = require('./server/writing-assistant-client');
+const { createWritingResourceRunner } = require('./server/writing-resource-runner');
+const { getBuiltinWritingPacks } = require('./prototype/writing-pack-catalog');
 
 const ROOT = __dirname;
 const DEFAULT_PORT = Number(process.env.PORT || 4173);
 const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
+const APP_CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data: blob:",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "frame-src 'none'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'"
+].join('; ');
+const DEFAULT_WRITING_RESOURCE_ARCHIVES = {
+  'softcopyright-evidence-skill': process.env.SOFTCOPYRIGHT_EVIDENCE_SKILL_ARCHIVE || 'D:/百度网盘下载文件/软著材料skill/软著材料skill.zip',
+  'softcopyright-materials-skill': process.env.SOFTCOPYRIGHT_MATERIALS_SKILL_ARCHIVE || 'D:/夸克/软著申请资料skill/SoftwareCopyright-Skill-main(1).zip'
+};
 const ENV_CONFIG = {
   model: {
     baseUrl: process.env.MODEL_BASE_URL || '',
     apiKey: process.env.MODEL_API_KEY || '',
-    name: process.env.MODEL_NAME || 'gpt-4o-mini'
+    name: process.env.MODEL_NAME || 'gpt-6-sol'
   },
   search: {
     baseUrl: process.env.SEARCH_API_URL || '',
@@ -77,20 +98,45 @@ function safeFilePath(urlPath) {
 }
 
 function serveStatic(req, res) {
-  const filePath = safeFilePath(new URL(req.url, `http://${req.headers.host}`).pathname);
+  const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
+  const filePath = safeFilePath(pathname);
   if (!filePath) return sendJson(res, 403, { error: '禁止访问该路径' });
   fs.readFile(filePath, (error, content) => {
     if (error) return sendJson(res, 404, { error: '找不到页面' });
-    const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8' };
-    res.writeHead(200, { 'content-type': types[path.extname(filePath)] || 'application/octet-stream' });
+    const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.wasm': 'application/wasm' };
+    const headers = { 'content-type': types[path.extname(filePath)] || 'application/octet-stream' };
+    if (pathname === '/' || pathname === '/prototype/index.html') {
+      headers['content-security-policy'] = APP_CONTENT_SECURITY_POLICY;
+    }
+    res.writeHead(200, headers);
     res.end(content);
   });
 }
 
-function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch, socialTimeoutMs, academicFetchImpl = globalThis.fetch, academicTimeoutMs, writingMaterialParser = createWritingMaterialParser(), webPageReader = createWebPageReader() } = {}) {
-  const modelClient = createModelClient(config.model);
-  const searchClient = createSearchClient(config.search);
+function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch, socialTimeoutMs, academicFetchImpl = globalThis.fetch, academicTimeoutMs, writingAssistantFetchImpl = globalThis.fetch, writingMaterialParser = createWritingMaterialParser(), webPageReader = createWebPageReader(), writingResourceRunner } = {}) {
+  let currentModelConfig = { ...config.model };
+  let modelClient = createModelClient(currentModelConfig);
+  let currentSearchConfig = { ...config.search };
+  let searchClient = createSearchClient(currentSearchConfig);
+  let currentWritingAssistantConfig = { ...(config.writingAssistant || {}) };
+  function resolvedWritingAssistantConfig() {
+    if (currentWritingAssistantConfig.reuseModelConnection !== true) return currentWritingAssistantConfig;
+    return { ...currentWritingAssistantConfig, baseUrl: currentModelConfig.baseUrl, apiKey: currentModelConfig.apiKey };
+  }
+  function writingAssistantClient() {
+    return createWritingAssistantClient(resolvedWritingAssistantConfig(), { fetchImpl: writingAssistantFetchImpl });
+  }
+  function publicWritingAssistantConfig() {
+    const client = writingAssistantClient();
+    return { configured: client.configured, mode: client.mode || currentWritingAssistantConfig.mode || '',
+      baseUrl: client.baseUrl || '', modelId: client.modelId || currentWritingAssistantConfig.modelId || '',
+      reuseModelConnection: currentWritingAssistantConfig.reuseModelConnection === true };
+  }
   const academicLiteratureClient = createAcademicLiteratureClient({ fetchImpl: academicFetchImpl, timeoutMs: academicTimeoutMs });
+  const resourceRunner = writingResourceRunner || createWritingResourceRunner({
+    resources: getBuiltinWritingPacks().flatMap(pack => pack.resources || []),
+    resourceArchives: config.writingResourceArchives || DEFAULT_WRITING_RESOURCE_ARCHIVES
+  });
   return http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
@@ -99,7 +145,189 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
       return res.end();
     }
     if (req.method === 'GET' && requestUrl.pathname === '/api/config') {
-      return sendJson(res, 200, { model: { configured: modelClient.configured, name: modelClient.name }, search: { configured: searchClient.configured } });
+      return sendJson(res, 200, { model: { configured: modelClient.configured, baseUrl: modelClient.baseUrl, name: modelClient.name }, search: { configured: searchClient.configured, baseUrl: searchClient.baseUrl }, writingAssistant: publicWritingAssistantConfig() });
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/config/services') {
+      const remoteAddress = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      const origin = typeof req.headers.origin === 'string' ? new URL(req.headers.origin) : null;
+      const requestHost = String(req.headers.host || '').toLowerCase();
+      const originHost = origin?.host.toLowerCase();
+      const originIsLoopback = origin && origin.protocol === 'http:'
+        && ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname.toLowerCase())
+        && Number(origin.port) === req.socket.localPort;
+      if ((remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') || !originIsLoopback
+        || originHost !== requestHost
+        || (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')) {
+        return sendJson(res, 403, { code: 'SERVICE_CONFIG_LOCAL_ONLY', message: '服务设置仅允许当前本机应用页面修改。' });
+      }
+      const body = await readBody(req, 16_384);
+      if (Object.keys(body).some(key => !['model', 'search', 'writingAssistant'].includes(key))) {
+        return sendJson(res, 400, { code: 'SERVICE_CONFIG_INVALID_REQUEST', message: '服务配置格式无效。' });
+      }
+      function normalizeServiceConfig(section, current, requiresName) {
+        if (section === undefined) return null;
+        if (!section || typeof section !== 'object' || Array.isArray(section)
+          || Object.keys(section).some(key => !['baseUrl', 'name', 'apiKey'].includes(key))) return false;
+        const baseUrl = typeof section.baseUrl === 'string' ? section.baseUrl.trim() : '';
+        const name = typeof section.name === 'string' ? section.name.trim() : '';
+        const submittedKey = typeof section.apiKey === 'string' ? section.apiKey.trim() : '';
+        if ([section.baseUrl, section.name, section.apiKey].some(value => value !== undefined && typeof value !== 'string')
+          || baseUrl.length > 2_048 || name.length > 160 || submittedKey.length > 4_096) return false;
+        if (!baseUrl && !name && !submittedKey) return null;
+        if (!baseUrl || (requiresName && !name)) return false;
+        let endpoint;
+        try { endpoint = new URL(baseUrl); } catch {}
+        const localEndpoint = endpoint && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname.toLowerCase());
+        if (!endpoint || !['https:', ...(localEndpoint ? ['http:'] : [])].includes(endpoint.protocol)
+          || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return false;
+        const apiKey = submittedKey || current.apiKey || '';
+        if (!apiKey) return false;
+        return { baseUrl: endpoint.toString().replace(/\/$/, ''), ...(requiresName ? { name } : {}), apiKey };
+      }
+      const modelConfig = normalizeServiceConfig(body.model, currentModelConfig, true);
+      const searchConfig = normalizeServiceConfig(body.search, currentSearchConfig, false);
+      let writingAssistantConfig = null;
+      if (body.writingAssistant !== undefined) {
+        const input = body.writingAssistant;
+        const modes = ['system-one', 'decisions', 'openai-chat-completions'];
+        if (!input || typeof input !== 'object' || Array.isArray(input)
+          || Object.keys(input).some(key => !['mode', 'baseUrl', 'modelId', 'apiKey', 'reuseModelConnection'].includes(key))
+          || [input.mode, input.baseUrl, input.modelId, input.apiKey].some(value => value !== undefined && typeof value !== 'string')
+          || (input.reuseModelConnection !== undefined && typeof input.reuseModelConnection !== 'boolean')) {
+          writingAssistantConfig = false;
+        } else {
+          const mode = (input.mode || currentWritingAssistantConfig.mode || '').trim();
+          const modelId = (input.modelId || currentWritingAssistantConfig.modelId || '').trim();
+          const reuse = input.reuseModelConnection === undefined
+            ? currentWritingAssistantConfig.reuseModelConnection === true : input.reuseModelConnection;
+          const baseUrl = reuse ? currentModelConfig.baseUrl : validateBaseUrl(input.baseUrl || currentWritingAssistantConfig.baseUrl || '');
+          const apiKey = reuse ? currentModelConfig.apiKey : (input.apiKey?.trim() || currentWritingAssistantConfig.apiKey || '');
+          if (!modes.includes(mode) || !modelId || modelId.length > 160 || !baseUrl || !apiKey || apiKey.length > 4_096
+            || (!reuse && !validateBaseUrl(input.baseUrl || currentWritingAssistantConfig.baseUrl || ''))) {
+            writingAssistantConfig = false;
+          } else {
+            writingAssistantConfig = { mode, baseUrl: reuse ? '' : baseUrl, modelId, apiKey: reuse ? '' : apiKey, reuseModelConnection: reuse };
+          }
+        }
+      }
+      if (modelConfig === false || searchConfig === false || writingAssistantConfig === false || (!modelConfig && !searchConfig && !writingAssistantConfig)) {
+        return sendJson(res, 400, { code: 'SERVICE_CONFIG_INVALID', message: '请为要配置的服务填写 HTTPS 地址和 API key；模型还需要填写模型名。本机地址可使用 HTTP。' });
+      }
+      if (modelConfig) {
+        currentModelConfig = modelConfig;
+        modelClient = createModelClient(currentModelConfig);
+      }
+      if (searchConfig) {
+        currentSearchConfig = searchConfig;
+        searchClient = createSearchClient(currentSearchConfig);
+      }
+      if (writingAssistantConfig) currentWritingAssistantConfig = writingAssistantConfig;
+      return sendJson(res, 200, {
+        saved: true,
+        model: { configured: modelClient.configured, baseUrl: modelClient.baseUrl, name: modelClient.name },
+        search: { configured: searchClient.configured, baseUrl: searchClient.baseUrl },
+        writingAssistant: publicWritingAssistantConfig()
+      });
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/writing-assistant/test') {
+      const remoteAddress = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      const origin = typeof req.headers.origin === 'string' ? new URL(req.headers.origin) : null;
+      const originIsLoopback = origin && origin.protocol === 'http:'
+        && ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname.toLowerCase())
+        && Number(origin.port) === req.socket.localPort;
+      if ((remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') || !originIsLoopback
+        || origin.host.toLowerCase() !== String(req.headers.host || '').toLowerCase()
+        || (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')) {
+        return sendJson(res, 403, { code: 'SERVICE_CONFIG_LOCAL_ONLY', message: '连接测试仅允许当前本机应用页面发起。' });
+      }
+      const body = await readBody(req, 16_384);
+      if (Object.keys(body).some(key => key !== 'writingAssistant')) return sendJson(res, 400, { code: 'SERVICE_CONFIG_INVALID_REQUEST', message: '连接测试只接受辅助服务配置，不接受任务或文件内容。' });
+      let client = writingAssistantClient();
+      if (body.writingAssistant !== undefined) {
+        const input = body.writingAssistant;
+        const modes = ['system-one', 'decisions', 'openai-chat-completions'];
+        const validShape = input && typeof input === 'object' && !Array.isArray(input)
+          && Object.keys(input).every(key => ['mode', 'baseUrl', 'modelId', 'apiKey', 'reuseModelConnection'].includes(key))
+          && [input.mode, input.baseUrl, input.modelId, input.apiKey].every(value => value === undefined || typeof value === 'string')
+          && (input.reuseModelConnection === undefined || typeof input.reuseModelConnection === 'boolean');
+        if (!validShape) return sendJson(res, 400, { code: 'SERVICE_CONFIG_INVALID_REQUEST', message: '辅助服务配置格式无效。' });
+        const reuse = input.reuseModelConnection === true;
+        const testConfig = reuse
+          ? { mode: input.mode, modelId: input.modelId, baseUrl: currentModelConfig.baseUrl, apiKey: currentModelConfig.apiKey }
+          : { mode: input.mode, modelId: input.modelId, baseUrl: input.baseUrl, apiKey: input.apiKey };
+        if (!modes.includes(testConfig.mode) || !testConfig.modelId?.trim() || testConfig.modelId.length > 160
+          || !validateBaseUrl(testConfig.baseUrl) || !testConfig.apiKey?.trim() || testConfig.apiKey.length > 4_096) {
+          return sendJson(res, 400, { code: 'SERVICE_CONFIG_INVALID', message: '请检查辅助服务协议、Base URL、模型 ID 和 API Key；复用主模型时请先配置主模型连接。' });
+        }
+        client = createWritingAssistantClient(testConfig, { fetchImpl: writingAssistantFetchImpl });
+      }
+      const result = await client.testConnection();
+      return sendJson(res, result.ok ? 200 : 502, result);
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/writing-assistant/evaluate') {
+      const remoteAddress = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      const origin = typeof req.headers.origin === 'string' ? new URL(req.headers.origin) : null;
+      const originIsLoopback = origin && origin.protocol === 'http:'
+        && ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname.toLowerCase())
+        && Number(origin.port) === req.socket.localPort;
+      if ((remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') || !originIsLoopback
+        || origin.host.toLowerCase() !== String(req.headers.host || '').toLowerCase()
+        || (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')) {
+        return sendJson(res, 403, { code: 'SERVICE_CONFIG_LOCAL_ONLY', message: '辅助判断仅允许当前本机应用页面发起。' });
+      }
+      const body = await readBody(req, 256 * 1024);
+      if (!Array.isArray(body?.candidates) || body.candidates.length > 10000) {
+        return sendJson(res, 400, { code: 'WRITING_ASSISTANT_INVALID_INPUT', message: '辅助判断候选数量超过本次安全上限。' });
+      }
+      if (body.taskSummary !== undefined && typeof body.taskSummary !== 'string') {
+        return sendJson(res, 400, { code: 'WRITING_ASSISTANT_INVALID_INPUT', message: '辅助判断任务摘要格式无效。' });
+      }
+      const candidates = body.candidates.map(item => ({ id: String(item?.id || '').slice(0, 160), title: String(item?.title || '').slice(0, 200), relativePath: String(item?.relativePath || '').slice(0, 500), excerpt: String(item?.excerpt || '').slice(0, 900) })).filter(item => item.id && item.excerpt);
+      const client = writingAssistantClient();
+      if (!client.configured) return sendJson(res, 503, { code: 'WRITING_ASSISTANT_NOT_CONFIGURED', message: '辅助判断未配置。' });
+      const result = await client.evaluateCandidates(candidates, body.taskSummary || '');
+      return sendJson(res, result.ok ? 200 : 502, { ...result, mode: client.mode, model: client.modelId });
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/writing-resources/execute') {
+      const remoteAddress = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      const origin = typeof req.headers.origin === 'string' ? new URL(req.headers.origin) : null;
+      const originIsLoopback = origin && origin.protocol === 'http:'
+        && ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname.toLowerCase())
+        && Number(origin.port) === req.socket.localPort;
+      if ((remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') || !originIsLoopback
+        || origin.host.toLowerCase() !== String(req.headers.host || '').toLowerCase()) {
+        return sendJson(res, 403, { code: 'RESOURCE_LOCAL_ONLY', message: '资源动作仅允许当前本机应用页面发起。' });
+      }
+      const body = await readBody(req, 64 * 1024);
+      if (Object.keys(body).some(key => !['actionId', 'resourceId', 'rootId', 'params', 'mode'].includes(key))) {
+        return sendJson(res, 400, { code: 'RESOURCE_INVALID_REQUEST', message: '资源动作请求格式无效。' });
+      }
+      try {
+        const result = await resourceRunner.execute(body);
+        return sendJson(res, 200, result);
+      } catch (error) {
+        return sendJson(res, 400, { code: error.code || 'RESOURCE_EXEC_FAILED', message: error.message || '资源动作执行失败。' });
+      }
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/writing-resources/read') {
+      const remoteAddress = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      const origin = typeof req.headers.origin === 'string' ? new URL(req.headers.origin) : null;
+      const originIsLoopback = origin && origin.protocol === 'http:'
+        && ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname.toLowerCase())
+        && Number(origin.port) === req.socket.localPort;
+      if ((remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') || !originIsLoopback
+        || origin.host.toLowerCase() !== String(req.headers.host || '').toLowerCase()) {
+        return sendJson(res, 403, { code: 'RESOURCE_LOCAL_ONLY', message: '资源读取仅允许当前本机应用页面发起。' });
+      }
+      const body = await readBody(req, 16 * 1024);
+      if (Object.keys(body).some(key => !['resourceId', 'relativePath', 'limit'].includes(key))) {
+        return sendJson(res, 400, { code: 'RESOURCE_INVALID_REQUEST', message: '资源读取请求格式无效。' });
+      }
+      try {
+        return sendJson(res, 200, await resourceRunner.read(body));
+      } catch (error) {
+        return sendJson(res, 400, { code: error.code || 'RESOURCE_READ_FAILED', message: error.message || '资源读取失败。' });
+      }
     }
     if (req.method === 'POST' && requestUrl.pathname === '/api/model') {
       const body = await readBody(req);
@@ -138,7 +366,7 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
       if (Object.keys(body).some(key => !allowed.has(key))
         || typeof body.fileName !== 'string' || body.fileName.length > 160
         || typeof body.mimeType !== 'string' || typeof body.dataBase64 !== 'string'
-        || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.dataBase64)) {
+        || body.dataBase64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.dataBase64)) {
         return sendJson(res, 400, { code: 'WRITING_MATERIAL_INVALID_REQUEST', message: '解析请求格式无效。' });
       }
       const extension = path.extname(body.fileName).toLowerCase();
@@ -228,7 +456,8 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
                   : result.code === 'TOO_LARGE' ? 413 : 422;
           return sendJson(res, status, { code: `WRITING_WEB_${result.code}`, message: result.message });
         }
-        return sendJson(res, 200, { title: result.title, finalUrl: result.finalUrl, text: result.text,
+        return sendJson(res, 200, { title: result.title, finalUrl: result.finalUrl, mimeType: result.mimeType, fetchedAt: result.fetchedAt,
+          contentHash: result.contentHash, renderMode: result.renderMode, html: result.html, text: result.text,
           characterCount: result.characterCount, truncated: result.truncated, incomplete: result.incomplete });
       } finally {
         req.off('aborted', abort);
@@ -279,6 +508,10 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
       const results = outcome.map(result => normalizeSocialResult(result));
       return sendJson(res, 200, { platform, results });
     }
+    if (req.method === 'GET' && requestUrl.pathname === '/__workspace_probe__') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end('<!doctype html><meta charset="utf-8">');
+    }
     if (req.method === 'GET') return serveStatic(req, res);
     return sendJson(res, 405, { error: '不支持的请求方法' });
   } catch (error) {
@@ -294,8 +527,8 @@ function createServer({ config = ENV_CONFIG, socialFetchImpl = globalThis.fetch,
   });
 }
 
-function startServer({ port = DEFAULT_PORT, host = DEFAULT_HOST, config = ENV_CONFIG, socialFetchImpl, socialTimeoutMs, academicFetchImpl, academicTimeoutMs, writingMaterialParser, webPageReader } = {}) {
-  const server = createServer({ config, socialFetchImpl, socialTimeoutMs, academicFetchImpl, academicTimeoutMs, writingMaterialParser, webPageReader });
+function startServer({ port = DEFAULT_PORT, host = DEFAULT_HOST, config = ENV_CONFIG, socialFetchImpl, socialTimeoutMs, academicFetchImpl, academicTimeoutMs, writingAssistantFetchImpl, writingMaterialParser, webPageReader, writingResourceRunner } = {}) {
+  const server = createServer({ config, socialFetchImpl, socialTimeoutMs, academicFetchImpl, academicTimeoutMs, writingAssistantFetchImpl, writingMaterialParser, webPageReader, writingResourceRunner });
   return new Promise((resolve, reject) => {
     const onError = error => {
       server.off('listening', onListening);

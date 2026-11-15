@@ -1,10 +1,12 @@
 (function (root, factory) {
   const coverageApi = typeof module === "object" && module.exports
     ? require("./writing-material-coverage.js") : root.ForwardStepWritingMaterialCoverage;
-  const api = factory(coverageApi);
+  const feedbackSchema = typeof module === "object" && module.exports
+    ? require("./ppt-feedback-schema.js") : root.ForwardStepPptFeedbackSchema;
+  const api = factory(coverageApi, feedbackSchema);
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.WritingWorkbenchSchema = api;
-})(typeof globalThis === "undefined" ? this : globalThis, function (coverageApi) {
+})(typeof globalThis === "undefined" ? this : globalThis, function (coverageApi, feedbackSchema) {
   // 文体配置描述提示词可实际消费的领域规则，不写入工作区历史。
   const STRUCTURED_GENRES = {
     'longform-research-article': ['research-brief', 'section-plan', 'section-diagnosis', 'section-revision', 'cross-section-review'],
@@ -130,7 +132,7 @@
   const MATERIAL_PURPOSES = Object.freeze(["content", "style", "both", "requirement"]);
   const MATERIAL_CONTENT_STATES = Object.freeze(["embedded", "truncated", "parsed", "reference-only", "failed", "unsupported"]);
   const MATERIAL_SOURCE_TYPES = Object.freeze([
-    "text-file", "unread-file-reference", "pasted-text", "link", "web-text", "library-entry", "authorized-directory", "pdf", "docx", "image"
+    "text-file", "unread-file-reference", "pasted-text", "link", "web-text", "library-entry", "prompt-library", "authorized-directory", "pdf", "docx", "image"
   ]);
   const MATERIAL_EXTRACTION_METHODS = Object.freeze(["pdf-text", "pdf-ocr", "docx-text", "image-ocr"]);
   const MATERIAL_ORIGINS = Object.freeze([
@@ -162,26 +164,26 @@
 
   const ARTICLE_FIELDS = new Set([
     "id", "title", "genre", "goal", "audience", "platform", "preserveItems", "dimensions", "constraints",
-    "successCriteria", "sourceArticleId", "draft", "saveEnabled", "styleProfileId", "packSelections", "academicTarget",
+    "successCriteria", "sourceArticleId", "draft", "draftRoundId", "saveEnabled", "styleProfileId", "packSelections", "academicTarget", "skippedMemoryIds",
     "createdAt", "updatedAt", "research", "domainInputs"
   ]);
   const MATERIAL_FIELDS = new Set([
-    "id", "title", "purpose", "excerpt", "sourceArticleId", "sourceType", "contentStatus", "contentError", "originalLength",
+    "id", "title", "url", "purpose", "excerpt", "sourceArticleId", "sourceType", "contentStatus", "contentError", "originalLength",
     "sourceId", "origin", "sourceLocator", "sourceVersion", "excerptLocator", "selectionReason", "selectedForPrompt",
     "verificationStatus", "provider", "accessedAt", "license", "applicability", "limitations",
     "attachmentRequired", "unitIds", "extractionMethod", "pageCount", "extractedCharacterCount", "recognitionConfidence"
   ]);
   const SOURCE_FIELDS = new Set([
     "id", "title", "url", "excerpt", "purpose", "verificationStatus", "origin", "contentStatus", "contentError",
-    "sourceType", "sourceId", "sourceLocator", "sourceVersion", "excerptLocator", "selectionReason", "attachmentRequired", "unitIds",
-    "provider", "accessedAt", "license", "applicability", "limitations",
+    "sourceType", "sourceId", "sourceLocator", "sourceVersion", "excerptLocator", "selectionReason", "selectedForPrompt", "attachmentRequired", "unitIds",
+    "provider", "accessedAt", "license", "applicability", "limitations", "annotationSnapshot",
     "extractionMethod", "pageCount", "extractedCharacterCount", "recognitionConfidence"
   ]);
   const ROUND_FIELDS = new Set([
     "id", "articleId", "draft", "feedback", "userFeedback", "revisionNote", "diagnosisParseStatus",
     "parentRoundId", "diagnosis", "prompt", "sources", "materials", "preferences", "undo", "packSelections",
-    "packSnapshot", "unitId", "unitSnapshot", "longformSnapshot", "promptVersions", "sourcePromptVersionId", "restoredFromRoundId",
-    "routeSnapshot", "taskType", "sourceDocument", "createdAt", "updatedAt"
+    "packSnapshot", "unitId", "unitSnapshot", "longformSnapshot", "promptVersions", "sourcePromptVersionId", "restoredFromRoundId", "draftDecision",
+    "routeSnapshot", "resourceSnapshot", "resourceUsage", "skippedResources", "unavailableResources", "memorySnapshot", "taskType", "sourceDocument", "createdAt", "updatedAt"
   ]);
   const UNDO_FIELDS = new Set(["action", "memoryId", "roundId", "undoneAt"]);
   const STYLE_SAMPLE_FIELDS = new Set(["sourceArticleId", "excerpt", "features"]);
@@ -192,8 +194,11 @@
   const MEMORY_FIELDS = new Set([
     "id", "scope", "genre", "projectId", "articleId", "sourceArticleId",
     "preference", "reason", "example", "counterexample", "sourcePreferenceKey", "evidenceArticleIds", "undo",
+    "origin", "status", "enabled", "history",
     "createdAt", "updatedAt"
   ]);
+  const MEMORY_STATUSES = Object.freeze(["pending", "confirmed", "ignored"]);
+  const MEMORY_ORIGINS = Object.freeze(["user-confirmed", "repeated-round"]);
   const WORKSPACE_FIELDS = new Set([
     "id", "genre", "article", "rounds", "styleProfile",
     "styleProfiles", "memory", "memories", "sourceArticleIds",
@@ -232,7 +237,13 @@
   const PACK_SNAPSHOT_SOURCE_FIELDS = new Set([
     "id", "packId", "title", "url", "locator", "version", "versionHash", "readAt", "license", "adoptionReason", "reviewRecord", "checkedAt", "applicability", "limitations", "verificationStatus"
   ]);
-  const PACK_SNAPSHOT_SKIPPED_FIELDS = new Set(["id", "reason"]);
+  const PACK_SNAPSHOT_SKIPPED_FIELDS = new Set(["id", "kind", "reason"]);
+  const RESOURCE_SNAPSHOT_FIELDS = new Set([
+    "id", "packId", "packVersion", "packName", "kind", "title", "relativePath", "archive", "purpose", "applicability", "taskTypes", "genre", "sourceIds",
+    "verificationStatus", "enabled", "version", "format", "sectionIds", "inputSummary", "expectedShape", "notes",
+    "actionId", "allowedRoots", "timeoutMs", "maxOutputBytes", "maxFiles"
+  ]);
+  const RESOURCE_STATE_FIELDS = new Set(["id", "kind", "status", "reason", "sourceIds", "outputSummary", "actionId", "updatedAt"]);
 
   function isObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -333,7 +344,7 @@
     }).filter(item => item.id) : [];
     const skipped = Array.isArray(source.skipped) ? source.skipped.slice(0, PACK_SELECTION_LIMIT).map(item => {
       const value = isObject(item) ? item : {};
-      return Object.fromEntries(Object.entries({ id: text(value.id, PACK_ID_LIMIT), reason: text(value.reason, 80) })
+      return Object.fromEntries(Object.entries({ id: text(value.id, PACK_ID_LIMIT), kind: text(value.kind, 40), reason: text(value.reason, 80) })
         .filter(([key, itemValue]) => PACK_SNAPSHOT_SKIPPED_FIELDS.has(key) && itemValue));
     }).filter(item => item.id && item.reason) : [];
     const entries = Array.isArray(source.entries) ? source.entries.slice(0, 100).map(item => {
@@ -380,7 +391,39 @@
       return Object.fromEntries(Object.entries(entry).filter(([key, itemValue]) => PACK_SNAPSHOT_SOURCE_FIELDS.has(key)
         && (key === "verificationStatus" || itemValue)));
     }).filter(item => item.id) : [];
-    return { packs, entries, sources, skipped };
+    const resources = Array.isArray(source.resources) ? source.resources.slice(0, 100).map(item => {
+      const value = isObject(item) ? item : {};
+      const resource = {
+        id: text(value.id, PACK_ID_LIMIT), packId: text(value.packId, PACK_ID_LIMIT), packVersion: snapshotVersion(value.packVersion),
+        packName: text(value.packName), kind: text(value.kind, 40), title: text(value.title),
+        relativePath: relativeLocator(value.relativePath), archive: text(value.archive, 180), purpose: text(value.purpose),
+        applicability: text(value.applicability), taskTypes: uniqueTextList(value.taskTypes), genre: text(value.genre, PACK_ID_LIMIT),
+        sourceIds: uniqueTextList(value.sourceIds), verificationStatus: ["unverified", "source-reviewed", "case-validated"].includes(value.verificationStatus)
+          ? value.verificationStatus : "unverified", enabled: value.enabled !== false, version: text(value.version, 160),
+        format: text(value.format, 80), sectionIds: uniqueTextList(value.sectionIds), inputSummary: text(value.inputSummary, 800),
+        expectedShape: text(value.expectedShape, 800), notes: text(value.notes, 1200), actionId: text(value.actionId, 160),
+        allowedRoots: uniqueTextList(value.allowedRoots, 10), timeoutMs: count(value.timeoutMs, 120000, 30000),
+        maxOutputBytes: count(value.maxOutputBytes, 2000000, 256000), maxFiles: count(value.maxFiles, 10000, 10000)
+      };
+      return Object.fromEntries(Object.entries(resource).filter(([key, itemValue]) => RESOURCE_SNAPSHOT_FIELDS.has(key)
+        && (key === "enabled" || key === "verificationStatus" || key === "timeoutMs" || key === "maxOutputBytes" || key === "maxFiles" || itemValue)));
+    }).filter(item => item.id && item.kind && item.title) : [];
+    return { packs, entries, sources, skipped, resources };
+  }
+
+  function normalizeResourceStates(input) {
+    if (!Array.isArray(input)) return [];
+    return input.slice(0, 100).map(item => {
+      const value = isObject(item) ? item : {};
+      const state = {
+        id: text(value.id, PACK_ID_LIMIT), kind: text(value.kind, 40),
+        status: ["used", "skipped", "unavailable", "pending", "executed", "failed"].includes(value.status) ? value.status : "pending",
+        reason: text(value.reason, 500), sourceIds: uniqueTextList(value.sourceIds),
+        outputSummary: safeMetadataText(value.outputSummary, 1200), actionId: text(value.actionId, 160), updatedAt: text(value.updatedAt, 80)
+      };
+      return Object.fromEntries(Object.entries(state).filter(([key, itemValue]) => RESOURCE_STATE_FIELDS.has(key)
+        && itemValue && (key !== 'sourceIds' || itemValue.length)));
+    }).filter(item => item.id);
   }
 
   function count(value, maximum, fallback = 0) {
@@ -616,6 +659,8 @@
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
     };
+    if (Object.hasOwn(source, "draftRoundId")) article.draftRoundId = text(source.draftRoundId, 100);
+    if (Object.hasOwn(source, "skippedMemoryIds")) article.skippedMemoryIds = uniqueTextList(source.skippedMemoryIds, 100, 100);
     // 研究计划只在会话中，持久化仅记录本篇拒绝，导入不能自动授权搜索。
     if (isObject(source.research) && source.research.status === 'rejected') article.research = { status: 'rejected' };
     if (Object.prototype.hasOwnProperty.call(source, "packSelections")) {
@@ -669,16 +714,20 @@
 
   function normalizeWritingMaterial(input) {
     const source = isObject(input) ? input : {};
+    const sourceSnapshot = ['library-entry', 'prompt-library'].includes(source.sourceType);
+    const excerpt = typeof source.excerpt === 'string' ? source.excerpt.trim() : '';
+    if (sourceSnapshot && excerpt.length > 8000) throw new RangeError('资料快照超过 8000 字；请缩短已保存摘要/摘录或提示词正文后重试');
     const material = {
       id: safeMetadataText(source.id, 100),
       title: safeMetadataText(source.title, 160),
+      ...(typeof source.url === 'string' && /^https?:\/\//i.test(source.url.trim()) ? { url: safeMetadataText(source.url, 2000) } : {}),
       purpose: MATERIAL_PURPOSES.includes(source.purpose) ? source.purpose : "content",
-      excerpt: safeMetadataText(source.excerpt, 1200),
+      excerpt: safeMetadataText(excerpt, sourceSnapshot ? 8000 : 1200),
       sourceArticleId: safeMetadataText(source.sourceArticleId, 100),
       ...(MATERIAL_SOURCE_TYPES.includes(source.sourceType) ? { sourceType: source.sourceType } : {}),
       ...(MATERIAL_ORIGINS.includes(source.origin) ? { origin: source.origin } : {}),
       ...(safeMetadataText(source.sourceId, 240) ? { sourceId: safeMetadataText(source.sourceId, 240) } : {}),
-      ...(relativeLocator(source.sourceLocator) ? { sourceLocator: relativeLocator(source.sourceLocator) } : {}),
+      ...(relativeLocator(source.sourceLocator || source.relativePath) ? { sourceLocator: relativeLocator(source.sourceLocator || source.relativePath) } : {}),
       ...(safeMetadataText(source.sourceVersion, 160) ? { sourceVersion: safeMetadataText(source.sourceVersion, 160) } : {}),
       ...(safeMetadataText(source.excerptLocator, 120) ? { excerptLocator: safeMetadataText(source.excerptLocator, 120) } : {}),
       ...(safeMetadataText(source.selectionReason, 300) ? { selectionReason: safeMetadataText(source.selectionReason, 300) } : {}),
@@ -754,15 +803,24 @@
       unitId: safeMetadataText(source.unitId, 100),
       restoredFromRoundId: safeMetadataText(source.restoredFromRoundId, 100),
       sources: Array.isArray(source.sources)
-        ? source.sources.slice(0, 20).map(normalizeWritingSource).filter(item => item.title || item.url || item.excerpt)
+        ? source.sources.map(normalizeWritingSource).filter(item => item.title || item.url || item.excerpt)
         : [],
       materials: Array.isArray(source.materials)
-        ? source.materials.slice(0, 20).map(normalizeWritingMaterial).filter(item => item.id || item.title || item.excerpt)
+        ? source.materials.map(normalizeWritingMaterial).filter(item => item.id || item.title || item.excerpt)
         : [],
       undo: normalizeUndo(source.undo),
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
     };
+    if (isObject(source.draftDecision) && ["pending", "kept", "adopted", "undone"].includes(source.draftDecision.status)) {
+      round.draftDecision = {
+        status: source.draftDecision.status,
+        previousDraft: text(source.draftDecision.previousDraft, DRAFT_LIMIT),
+        previousDraftRoundId: text(source.draftDecision.previousDraftRoundId, 100),
+        adoptedAt: text(source.draftDecision.adoptedAt, 80),
+        undoneAt: text(source.draftDecision.undoneAt, 80)
+      };
+    }
     if (Object.prototype.hasOwnProperty.call(source, "preferences")) {
       round.preferences = (Array.isArray(source.preferences) ? source.preferences : []).slice(0, 8)
         .filter(isObject).map(item => ({
@@ -777,6 +835,12 @@
     if (Object.prototype.hasOwnProperty.call(source, "packSnapshot")) {
       round.packSnapshot = normalizeWritingPackSnapshot(source.packSnapshot);
     }
+    if (Object.prototype.hasOwnProperty.call(source, "resourceSnapshot")) {
+      round.resourceSnapshot = normalizeWritingPackSnapshot({ resources: source.resourceSnapshot }).resources;
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "resourceUsage")) round.resourceUsage = normalizeResourceStates(source.resourceUsage);
+    if (Object.prototype.hasOwnProperty.call(source, "skippedResources")) round.skippedResources = normalizeResourceStates(source.skippedResources);
+    if (Object.prototype.hasOwnProperty.call(source, "unavailableResources")) round.unavailableResources = normalizeResourceStates(source.unavailableResources);
     if (Object.prototype.hasOwnProperty.call(source, "sourceDocument")) {
       const sourceDocument = normalizeWritingSourceDocument(source.sourceDocument);
       if (sourceDocument) round.sourceDocument = sourceDocument;
@@ -796,6 +860,16 @@
     if (Object.prototype.hasOwnProperty.call(source, "routeSnapshot")) {
       round.routeSnapshot = normalizeRouteSnapshot(source.routeSnapshot);
     }
+    if (Object.hasOwn(source, "memorySnapshot")) {
+      round.memorySnapshot = Array.isArray(source.memorySnapshot) ? source.memorySnapshot.slice(0, 3).map(item => {
+        const memory = isObject(item) ? item : {};
+        return {
+          id: text(memory.id, 100), preference: text(memory.preference), scope: MEMORY_SCOPES.includes(memory.scope) ? memory.scope : "general",
+          sourceArticleId: text(memory.sourceArticleId, 100), origin: MEMORY_ORIGINS.includes(memory.origin) ? memory.origin : "user-confirmed",
+          updatedAt: text(memory.updatedAt, 80)
+        };
+      }).filter(item => item.id && item.preference) : [];
+    }
     if (["parsed", "unparsed"].includes(source.diagnosisParseStatus)) {
       round.diagnosisParseStatus = source.diagnosisParseStatus;
     }
@@ -805,21 +879,38 @@
   function normalizeWritingSource(input) {
     const source = isObject(input) ? input : {};
     const url = text(source.url, 2000);
+    const annotationSnapshot = Array.isArray(source.annotationSnapshot) ? source.annotationSnapshot : [];
+    if (annotationSnapshot.length > 200) throw new RangeError("单份资料批注快照最多 200 条；请减少所选批注后重试");
+    const normalizedAnnotations = annotationSnapshot.map(item => {
+      if (!feedbackSchema?.normalizePptAnnotation) throw new TypeError("批注快照校验模块未加载");
+      const annotation = feedbackSchema.normalizePptAnnotation(item);
+      if (annotation.attachmentId !== (source.sourceId || source.id)) {
+        throw new TypeError("写作交接批注必须指向当前附件");
+      }
+      if (annotation.status !== "active" || !annotation.selected || annotation.contentHash !== source.sourceVersion) {
+        throw new TypeError("写作交接只接受当前版本中已选的有效批注");
+      }
+      return annotation;
+    });
+    const sourceSnapshot = ['library-entry', 'prompt-library'].includes(source.sourceType);
+    const excerpt = typeof source.excerpt === 'string' ? source.excerpt.trim() : '';
+    if (sourceSnapshot && excerpt.length > 8000) throw new RangeError('资料快照超过 8000 字；请缩短已保存摘要/摘录或提示词正文后重试');
     const entry = {
       ...(safeMetadataText(source.id, 100) ? { id: safeMetadataText(source.id, 100) } : {}),
       title: safeMetadataText(source.title, 160),
       url: /^file:/i.test(url) ? "" : safeMetadataText(url, 2000),
-      excerpt: safeMetadataText(source.excerpt, 1200),
+      excerpt: safeMetadataText(excerpt, sourceSnapshot ? 8000 : 1200),
       purpose: MATERIAL_PURPOSES.includes(source.purpose) ? source.purpose : "content",
       verificationStatus: VERIFICATION_STATES.includes(source.verificationStatus) ? source.verificationStatus : "unverified",
       ...normalizeSourceMetadata(source),
       ...(MATERIAL_SOURCE_TYPES.includes(source.sourceType) ? { sourceType: source.sourceType } : {}),
       ...(MATERIAL_ORIGINS.includes(source.origin) ? { origin: source.origin } : {}),
       ...(safeMetadataText(source.sourceId, 240) ? { sourceId: safeMetadataText(source.sourceId, 240) } : {}),
-      ...(relativeLocator(source.sourceLocator) ? { sourceLocator: relativeLocator(source.sourceLocator) } : {}),
+      ...(relativeLocator(source.sourceLocator || source.relativePath) ? { sourceLocator: relativeLocator(source.sourceLocator || source.relativePath) } : {}),
       ...(safeMetadataText(source.sourceVersion, 160) ? { sourceVersion: safeMetadataText(source.sourceVersion, 160) } : {}),
       ...(safeMetadataText(source.excerptLocator, 120) ? { excerptLocator: safeMetadataText(source.excerptLocator, 120) } : {}),
       ...(safeMetadataText(source.selectionReason, 300) ? { selectionReason: safeMetadataText(source.selectionReason, 300) } : {}),
+      ...(typeof source.selectedForPrompt === "boolean" ? { selectedForPrompt: source.selectedForPrompt } : {}),
       ...(typeof source.attachmentRequired === "boolean" ? { attachmentRequired: source.attachmentRequired } : {}),
       ...(MATERIAL_CONTENT_STATES.includes(source.contentStatus) ? { contentStatus: source.contentStatus } : {}),
       ...(safeMetadataText(source.contentError, 300) ? { contentError: safeMetadataText(source.contentError, 300) } : {}),
@@ -828,7 +919,8 @@
       ...(Number.isSafeInteger(source.extractedCharacterCount) && source.extractedCharacterCount >= 0
         ? { extractedCharacterCount: Math.min(source.extractedCharacterCount, 2_000_000) } : {}),
       ...(Number.isFinite(source.recognitionConfidence) && source.recognitionConfidence >= 0 && source.recognitionConfidence <= 100
-        ? { recognitionConfidence: Math.round(source.recognitionConfidence) } : {})
+        ? { recognitionConfidence: Math.round(source.recognitionConfidence) } : {}),
+      ...(normalizedAnnotations.length ? { annotationSnapshot: normalizedAnnotations } : {})
     };
     if (Object.prototype.hasOwnProperty.call(source, "unitIds")) {
       entry.unitIds = uniqueTextList(source.unitIds, UNIT_LIMIT, 100);
@@ -875,6 +967,10 @@
 
   function normalizeWritingMemory(input) {
     const source = isObject(input) ? input : {};
+    const origin = MEMORY_ORIGINS.includes(source.origin) ? source.origin
+      : source.undo?.action === "auto-promote" ? "repeated-round" : "user-confirmed";
+    const status = MEMORY_STATUSES.includes(source.status) ? source.status
+      : origin === "repeated-round" ? (source.undo?.undoneAt ? "ignored" : "pending") : "confirmed";
     const memory = {
       id: text(source.id, 100),
       scope: MEMORY_SCOPES.includes(source.scope) ? source.scope : "general",
@@ -883,12 +979,22 @@
       articleId: text(source.articleId, 100),
       sourceArticleId: text(source.sourceArticleId, 100),
       preference: text(source.preference),
+      origin,
+      status,
+      enabled: typeof source.enabled === "boolean" ? source.enabled : status === "confirmed" && !source.undo?.undoneAt,
       reason: text(source.reason, 1000),
       evidenceArticleIds: textList(source.evidenceArticleIds, 20, 100),
       undo: normalizeUndo(source.undo),
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
     };
+    if (Array.isArray(source.history)) memory.history = source.history.slice(-10).map(item => {
+      const version = isObject(item) ? item : {};
+      return {
+        id: text(version.id, 100), preference: text(version.preference), reason: text(version.reason, 1000),
+        example: text(version.example), counterexample: text(version.counterexample), savedAt: text(version.savedAt, 80)
+      };
+    }).filter(item => item.id && item.preference);
     for (const field of ["example", "counterexample", "sourcePreferenceKey"]) {
       if (Object.prototype.hasOwnProperty.call(source, field)) memory[field] = text(source[field]);
     }
@@ -983,6 +1089,7 @@
     normalizeWritingWorkspaceRecord,
     normalizeWritingWorkspaceRecords,
     normalizeWritingPackSnapshot,
+    normalizeResourceStates,
     normalizeWritingWorkspace,
     normalizeLongform,
     LONGFORM_MODES,

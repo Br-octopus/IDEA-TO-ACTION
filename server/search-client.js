@@ -93,7 +93,7 @@ function createSearchClient(config = {}, { fetchImpl = globalThis.fetch, timeout
     }
   }
 
-  return { configured: isConfigured(config), search };
+  return { configured: isConfigured(config), baseUrl, search };
 }
 
 module.exports = { SEARCH_TIMEOUT_MS, SEARCH_CODES, normalizeSearchError, normalizeResult, normalizeResults, createSearchClient };

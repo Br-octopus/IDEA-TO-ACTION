@@ -1,308 +1,282 @@
-# 写作材料导入与长手册改写实施计划
+# 写作工作台全文检索与 Jev 辅助判断实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+日期：2026-10-23
 
-**Goal:** 在已完成的写作工作台四步流程上，补齐长原文文件导入、整本/选章提示词，以及清爽、可搜索的代码目录候选材料选择。
+状态：主要功能和定向回归已完成；大目录性能已评估；中文辅助模型对照仍因缺少真实配置和标注样本未完成，不能据此宣称提速或质量提升。计划中的旧步骤保留为实现记录，验收状态以当前代码和本轮验证为准。
 
-**Architecture:** 保留原生 JavaScript、现有写作 coordinator、存储 schema 和本机材料解析 API。新增轻量目录提取逻辑和候选过滤/分页能力；原文文件元数据、有限预览和章节选择随写作轮次保存，不保存浏览器 File 对象。只有用户确认的最多 3 份辅助材料摘录进入任务分析；文件原件由用户在目标 AI 中附加。
+## 本轮验收记录（2026-10-24）
 
-**Tech Stack:** Node.js 22、原生 JavaScript、现有 DOM 事件委托、`node:test`、现有 `/api/writing-materials/parse`。
+- Jev 真实协议探测：`https://linxi.chat/v1` + `jev-1.13.0` 的 System One 探测成功；OpenAI Chat Completions 路径被上游拒绝并提示仅支持 `/v1/systemone`；Decisions 路径不存在。设置页已补充协议路径提示，避免把“服务可达”误认为“协议兼容”。
 
----
+- 提示词测试：46/46 通过。
+- 工作台协调器测试：70/70 通过。
+- 工作台 UI 测试：74/74 通过。
+- 全量验证：`pnpm check` 通过；`pnpm test` 共 1,094 项，1,093 项通过、0 项失败、1 项因当前 Windows 环境无法创建文件符号链接而跳过。跳过项不涉及写作工作台逻辑。
+- 10,000 文件性能：索引约 17ms；优化前全文扫描约 154,532ms，优化后约 4,660ms；完整扫描 10,000/10,000，命中 2,439 个文件。优化点是每 32 个文件让出一次主线程，当前不需要扩大设计范围。
+- 中文辅助判断评估：未完成。缺少真实可调用的辅助模型配置和带标注的中文样本集，暂不填写质量、耗时或成本结论；辅助判断默认关闭保持不变。
+- 旧回归断言已按新设计更新：材料不再因 3/5 份限制被静默排除，自动来源、手工材料和 style/both 材料可以共同保留；提示词在预算内保留来源摘要，超限强约束明确报错。
 
-> **范围状态：** 写作工作台基础四步流程已完成。本计划只实现设计稿于 2026-10-23 确认的材料导入改进，不重做已有流程，不改学术论文工作台或通用提示词 Agent。
+## 目标
 
-## 实施记录（2026-10-23）
+在现有写作工作台四步流程上，补齐本机全文件全文检索、主模型有界检索循环、无文件份数硬限制的材料推荐，以及可选的 Jev/辅助判断服务配置。保留原有新写作、文章改写、长原文导入、提示词生成和结果回填能力。
 
-Task 1–5 已完成。最终验证：定向测试 327 项通过；pnpm check 通过；pnpm test 共 1,072 项，1,071 项通过、0 失败、1 项跳过。git diff --check 通过。本次没有创建提交。
+## 当前实现基线（2026-10-23 自查）
 
-## 当前代码结构与边界
+- `prototype/writing-workbench-ui.js` 已有四步向导、长原文导入、工作空间入口、全量候选分页、全文检索状态和手动材料勾选。
+- `prototype/writing-material-search.js` 与 `prototype/writing-workbench-ui.js` 已实现会话内全文扫描、命中片段及定位、状态统计与取消；文件数/单文件边界沿用设计约定。
+- `prototype/writing-workbench-coordinator.js` 已接入受限 search/read 轮次、完整消息预算估算、响应 usage 记录与超限裁剪；`server/model-client.js` 提供主模型请求路径。
+- `server/writing-assistant-client.js`、`server.js`、Electron 配置及前端设置已实现独立辅助判断配置与多协议请求。
+- 本轮自查确认 `prototype/writing-workbench-prompts.js` 仍有无检索词时最多 3 份材料自动推荐的旧分支，已删除并加入回归测试；手动选择优先逻辑仍单独保留。
+- 旧计划中描述“仍硬编码最多 3 份”“目前不能全文搜索”等基线已过时；后续按实际代码及 T6 集成验收结果更新，不把旧描述当成当前事实。
+- 现有代码和既有工作区改动保留；本计划只安排实现本设计增量，不重建已经存在的向导或原文解析器。
 
-| 文件 | 本计划职责 |
-| --- | --- |
-| `prototype/writing-workbench-ui.js` | 独立的待改原文导入区、整本/选章控件、候选列表分页/过滤/搜索和明确状态文案；保持原文与参考材料分流。 |
-| `prototype/browser-project-index.js` | 保留敏感文件与目录安全规则；补充可恢复的生成/临时文件过滤元数据，并支持完整索引上的本地搜索和分页数据。 |
-| `prototype/writing-document-outline.js` | 新增纯函数模块，从 TXT/MD、DOCX 段落和 PDF 页文本中提取章节候选；识别不确定时返回空/部分目录，不伪造结构。 |
-| `server/writing-material-parser.js`、`server.js` | 复用当前解析 API；DOCX 输出保留标题级别线索，PDF 保留页定位；继续遵循 20 MB、100 页和 30,000 字符上限。现有 API 将解析片段总长限制为 10,000 字符，须同步提高到 30,000，才能完整提取目录候选；明确返回是否触及提取上限。 |
-| `prototype/writing-workbench-schema.js` | 清洗并限制轮次中的原文文件元数据、有限预览、目录候选、已选章节和手动范围；拒绝持久化文件句柄或二进制内容。 |
-| `prototype/writing-workbench-coordinator.js` | 将有界原文预览/目录传给任务分析；用户确认后创建任务时保存 `sourceDocument` 元数据。 |
-| `prototype/writing-workbench-prompts.js` | 对文件型原文生成附原件说明、整本分章节处理或选定章节范围提示；不把整本手册写入复制出的提示词。 |
-| `tests/writing-material-parser.test.js`、`tests/server.test.js` | 覆盖 PDF/DOCX 解析定位和 API 返回结构。 |
-| `tests/browser-project-index.test.js` | 覆盖生成文件过滤、安全排除、全量搜索及分页数据。 |
-| `tests/writing-document-outline.test.js` | 新增目录抽取、位置标注和部分/空目录降级测试。 |
-| `tests/writing-workbench-schema.test.js`、`tests/storage.test.js` | 覆盖原文元数据、有限预览、目录/章节状态保存和旧数据兼容。 |
-| `tests/writing-workbench-coordinator.test.js`、`tests/writing-workbench-prompts.test.js` | 覆盖分析输入上限和文件型原文提示词。 |
-| `tests/writing-workbench-ui.test.js`、`tests/e2e-smoke.test.js` | 覆盖导入/章节选择、材料上限、可恢复过滤、分页/搜索和完整用户流程。 |
+## 不变约束
 
-**不得改变的边界：** `.env`、密钥文件、`.git`、依赖目录等现有安全排除继续不可浏览、不可恢复；只有构建/临时噪声过滤可由用户展开查看。文件夹最多扫描 10,000 个文件，超过时必须显示截断提示。参考材料“3 份”限制只作用于已选辅助材料，不限制搜索和浏览。DOCX/PDF 单文件最大 20 MB，PDF 最多 100 页，解析文本最多 30,000 字符；API 当前片段上限是 10,000 字符，本计划将其提升至 30,000 并明确标记解析截断。任务分析原文预览不超过 8,000 字符。任务保存文件名、指纹、有限预览和目录/选择状态，不保存 File 对象、绝对路径或原始二进制。
+- 文件夹/工作空间在本机扫描全部符合现有安全规则的候选；沿用最多 10,000 个文件、单文件 1 MB、现有格式及安全排除规则。扫描全文不上传、不持久化，不建立全目录全文索引。
+- 材料和模型实际收到的片段由输入预算控制，不设 3/5 份材料硬上限。主模型默认输入预算 8,000 tokens；服务端请求体限制仍生效。
+- 文件内容是非可信资料，不是系统指令。任何发往主模型或辅助服务的检索片段都先做凭证模式遮蔽；无法可靠遮蔽的片段不发送。
+- 主模型检索循环只允许 `search`/`read`，最多追加 3 轮、每轮最多 5 个查询词；不得让模型获得任意文件路径读取权限。
+- Jev/辅助判断默认关闭；支持 TypeSafe System One、遵循 Jev/Decisions 契约的服务，以及 OpenAI 兼容 Chat Completions 中转站。辅助配置与主模型隔离，但用户可以明确选择复用主模型 Base URL/API Key，并另填辅助模型 ID。
+- 辅助判断不设候选数量上限；完整协议请求累计输入预算 4,000 tokens、最多 3 个并发请求。预算外及失败项继续留在主模型候选集合，显示未评估状态。
+- 不接入向量库/Embedding，不代写整本正文，不自动切换第三方服务，不改变写作工作台、通用提示词 Agent 和学术论文工作台的页面边界。
 
-## Task 1：解析原文并提取可核对的章节目录
+## 成功标准
 
-**Files:**
-- Modify: `server/writing-material-parser.js`
-- Modify: `server.js`
-- Create: `prototype/writing-document-outline.js`
-- Test: `tests/writing-material-parser.test.js`
-- Test: `tests/server.test.js`
-- Create: `tests/writing-document-outline.test.js`
+1. 用户上传文件夹后，工作台对全部可读候选进行本机全文检索；搜索不局限于当前页、勾选文件或原有短摘录。
+2. 主模型根据有界命中片段判断材料、文体与任务类型；可在受限轮次内请求补充搜索或读取授权命中位置附近内容。
+3. 用户可确认任意数量的材料；所有实际送入模型的片段都在 token/请求体预算内，并能说明哪些已扫描、已发送或未评估。
+4. 设置中能独立配置辅助判断，支持 System One/Decisions 和 OpenAI 兼容中转站；连接检查不发送用户任务或文件内容，不泄露 API Key。
+5. 辅助判断每任务受 4,000 tokens 累计预算、3 个并发请求限制，不设候选数量上限；默认关闭，失败时清楚回退，不阻断主流程。
+6. 浏览器和桌面版的凭证存储、工作空间重新授权、旧任务兼容和现有写作流程均保持可用。
 
-- [x] **Step 1: 先写解析定位测试**
+## 任务依赖图
 
-在解析器测试中扩展现有 `makeDocx()` fixture 为带 `w:pStyle w:val="Heading1"` 的标题样式版本，并复用现有 `makePdf()`。断言 DOCX 返回有序段落及标题级别，PDF 返回页文本和页码；触及 30,000 字符输出上限时响应必须标记为截断，不能呈现为完整全文。
+| 任务 | 名称 | depends_on | 主要文件 | 可并行 |
+| --- | --- | --- | --- | --- |
+| T1 | 移除材料硬上限并统一预算数据契约 | [] | writing schema/coordinator/prompts/UI | 否 |
+| T2 | 实现会话内全文件全文扫描与片段定位 | [T1] | browser project index、新检索模块 | 可与 T4 并行 |
+| T3 | 接入主模型 search/read 有界检索循环 | [T1, T2] | coordinator/prompts/model-client | 否 |
+| T4 | 接入辅助判断配置与协议客户端 | [T1] | server、Electron 配置、设置界面、新客户端 | 可与 T2 并行 |
+| T5 | 串联 Jev 判断、任务 UI 与失败降级 | [T2, T3, T4] | writing coordinator/UI/prompts | 否 |
+| T6 | 完成集成验收、回归与设计覆盖审查 | [T5] | tests、package.json（如新增模块需检查）、设计稿/本计划 | 否 |
 
-```js
-test('DOCX 返回标题线索，PDF 保留页定位', async () => {
-  const docx = await parser.parse({ buffer: await makeDocxWithHeadings(), mimeType: DOCX_MIME });
-  assert.equal(docx.ok, true);
-  assert.ok(docx.paragraphs.some(item => item.text === '安装软件' && item.headingLevel === 1));
+同一任务内遵循串行依赖。若使用多智能体，只并行分派 T2 与 T4；两者文件范围分离。T3、T5 及最终验收按依赖顺序执行。
 
-  const pdf = await parser.parse({ buffer: makePdf('第1章 安装'), mimeType: 'application/pdf' });
-  assert.equal(pdf.ok, true);
-  assert.equal(pdf.pages[0].page, 1);
-});
-```
+## 详细任务
 
-- [x] **Step 2: 运行解析器测试确认新契约失败**
+### T1：移除材料份数硬上限并统一预算契约（约 2–3 小时）
 
-Run: `node --test tests/writing-material-parser.test.js tests/server.test.js`
-Expected: DOCX 标题线索断言失败；既有 PDF/OCR/本机访问限制测试保持原状。
+**文件：**
 
-- [x] **Step 3: 扩展解析结果并新增目录提取纯函数**
+- 修改：`prototype/writing-workbench-schema.js`
+- 修改：`prototype/writing-workbench-coordinator.js`
+- 修改：`prototype/writing-workbench-prompts.js`
+- 修改：`prototype/writing-workbench-ui.js`
+- 修改：相关 `tests/writing-workbench-*.test.js`
 
-DOCX 解析不能只检查段落里的 `w:pStyle` 是否恰好叫 `HeadingN`：解析 `word/styles.xml` 中 `styleId` 到显示名/`outlineLvl` 的映射，并兼容段落上的 `w:outlineLvl`；标准标题样式、自定义标题样式和普通段落都要有 fixture 覆盖。返回有序 `paragraphs: [{ text, headingLevel }]`，普通段落的 `headingLevel` 为 `null`。PDF 继续以页文本作为定位段，并保留 OCR 标记。把 `server.js` 的解析片段总长上限从 10,000 调到 30,000，并在 parser/API 响应中显式返回 `truncated`；解析片段、段落/页定位和截断标记必须使用同一截断边界，目录不能读取未返回的尾部文本。新增 `prototype/writing-document-outline.js`，导出 `extractWritingOutline({ format, text, segments })`，返回 `{ items: [{ id, title, level, locator }], complete }`，最多 200 项。TXT/MD 只识别 Markdown 标题和明确章节编号；DOCX 优先使用标题样式，再回退明确编号标题；PDF 只从每页文本识别明确编号标题，页定位用“第 N 页”。重复标题用稳定序号生成唯一 ID。普通句子不作为标题；无法可靠识别时返回空或部分目录和 `complete: false`。
+**步骤：**
 
-- [x] **Step 4: 补齐 API 与目录抽取测试**
+1. 逐项审查材料数据的 `.slice(0, 3)`、选择校验和 UI 禁用条件，移除写作工作台材料、来源和提示词引用中的文件份数上限。
+2. 保留文体配置、问题列表、记忆等其他语义上的三项展示/截断；不要全局替换 `slice(0, 3)`。
+3. 将候选文件总数、用户确认材料数、实际发送的片段数分成独立概念；候选清单与已确认材料可以任意多，实际消息依据主模型 token 预算和服务端请求体上限裁剪。发送前的保守 token 估算必须覆盖完整请求中的 system prompt、任务摘要、重复上下文、路径/定位元数据及片段；若服务商返回 `usage.prompt_tokens`，记录实际值用于校准和成本观察，不用它替代发送前预算。请求序列化后另行检查 HTTP 请求体字节上限。
+4. 定义超预算时的稳定裁剪顺序：相关度优先，同时尽可能覆盖多个相关文件；显示未纳入文件/片段及原因。不可把被裁剪或未发出的材料标成“已分析”。
+5. 确认旧任务中已有材料不会因 schema 迁移丢失；历史任务继续按保存内容显示，不在读取时静默截断为 3 项。
 
-验证 `/api/writing-materials/parse` 返回 DOCX 标题线索和 PDF 页定位；分别用超过 10,000 与 30,000 字符的 DOCX/PDF 输入验证 API 片段边界，最多保留 30,000 字符且 `truncated` 与实际丢失内容一致。目录提取只使用 API 实际返回的解析范围。覆盖 Markdown、标准/自定义 DOCX 标题样式、段落 `w:outlineLvl`、PDF 编号标题、重复标题 ID、无标题和截断输入。扫描版 PDF 使用 OCR 时保留现有 warning，目录仍可标记为不完整。
+**验收：** 搜索、候选展示、手动勾选、跨来源导入、提示词材料摘要和分析请求均不因文件份数拒绝材料；总输入预算仍能限制实际请求。无关的三项上限行为保持原样。
 
-Run: `node --test tests/writing-material-parser.test.js tests/server.test.js tests/writing-document-outline.test.js`
-Expected: 解析结果和目录候选断言全部通过；解析限制及本机 API 安全测试通过。
+### T2：实现会话内全文件全文扫描与片段定位（约 4–6 小时）
 
-- [x] **Step 5: 完成解析与目录模块阶段实现与验证（本次不提交）**
+**文件：**
 
-本次按用户要求完成实现与验收，不执行 Git 提交。
+- 修改：`prototype/browser-project-index.js`
+- 新增：`prototype/writing-material-search.js`（如实现确实需要独立模块）
+- 修改：`prototype/writing-workbench-ui.js`
+- 修改：`tests/browser-project-index.test.js`
+- 新增或修改：`tests/writing-material-search.test.js`
 
-## Task 2：整理代码目录候选与本地筛选
+**步骤：**
 
-**Files:**
-- Modify: `prototype/browser-project-index.js`
-- Test: `tests/browser-project-index.test.js`
+1. 保留现有目录候选索引和短摘录 UI，但把当前选择会话中的 `File` 引用存于非持久内存注册表，以稳定文件 ID 映射。不要把 `File` 对象、全文或绝对路径写进文章、localStorage、任务记录或服务端日志。
+2. 增加本机全文扫描函数：对用户授权范围内的支持文件逐个读取、匹配任务词/路径词，再立即释放单文件全文；每个文件处理后让出浏览器主线程，支持取消并报告扫描进度和未扫描范围。
+3. 中文查询同时支持连续字片段和可用词项；英文/代码按词项匹配。按命中位置截取有界前后文，保存文件 ID、相对路径、行号/页码（实际可得时）和偏移；检索结果受片段预算控制，不生成全目录全文或全局倒排索引。
+4. 对所有候选全文命中逐片段执行凭证模式遮蔽；预览也展示遮蔽后的文本。无法可靠遮蔽的命中不进入模型请求，并记录可读的未发送状态。
+5. 为单文件读取失败、二进制/编码错误、取消、10,000 项截断和重新授权失效提供稳定状态。安全排除项仍不能恢复；噪声过滤项只有用户手动恢复后才读取。
+6. 每轮搜索只扫描当前候选一次，最多处理 5 个查询词并仅保留预算内的最佳命中；后续 `read` 只在会话注册表对应的授权 `File` 上读取命中位置邻近片段。刷新或结束任务时清空临时注册表及全文。
 
-- [x] **Step 1: 编写噪声过滤及候选浏览测试**
+**验收：** 查询能命中原样本摘录之外的正文；跨页搜索一致；返回定位可追溯到相对路径和实际行/偏移；扫描中断不会误报未扫描内容“不相关”；刷新后不恢复文件句柄或全文。
 
-构造含操作手册、源代码、`build_v8.js`、`.min.js`、临时文件、`.env`、`node_modules` 的目录。断言生成/临时文件标记为可恢复的 `filtered-generated`，手册与有用源码可索引；敏感文件和安全排除目录仍不出现在可恢复清单。再验证搜索查找全量候选、分页仅切片显示结果而不改变总数。
+### T3：接入主模型 search/read 有界检索循环（约 3–5 小时）
 
-```js
-test('候选搜索分页覆盖完整索引且安全排除不可恢复', async () => {
-  const result = await indexBrowserProjectFiles(files);
-  const matches = filterBrowserProjectCandidates(result, { query: '操作手册', page: 1, pageSize: 20 });
-  assert.equal(matches.total, 1);
-  assert.match(matches.items[0].relativePath, /操作手册/);
-  assert.ok(result.filteredCandidates.some(item => item.reason === 'generated'));
-  assert.ok(!JSON.stringify(result.filteredCandidates).includes('.env'));
-});
-```
+**文件：**
 
-- [x] **Step 2: 运行索引测试确认新 API 不存在**
-
-Run: `node --test tests/browser-project-index.test.js`
-Expected: 新增过滤/分页测试因候选辅助函数或过滤状态尚未实现而失败。
-
-- [x] **Step 3: 增加可恢复的噪声过滤元数据和候选分页函数**
+- 修改：`prototype/writing-workbench-coordinator.js`
+- 修改：`prototype/writing-workbench-prompts.js`
+- 视需要修改：`server/model-client.js`
+- 修改：`tests/writing-workbench-coordinator.test.js`
+- 修改：`tests/writing-workbench-prompts.test.js`
+- 修改：`tests/server.test.js`
 
-明确并测试索引数据契约：`files` 是已读取且可用的候选，`filteredCandidates` 只含相对路径、显示名和过滤原因（不含正文、绝对路径或敏感路径），`inventory`/`inventoryComplete` 描述扫描清单和是否触及 10,000 项上限。敏感文件及安全排除目录不进入任何可恢复集合。生成/临时项初次索引时不读正文；用户点击“恢复”后，对该单项执行与普通候选相同的格式、大小、密钥和二进制保护，成功才转入 `files`；失败时说明原因并保留重试入口。只允许恢复明确非敏感的过滤项，安全排除不能通过搜索、分页或手工路径绕过。
+**步骤：**
 
-导出 `filterBrowserProjectCandidates(result, { query, page, pageSize, showFiltered })`：只对完整的 `files` 候选集按名称/路径/已读取摘录搜索，再分页；`showFiltered` 仅控制可恢复过滤项是否作为恢复操作行展示，不把未读取项混作可勾选候选或参与摘录搜索。返回至少 `{ items, total, page, pageSize, filteredTotal, inventoryComplete }`。默认页大小 20。目录输入仍最多处理 10,000 项，并沿用超限状态；UI 不依赖未经契约定义的 `result.filtered`。
+1. 首轮用任务目标、原文元信息、文件名/相对路径在本机搜索全部候选；只把检索命中片段及必要来源清单发给主模型，不发送目录全文。
+2. 定义严格 JSON 响应 schema：允许 `search`（最多 5 个查询词）和 `read`（已授权文件 ID、合法命中定位及有界邻近长度）；禁止任意路径、未知动作、自由工具调用和模型自行声明“已经读过”的文件。
+3. 最多执行 3 轮追加请求，累计输入预算默认 8,000 tokens，并保留输出余量；每轮将多个 `search` 查询合并为一次本机扫描。对每次 `read` 校验文件 ID、偏移、定位和预算。
+4. 对非法 JSON、未知 ID、非法定位、超预算或超轮次请求一律不执行；保留当前证据，允许手动搜索或继续不带新增材料。
+5. 增加请求体上限检查和一次收缩重试；每次输出说明最终送达主模型的文件/片段和未纳入项。资料指令始终包在不可信内容边界内。token 预算核算覆盖完整请求的 system prompt、任务摘要、重复上下文、路径/定位元数据与命中片段；发送前使用保守估算，若响应含 `usage.prompt_tokens` 则记录实际值供校准；序列化后的 HTTP 请求体字节数单独受服务端上限约束。
 
-```js
-function filterBrowserProjectCandidates(result, options = {}) {
-  const pageSize = Math.max(1, Math.min(options.pageSize || 20, 100));
-  const query = String(options.query || '').trim().toLocaleLowerCase();
-  const matches = result.files.filter(item => !query ||
-    [item.title, item.relativePath, item.excerpt].some(value =>
-      String(value || '').toLocaleLowerCase().includes(query)));
-  const page = Math.max(1, options.page || 1);
-  return { total: matches.length, page, pageSize,
-    filteredTotal: options.showFiltered ? result.filteredCandidates.length : 0,
-    inventoryComplete: result.inventoryComplete,
-    items: matches.slice((page - 1) * pageSize, page * pageSize),
-    filteredItems: options.showFiltered ? result.filteredCandidates : [] };
-}
-```
+**验收：** 模型可从全文命中提出追加搜索/读取；超限或恶意响应不会触发本机文件读取；预算不足时有明确降级，且不会虚报分析范围。
 
-- [x] **Step 4: 运行索引回归测试**
+### T4：接入辅助判断配置与协议客户端（约 5–7 小时）
 
-Run: `node --test tests/browser-project-index.test.js`
-Expected: 恢复过滤项会实际读取单文件并经过安全校验；完整候选搜索、20 项分页、过滤计数、10,000 项截断、密钥脱敏和既有安全排除全部通过。
+**文件：**
 
-- [x] **Step 5: 完成目录索引变化阶段实现与验证（本次不提交）**
-
-本次按用户要求完成实现与验收，不执行 Git 提交。
+- 新增：`server/writing-assistant-client.js`
+- 修改：`server.js`
+- 修改：`electron/settings-store.js`
+- 修改：`electron/main.js`
+- 修改：`electron/preload.js`
+- 修改：`prototype/index.html`
+- 修改：`prototype/app.js`
+- 修改：`tests/settings-store.test.js`、`tests/server.test.js`、`tests/electron-smoke.test.js`
+- 新增：`tests/writing-assistant-client.test.js`
 
-## Task 3：保存原文来源并生成整本/选章提示词
+**步骤：**
 
-**Files:**
-- Modify: `prototype/writing-workbench-schema.js`
-- Modify: `prototype/writing-workbench-coordinator.js`
-- Modify: `prototype/writing-workbench-prompts.js`
-- Test: `tests/writing-workbench-schema.test.js`
-- Test: `tests/storage.test.js`
-- Test: `tests/writing-workbench-coordinator.test.js`
-- Test: `tests/writing-workbench-prompts.test.js`
+1. 为辅助判断配置定义独立字段：服务模式、Base URL、模型 ID、API Key，以及可选的“复用主模型 Base URL/API Key”引用；模型 ID 与任务启用开关独立。主模型未被明确选择时不隐式复用，不自动同步。
+2. 实现三个协议适配：TypeSafe System One；遵循 Jev/Decisions 契约的中转站（按实际 API 路径调用，例如 OpenRouter Decisions API）；OpenAI Chat Completions 中转站（支持用户配置的 Jev 模型 ID，也支持其他通用辅助模型）。请求格式和响应解析分别校验，不把不同协议的输出伪装成同一类置信度。
+3. OpenAI 兼容模式使用严格 JSON 输出并进行本地 schema 校验。用户选择“Jev 模型”时界面按用户配置显示该类型与模型 ID；连接测试只验证端点可达和格式有效，不声称能鉴定第三方实际模型身份。
+4. 浏览器配置只保留在本机服务内存，不回传或保存 API Key；桌面配置沿用 `safeStorage`，加密持久化。公开配置只返回是否已配置、服务商/模式、Base URL 和模型 ID，不返回密钥。空密钥表示保留已有密钥，按现有设置语义处理。
+5. 提供不带任务/文件内容的最小连接测试；UI 显示连接和结构校验分别成功或失败。服务端 URL 校验沿用现有约束：外部 HTTPS、本机回环 HTTP，拒绝 URL 内嵌凭证、查询和片段；API Key 只放授权头，不写日志、URL、错误正文或任务数据。请求不得跟随跨 origin 重定向并向新 origin 转发授权头；客户端无法保证凭证隔离时必须关闭自动重定向并显示可操作的连接失败。
+6. 更新桌面 IPC 和浏览器 `/api/config/services`，拒绝未授权远程修改配置；新服务的异常、超时、限流和鉴权失败映射为不含密钥的可操作提示。覆盖跨 origin 重定向测试：不得把授权头发送到不同 origin；无法由底层客户端可靠阻止时禁用自动重定向并将其作为连接失败处理。
 
-- [x] **Step 1: 为 `sourceDocument` 编写 schema、存储与分析测试**
+**验收：** 三种服务模式可分别配置、读取非敏感状态并按各自契约测试；可明确复用主模型连接；桌面安全存储和浏览器临时存储符合现有约定；第三方模型身份不可验证时 UI 如实说明。
 
-定义轮次内文件型原文结构：`{ name, format, fingerprint, parseStatus, extractedCharacterCount, pageCount, preview, outline, selectedSectionIds, manualSectionRange, processingScope, attachmentRequired }`。同时覆盖短文粘贴模式：不强制导入文件或选择目录；目录无法识别时允许手动填写章节范围。测试要求 `preview` 最多 8,000 字符、目录最多 200 项、章节选择只接受目录中存在的 ID；清洗后不保留绝对路径、File 对象、二进制或完整 30,000 字符文档。任务分析收到原文预览、目录和已选参考摘录，但仍不创建文章。
+### T5：串联辅助判断、任务 UI 与失败降级（约 4–6 小时）
 
-```js
-const sourceDocument = schema.normalizeWritingSourceDocument({
-  name: '操作手册.docx', format: 'docx', fingerprint: '12000:abcd',
-  preview: '预览'.repeat(5000),
-  outline: [{ id: 's1', title: '安装', level: 1, locator: '第1段' }],
-  selectedSectionIds: ['s1', 'unknown'], processingScope: 'sections',
-  absolutePath: 'D:/private/操作手册.docx', file: { bytes: 'secret' }
-});
-assert.ok(sourceDocument.preview.length <= 8000);
-assert.deepEqual(sourceDocument.selectedSectionIds, ['s1']);
-assert.equal(Object.hasOwn(sourceDocument, 'absolutePath'), false);
-assert.equal(Object.hasOwn(sourceDocument, 'file'), false);
-```
+**文件：**
 
-- [x] **Step 2: 运行 schema/coordinator/prompt 测试确认新字段未支持**
+- 修改：`prototype/writing-workbench-coordinator.js`
+- 修改：`prototype/writing-workbench-ui.js`
+- 修改：`prototype/writing-workbench-prompts.js`
+- 修改：`prototype/index.html`
+- 修改：相关工作台 UI/coordinator 测试
 
-Run: `node --test tests/writing-workbench-schema.test.js tests/storage.test.js tests/writing-workbench-coordinator.test.js tests/writing-workbench-prompts.test.js`
-Expected: 新增 `sourceDocument` 测试失败；旧任务迁移和原有文本改写测试保持通过。
+**步骤：**
 
-- [x] **Step 3: 实现受限原文来源结构和 prompt 分支**
+1. 在第一步材料区移除所有“最多 3 份”“模型最多选 5 份”提示与禁用逻辑；候选仍分页每页 20 项，显示全量扫描/命中/过滤/未扫描状态。材料数量只受内容预算约束。
+2. 加入独立的“使用辅助模型判断”开关，默认关闭。未配置时禁用并说明配置入口；启用前披露任务摘要、相关片段、服务商和模型 ID 将发送给哪个服务。
+3. 对全部本机检索候选按顺序尝试辅助评估，由完整协议请求累计 4,000 tokens 预算决定实际处理数量，最多 3 个并发请求。按 Jev/Decisions 契约逐候选构造 state，不将无关候选合并；预算外或失败候选留在主模型候选池并标明状态。
+4. 对 OpenAI Chat Completions 辅助响应要求结构化 JSON 并校验。通用模型不展示为 Jev 概率；任何辅助分数不单独排除候选、不触发高影响动作。
+5. 将辅助结果、来源片段和不确定项展示给主模型复核，再由主模型输出最终文体/任务判断和提示词。Jev 不读取文件、不调用搜索、不生成最终提示词。
+6. 超时、429、鉴权失败、响应无效、预算耗尽、结论冲突时清楚展示失败/部分完成状态，回退主模型且不自动切换其他付费服务，不丢失用户输入。
 
-在 round normalizer 中加入 `normalizeWritingSourceDocument`，在旧任务迁移中默认省略该字段。`analyzeTask` 仅接收 8,000 字符预览、最多 200 个标题和用户确认的辅助摘录；新建任务保存源文件名、格式、指纹、解析状态、预览、章节候选、选择及有界手动范围，不保存文件句柄或绝对路径。任务分析 prompt 明确预览可能不完整，不得据此断言全手册事实。文件型改写提示词显示“请附上原文件”，整本模式要求逐章处理并等待用户继续，选章模式只要求修改已选标题/位置；未识别位置显示“位置未识别”。若原文以粘贴方式提供，保持现有短文改写提示词行为；粘贴或文件原文切换时清理互斥的旧来源状态。文件型提示词不拼入整本原文。
+**验收：** 默认关闭时不会请求辅助服务；启用后摘要和片段按披露范围发送；超出任一成本上限时候选状态正确；失败不阻断生成提示词，也不丢失原文、目标和手动材料选择。重新分析开始时清空旧模型推荐、证据和推荐勾选，分析失败后不得展示上轮建议。
 
-```js
-function buildSourceDocumentInstructions(sourceDocument) {
-  if (!sourceDocument) return '';
-  const selected = sourceDocument.outline
-    .filter(item => sourceDocument.selectedSectionIds.includes(item.id));
-  const scope = sourceDocument.processingScope === 'sections'
-    ? `只处理以下章节：${selected.map(item => `${item.title}（${item.locator || '位置未识别'}）`).join('、')}`
-    : '请先检查原文件目录，再按章节逐次改写；每次完成一章后等待用户确认再继续。';
-  return `待改原文件：${sourceDocument.name}。请用户在当前 AI 对话中附上该文件。${scope}`;
-}
-```
+### T6：集成验收、回归与计划覆盖检查（约 3–5 小时）
 
-- [x] **Step 4: 运行 schema、存储、coordinator 和 prompt 回归**
+**文件：**
 
-Run: `node --test tests/writing-workbench-schema.test.js tests/storage.test.js tests/writing-workbench-coordinator.test.js tests/writing-workbench-prompts.test.js`
-Expected: 文件元数据在保存/重载后可用；原文件正文不进入整本处理 prompt；选章范围与附件说明准确；旧的粘贴文本提示词无回归。
+- 修改/新增：`tests/browser-project-index.test.js`
+- 修改/新增：`tests/writing-material-search.test.js`
+- 修改/新增：工作台 schema/coordinator/prompts/UI 测试
+- 修改/新增：`tests/writing-assistant-client.test.js`
+- 修改：`tests/server.test.js`、`tests/settings-store.test.js`、`tests/electron-smoke.test.js`、`tests/e2e-smoke.test.js`
+- 如添加服务端模块，更新：`package.json` 中 `check` 脚本
 
-- [x] **Step 5: 完成来源契约与提示词变化阶段实现与验证（本次不提交）**
+**步骤：**
 
-本次按用户要求完成实现与验收，不执行 Git 提交。
+1. 增加单元场景：全文命中/路径定位/密钥遮蔽、超限文件和取消、非法 search/read JSON、任意数量材料和 token 裁剪、未发送材料标记。
+2. 增加辅助服务契约场景：System One 请求/响应、Decisions 请求路由、OpenAI Chat Completions JSON 输出、连接探测不带用户数据、API Key 不进入公开配置或错误、复用主模型连接但模型 ID 独立、跨 origin 重定向不转发授权头、三种失败路径回退。
+3. 增加端到端场景：上传大量文件夹+单文件、跨全量列表搜索、模型追加 search/read、用户确认超过 3 份材料、Jev 默认关闭与主动开启、超过 20 个候选时仍按 4,000 tokens/3 并发预算评估、预算外项继续交主模型。
+4. 回归新写作/文章改写、TXT/MD/DOCX/PDF 原文导入、整本/选章提示词、工作空间重新授权、软著规则包、任务历史和学术工作台页面隔离。
+5. 使用脱敏、可复现且标注正确材料、文体/任务类别及提示词评价标准的中文样本，在相同任务下对比辅助判断关闭、System One/Decisions Jev、OpenAI 兼容 Jev 中转、通用辅助模型四种条件，分开报告协议与模型条件。记录材料命中/错误推荐、文体/任务分类、提示词依据忠实度与可执行性（盲评）、未评估比例、端到端耗时、成本和失败率；结果用于判断中文效果和是否保留默认关闭策略，不将单次样本表现当作普遍结论。
+6. 记录大目录扫描耗时和取消响应。若在既定 10,000 文件/单文件 1 MB 范围内出现不可接受的等待或内存占用，先提交测量结果与降级建议，不擅自新增总字节硬限制或持久全文索引。
+7. 按项目脚本执行相关测试、`pnpm check` 和 `pnpm test`；检查 `git diff --check` 与变更范围，不清理无关工作区改动，不提交 Git。
+8. 覆盖推荐证据边界：模型返回未发送/无效 ID 不得被推荐；预算裁剪后展示的摘录必须与实际请求一致；重新分析失败不得残留旧推荐，并保留用户手动选择。
 
-## Task 4：改造第一步材料界面
+**验收：** 设计稿第 7 节验收标准逐项有对应实现/回归场景；`pnpm check` 和 `pnpm test` 结果记录在最终交付；没有仍对写作材料起作用的 3/5 份文件硬上限；模型推荐均有本轮实际发送的候选和证据支撑。
 
-**Files:**
-- Modify: `prototype/writing-workbench-ui.js`
-- Modify: `prototype/index.html`（仅新增写作导入区/候选列表所需的局部样式）
-- Modify: `prototype/writing-workbench-schema.js`（仅在 round/sourceDocument 状态接线需要时）
-- Test: `tests/writing-workbench-ui.test.js`
+## 风险与处理
 
-- [x] **Step 1: 编写首屏界面与交互失败测试**
-
-测试新写作不显示原文导入；改写可粘贴短文或导入长文，分别能继续到任务分析。导入长文后出现解析状态及章节候选；选章后确认的 ID 或手动范围进入任务来源。替换/移除原文件后清空旧目录、章节 ID 和解析状态。异步解析时连续换文件、取消/移除文件或先后完成两次解析，旧请求不得覆盖当前文件状态。参考材料区显示“已选 N/3 份辅助资料，待改原文不计入”，每页 20 项，搜索能命中非当前页文件；勾选 3 份后尝试第 4 份应被明确阻止并说明上限，不得静默替换已有选择。构建/临时文件默认折叠，恢复后确实读取并通过安全校验，安全排除文件不能恢复。单文件、多文件导入与文件夹/工作空间候选合并、去重且不互相替换；移除导入来源后只移除该来源独有项，仍由其他来源提供的候选保留。测试候选总量超过 100 时仍可通过全索引搜索找到未渲染项。模型失败、解析失败、恢复失败、没有可读候选、扫描未完成均保留目标和文件名并显示准确状态/可恢复操作。补充空列表、加载中、搜索无匹配、过滤项数量、解析不完整、被选章节归零等状态断言，并验证文件路径窄屏截断但完整路径可通过可访问名称/提示读取。
-
-```js
-const markup = fixture().mount.innerHTML;
-assert.match(markup, /待改原文/);
-assert.match(markup, /整本处理/);
-assert.match(markup, /选择章节/);
-assert.match(markup, /待改原文不计入/);
-assert.match(markup, /每页 20 项/);
-```
-
-- [x] **Step 2: 运行 UI 测试确认新导入/呈现断言失败**
-
-Run: `node --test tests/writing-workbench-ui.test.js`
-Expected: 新增原文文件区、章节处理、候选分页/过滤状态断言失败。
-
-- [x] **Step 3: 实现独立原文导入和清爽候选视图**
-
-新增 `writing-source-file` 文件输入，仅接受 TXT、MD、DOCX、PDF。TXT/MD 本机读取，有限保存最多 30,000 字符并记录是否被截断；DOCX/PDF 调用现有本机解析 API，并显示 20 MB、100 页和 30,000 字符限制。PDF OCR 明确提示识别结果需要人工核对。预解析 `sourceDocument` 保存在向导临时状态中；每次导入递增请求序号或使用等效取消机制，只有当前文件对应的最新结果可更新状态，失败时保留文件名和目标，移除/换文件时清空旧目录与章节选择。候选引用材料维持来源集合、统一去重后的 `allCandidates` 与 `selectedMaterialIds`：额外导入的单/多文件累加到文件夹/工作空间候选，不覆盖已有来源；重复项按来源 ID/相对路径或规范化文件指纹合并；移除某来源时仅删除没有其他来源引用的候选。所有候选参与全量搜索，无论 UI 暂存规模；每次只渲染 20 项，不以 100 项暂存上限截断索引或搜索。通过 `filterBrowserProjectCandidates` 渲染可用候选，并将可恢复过滤项作为独立恢复操作行显示。默认先展示本机推荐项，噪声项分组折叠且恢复时才单文件读取并执行普通候选安全校验，安全排除项不可恢复。纵向分区显示原文卡片与辅助材料卡片；候选行只显示勾选框、文件名、路径、短状态和可展开摘录；扫描/空结果/无匹配/截断信息用汇总状态呈现。只有用户确认的最多 3 份材料调用 `analyzeTask`；成功后创建文章并把 `sourceDocument` 绑定到首轮。原文任务创建后保存有限预览和章节选择；刷新后不假设文件对象可恢复，仍允许用已保存的信息编辑提示词。
-
-```js
-const visible = browserIndex.filterBrowserProjectCandidates(indexResult, {
-  query: form.wizardMaterialSearch,
-  page: form.wizardMaterialPage,
-  pageSize: 20,
-  showFiltered: form.showFilteredCandidates
-});
-```
-
-- [x] **Step 4: 运行 UI 与索引回归**
-
-Run: `node --test tests/writing-workbench-ui.test.js tests/browser-project-index.test.js tests/writing-workbench-schema.test.js`
-Expected: 原文、任务目标和已选材料在回退/失败时保留；旧解析结果不会覆盖新文件；粘贴与文件导入均可继续；候选可跨页及跨来源搜索、去重与移除；恢复过滤项会读取且失败有反馈；最多勾选 3 份参考材料；原文和规则包不占上限；安全排除和历史任务兼容。
-
-- [x] **Step 5: 完成向导界面阶段实现与验证（本次不提交）**
-
-本次按用户要求完成实现与验收，不执行 Git 提交。
-
-## Task 5：完成端到端验收与项目回归
-
-**Files:**
-- Modify: `tests/e2e-smoke.test.js`
-- Modify: `tests/writing-workbench-ui.test.js`
-- Modify: `docs/superpowers/specs/2026-10-23-writing-workbench-guided-flow-design.md`（仅记录实际实现边界或差异）
-
-- [x] **Step 1: 编写完整的新用户验收场景**
-
-端到端走通：文章改写分别以粘贴短文和导入操作手册开始；文件模式覆盖 TXT/MD、DOCX、PDF，查看解析状态和目录后选择章节或整本模式并输入改写目标；添加代码文件夹及额外参考文件，确认候选合并去重、每页 20 项、全量搜索和一个生成过滤项恢复后实际读取；选择 3 份参考材料，确认分析请求仅包含这 3 份材料摘录及有界原文预览；生成提示词并验证只含附件要求/选定章节范围、不含整本手册；刷新或重开已保存任务，确认元数据/预览可恢复但 File 对象需重新选择。另验证文件快速切换时旧解析响应不覆盖新状态、解析/恢复超限或失败、30,000 字符截断、扫描版 OCR 低可信、目录无法提取、模型失败、搜索无结果、候选超过 100 条和目录达到 10,000 项上限时，任务输入保留且降级入口可用。
-
-```js
-assert.equal(analyzeRequest.sourceDocument.preview.length <= 8000, true);
-assert.equal(analyzeRequest.materials.length, 3);
-assert.doesNotMatch(generatedPrompt, /整本手册的唯一段落标记/);
-assert.match(generatedPrompt, /请在当前 AI 对话中附上该文件/);
-assert.match(generatedPrompt, /只处理以下章节/);
-```
-
-- [x] **Step 2: 运行与本次变更直接相关的测试**
-
-Run: `node --test tests/writing-document-outline.test.js tests/writing-material-parser.test.js tests/server.test.js tests/browser-project-index.test.js tests/writing-workbench-schema.test.js tests/storage.test.js tests/writing-workbench-coordinator.test.js tests/writing-workbench-prompts.test.js tests/writing-workbench-ui.test.js tests/e2e-smoke.test.js`
-Expected: 所有本次覆盖用例通过；旧工作台四步流程、学术写作、软著规则包、已有文章历史和资料覆盖回归通过。
-
-- [x] **Step 3: 运行项目检查**
-
-Run: `pnpm check`
-Expected: 项目脚本语法/静态检查通过。
-
-Run: `pnpm test`
-Expected: 项目测试通过；若出现与本次变更无关的既有失败，记录失败项，不通过改无关模块掩盖。
-
-- [x] **Step 4: 检查最终改动范围并记录验收**
-
-本次已完成工作区差异检查；按用户要求不执行 Git 提交。
-
-## 计划自审：设计覆盖映射
-
-| 设计要求 | 任务 | 验证 |
+| 风险 | 影响 | 处理 |
 | --- | --- | --- |
-| 文件原文与最多 3 份参考材料分开 | Task 3、Task 4、Task 5 | Schema、UI、E2E 断言 |
-| TXT/MD/DOCX/PDF 导入与大小/页数/文本限制 | Task 1、Task 4、Task 5 | Parser、API 和 UI 限制/失败测试 |
-| 整本提示词逐章处理并附原件 | Task 3、Task 4、Task 5 | Prompt 和 E2E 检查 |
-| 提取目录、选章范围、位置缺失降级 | Task 1、Task 3、Task 4、Task 5 | 目录纯函数、解析和提示词测试 |
-| 原件句柄不持久化，任务预览/章节选择可恢复 | Task 3、Task 4、Task 5 | Schema、storage 和重开流程测试 |
-| 短文粘贴与文件导入并行支持；章节目录缺失时可手动指定范围 | Task 3、Task 4、Task 5 | Schema、提示词和 UI/E2E 测试 |
-| DOCX 标准/自定义标题映射、页/段定位与 30,000 字符端到端截断 | Task 1、Task 5 | Parser/API/outline 测试，超过 10,000 与 30,000 的边界用例 |
-| 代码/生成文件过滤项恢复后读取，安全排除始终不可恢复 | Task 2、Task 4、Task 5 | Index 恢复、失败、安全与 UI 测试 |
-| 全索引本地搜索、每页 20 项、10,000 项截断提示 | Task 2、Task 4、Task 5 | 分页、跨页搜索、截断及 UI 状态测试 |
-| 文件夹/工作空间和额外参考文件合并、去重、按来源移除 | Task 4、Task 5 | 多来源索引与 UI/E2E 测试 |
-| 候选数不受 100 项渲染暂存限制，已选辅助材料严格最多 3 份 | Task 4、Task 5 | 大候选搜索与第 4 项拒绝测试 |
-| 异步换文件/取消时不被过期解析响应覆盖 | Task 4、Task 5 | UI 快速切换和移除竞态测试 |
-| 简洁、分区且不堆重复错误卡片 | Task 4、Task 5 | UI 结构和状态呈现测试 |
-| 只有用户确认材料进入任务分析 | Task 3、Task 4、Task 5 | Coordinator 与端到端请求内容测试 |
+| 大目录每轮全文重扫造成等待 | 候选上限可达 10,000，追加轮次会再次扫描 | 单文件流式处理、每文件让出主线程、可取消、展示进度；测量真实耗时后再决定是否需要调整设计 |
+| OpenAI 兼容中转站对 JSON 模式支持不一致 | 返回 Markdown/自由文本，结构解析失败 | 连接测试验证结构化响应；严格校验，失败时明确回退，不伪造分数 |
+| 中转站跨 origin 重定向 | 授权头可能泄露给重定向目标 | 禁止向不同 origin 转发授权头；不能保证时关闭自动重定向并报连接失败 |
+| 服务商声称的模型 ID 不代表实际模型 | 用户误以为连接测试认证 Jev 身份 | 展示用户填写的模型 ID，明确连接测试不验证第三方模型身份 |
+| 无限材料导致请求过大 | 超上下文或请求体限制，误标材料已读 | 以主模型 8,000-token 和 HTTP 请求体双预算裁剪，并列出未纳入项 |
+| 浏览器与桌面配置存储不同 | API Key 泄漏或重启丢失 | 浏览器仅留服务内存；桌面使用现有 `safeStorage`；配置响应和日志不含密钥 |
+| token 估算遗漏固定提示词或元数据 | 实际请求超出预设上下文预算 | 预算按完整序列化输入保守估算，并独立校验请求体字节数；有 usage 时用于事后校准 |
+| Jev 调用成本随候选增加 | 费用和耗时不可控 | 候选数不限，完整请求累计 4,000 tokens、3 并发；预算外标未评估，不从主模型判断中移除 |
+| 中文辅助判断效果不稳定 | 辅助排序或分类可能降低提示词质量 | 用固定脱敏中文样本做对照与盲评，报告质量、覆盖、耗时、成本和失败率；默认仍关闭 |
+| 文件内容含提示注入或凭证 | 模型被资料误导或密钥外传 | 资料标为不可信输入；片段发送前遮蔽凭证；白名单工具动作，无法遮蔽则不发送 |
+| 既有实现/历史任务仍有 3 项截断 | 新旧页面出现材料丢失 | 针对性移除材料路径的截断并验证历史 schema；不改其他领域的三项上限 |
 
-## 执行说明
+## 设计覆盖映射
 
-- 依次完成 Task 1→Task 2→Task 3→Task 4→Task 5；Task 1 的解析/目录输出和 Task 2 的候选索引接口是 UI 实现前置条件。
-- 沿用现有原生 DOM 与测试 fixture，不引入新的 UI 框架、虚拟列表依赖或独立上传服务。
-- 实现时沿用用户当前工作区的既有改动，不重置或覆盖与本计划无关的文件。
+| 设计要求 | 任务 | 验收位置 |
+| --- | --- | --- |
+| 任意数量候选搜索、确认材料；只有 token/请求体限制 | T1、T3、T5、T6 | 材料请求与预算边界场景 |
+| 全文件全文本机扫描、无持久索引、精确片段定位 | T2、T3、T6 | 全文命中、刷新/取消和定位场景 |
+| 3 轮追加检索、每轮最多 5 词、search/read 白名单 | T3、T6 | Coordinator 契约与非法响应场景 |
+| Jev System One、Decisions 中转、OpenAI 兼容 Jev/通用模型 | T4、T5、T6 | 三协议客户端与配置场景 |
+| 可显式复用主模型 Base URL/API Key | T4、T5、T6 | 配置读取和模型 ID 独立场景 |
+| 连接测试不发送文件、身份不作认证 | T4、T6 | 网络请求断言与 UI 文案检查 |
+| 无候选数量上限、4,000 tokens、3 并发的辅助判断预算 | T5、T6 | 输入超过旧数量限制时不按数量截断；预算外候选标为未评估 |
+| 辅助模型默认关闭、失败回退、隐私披露 | T5、T6 | 默认状态、失败与披露场景 |
+| Browser/Web 与 Electron 的密钥存储策略 | T4、T6 | settings store、server、IPC 测试 |
+| 长原文整本/选章、原有四步任务闭环 | T6 | 原工作台回归场景 |
+| 完整请求 token 预算、事后 usage 校准与请求体字节上限 | T1、T3、T6 | 预算边界、usage 缺失/存在与请求体超限场景 |
+| 推荐 ID 与证据必须来自本轮实际发送的材料，重分析失败不能显示旧推荐 | T5、T6 | 未发送 ID/预算裁剪证据/失败重分析回归场景 |
+| 中文 Jev 开关和各辅助服务条件的同任务对照/盲评 | T6 | 标注正确答案的脱敏中文样本评估记录 |
+| 跨 origin 重定向不转发凭证 | T4、T6 | 重定向服务端断言授权头未泄漏 |
+
+## 执行顺序
+
+先完成 T1；T2 与 T4 可分开文件范围并行；之后执行 T3，再将 T2、T3、T4 集成到 T5；最后执行 T6。执行前再次检查工作区脏改动，只修改本计划列出的文件及必要依赖，不覆盖或提交其他用户改动。
+
+## 资源按需调用补充实施计划
+
+以下是本轮新增范围，专门补齐“规则已融合但原始 skill 资源尚未按需调用”的缺口。原有 Jev、全文检索、长手册和页面隔离要求继续有效。
+
+### R1：资源 schema、快照与状态（约 1–2 小时）
+
+**文件：** `prototype/writing-pack-schema.js`、`prototype/writing-workbench-schema.js`
+
+扩展资源四类 `script/template/example/reference` 的白名单字段；增加脚本 action、参数 schema、允许根目录、超时和输出上限，模板格式/章节范围，示例输入概况/预期结构/参考说明。过滤凭证键、本机绝对路径和未知字段。为规则包快照及写作轮次增加资源快照和使用/跳过/不可用状态，确保历史轮次可以复盘当时实际选择。
+
+### R2：资源注册、读取和软著资源清单（约 2–3 小时）
+
+**文件：** 新增 `prototype/writing-resource-registry.js`、修改 `prototype/writing-pack-catalog.js`、`prototype/index.html`
+
+新增按文体、任务类型、用途和规则包筛选资源的注册模块。登记两份用户提供软著 skill 的 archive、相对路径、版本、来源和核验状态，注册申请表/手册/代码材料对应的模板、示例、参考资料和固定脚本 action。资源正文只通过有界读取接口加载，不把原始脚本全文写入规则包或提示词。
+
+### R3：受控脚本执行器（约 2–3 小时）
+
+**文件：** 新增 `server/writing-resource-runner.js`，修改 `server.js`、`electron/main.js`、`electron/preload.js`
+
+提供固定 actionId 注册表和统一执行接口。执行前校验 action、资源 ID、参数 schema、授权根目录和相对路径；使用无 shell 的参数数组，设置超时、最大输出、最大文件数和结果摘要；拒绝任意命令、绝对路径、路径穿越、凭证文件和未注册脚本。脚本失败、超时或输出超限返回可追踪状态，不阻断主模型提示词生成。
+
+### R4：提示词和协调器接线（约 2–3 小时）
+
+**文件：** `prototype/writing-workbench-prompts.js`、`prototype/writing-workbench-coordinator.js`
+
+任务分析和软著申请表/操作手册/代码材料任务按需选择资源。提示词分开写入规则、模板片段、示例摘要、脚本能力说明和事实材料，明确各自边界。协调器保存 `resourceSnapshot`、`resourceUsage`、`skippedResources`、`unavailableResources`，并在资源不可读或脚本失败时保留原因和主模型降级路径。模型不能直接触发脚本，只有应用确认后的 action 才能执行。
+
+### R5：UI 展示和实际动作入口（约 2–3 小时）
+
+**文件：** `prototype/writing-workbench-ui.js`、`prototype/app.js`
+
+在写作工作台显示本轮使用的规则、模板、示例、脚本及来源/版本/核验状态；同时显示未加载原因、脚本执行状态和输出摘要。软著相关任务提供可确认的脚本动作入口，整本手册继续使用原文件附件，选章使用目录范围。资源失败时展示“未执行/失败/回退主模型”，不把失败解释成任务完成。
+
+### R6：测试、文档和验收（约 2–4 小时）
+
+**文件：** 新增资源 registry/runner 测试，修改 schema/catalog/prompts/coordinator/UI/server/e2e 测试及本设计稿
+
+覆盖资源白名单和敏感字段过滤、按任务选择和排除、模板/示例进入提示词、脚本 action/参数/路径/超时/输出限制、资源快照和失败状态、软著整本/选章、多文件夹全文检索后模型复核。运行 `pnpm check`、专项测试、`pnpm test` 和 `git diff --check`，并在最终报告中区分“已实现”和“仍是设计目标”。
+
+### 本轮实施状态
+
+- **已完成（此前已有）：** 规则包核心字段、软著规则融合、Jev 三协议、全文检索、长手册整本/选章、提示词基础规则消费。
+- **本轮已完成：** 资源 schema、资源注册/有界读取、两份用户提供 skill 的归档标识、受控脚本 action、模板和示例按任务进入提示词、资源快照/状态、桌面端确认执行入口及对应测试。读取支持用户提供的 ZIP 归档，脚本执行仍只接受白名单 actionId 和已授权项目目录。
+- **仍是独立评估目标：** 中文样本下关闭辅助判断、System One/Decisions、OpenAI 兼容 Jev 中转和通用辅助模型的质量、耗时、成本对照；该项需要真实服务配置和脱敏标注样本，不能用单元测试替代。

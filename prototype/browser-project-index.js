@@ -121,40 +121,46 @@
     for (let index = 0; index < selected.length; index++) {
       if (signal?.aborted) throw new DOMException('目录读取已取消', 'AbortError');
       const { file, relativePath } = selected[index];
-      if (!relativePath || excludedPath(relativePath)) continue;
-      const name = fileName(relativePath);
-      const base = { id: relativePath, relativePath, title: name };
-      if (isPrivatePath(relativePath)) {
-        inventory.push({ id: `private-${index}`, relativePath: '', title: '已排除的敏感文件', status: 'excluded-private' });
-        continue;
-      }
-      if (!TEXT_EXTENSIONS.has(extension(name))) {
-        inventory.push({ ...base, status: 'unsupported' });
-        continue;
-      }
-      if (!Number.isFinite(file.size) || file.size > MAX_FILE_BYTES) {
-        inventory.push({ ...base, status: 'too-large' });
-        continue;
-      }
-      const reason = generatedReason(relativePath);
-      if (reason) {
-        filteredCandidates.push({ relativePath, title: name, reason });
-        inventory.push({ ...base, status: 'filtered-generated', reason });
-        continue;
-      }
-      try {
-        files.push(await readCandidate(file, relativePath, signal));
-        inventory.push({ ...base, status: 'indexed' });
-      } catch (error) {
-        if (error?.name === 'AbortError') throw error;
-        const status = error.code === 'EMPTY_CANDIDATE' ? 'empty' : error.code === 'UNSAFE_CANDIDATE'
-          ? (error.message.includes('上限') ? 'too-large' : error.message.includes('二进制') ? 'binary' : 'unsupported-encoding')
-          : 'unavailable';
-        inventory.push({ ...base, status, reason: error.message || '文件无法读取' });
-      }
+      await indexOneFile(file, relativePath, index, { signal, inventory, files, filteredCandidates });
+      options.onProgress?.({ scanned: index + 1, total: selected.length, relativePath });
+      if ((index + 1) % 64 === 0) await new Promise(resolve => setTimeout(resolve, 0));
     }
     if (!inventoryComplete) inventory.push({ id: 'browser-project-truncated', relativePath: '', title: '其余文件未扫描', status: 'unavailable', reason: `本次最多扫描 ${maxFiles} 个文件` });
     return { files, filteredCandidates, filteredCandidateCount: filteredCandidates.length, inventory, inventoryComplete };
+  }
+
+  async function indexOneFile(file, relativePath, index, state) {
+    if (!relativePath || excludedPath(relativePath)) return;
+    const name = fileName(relativePath);
+    const base = { id: relativePath, relativePath, title: name };
+    if (isPrivatePath(relativePath)) {
+      state.inventory.push({ id: `private-${index}`, relativePath: '', title: '已排除的敏感文件', status: 'excluded-private' });
+      return;
+    }
+    if (!TEXT_EXTENSIONS.has(extension(name))) {
+      state.inventory.push({ ...base, status: 'unsupported' });
+      return;
+    }
+    if (!Number.isFinite(file.size) || file.size > MAX_FILE_BYTES) {
+      state.inventory.push({ ...base, status: 'too-large' });
+      return;
+    }
+    const reason = generatedReason(relativePath);
+    if (reason) {
+      state.filteredCandidates.push({ relativePath, title: name, reason });
+      state.inventory.push({ ...base, status: 'filtered-generated', reason });
+      return;
+    }
+    try {
+      state.files.push(await readCandidate(file, relativePath, state.signal));
+      state.inventory.push({ ...base, status: 'indexed' });
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      const status = error.code === 'EMPTY_CANDIDATE' ? 'empty' : error.code === 'UNSAFE_CANDIDATE'
+        ? (error.message.includes('上限') ? 'too-large' : error.message.includes('二进制') ? 'binary' : 'unsupported-encoding')
+        : 'unavailable';
+      state.inventory.push({ ...base, status, reason: error.message || '文件无法读取' });
+    }
   }
 
   async function restoreBrowserProjectCandidate(fileList, relativePath, options = {}) {

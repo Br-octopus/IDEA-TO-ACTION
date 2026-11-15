@@ -1,9 +1,9 @@
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./writing-workbench-schema.js'), globalThis,
-    require('./writing-material-coverage.js'), require('./writing-workbench-prompts.js'), require('./writing-document-outline.js'), require('./browser-project-index.js'));
+    require('./writing-material-coverage.js'), require('./writing-workbench-prompts.js'), require('./writing-document-outline.js'), require('./browser-project-index.js'), require('./writing-material-search.js'));
   else root.WritingWorkbenchUI = factory(root.WritingWorkbenchSchema, root, root.ForwardStepWritingMaterialCoverage,
-    root.WritingWorkbenchPrompts, root.ForwardStepWritingDocumentOutline, root.ForwardStepBrowserProjectIndex);
-})(typeof globalThis === 'undefined' ? this : globalThis, function (schema, root, coverageApi, prompts, outlineApi, browserIndex) {
+    root.WritingWorkbenchPrompts, root.ForwardStepWritingDocumentOutline, root.ForwardStepBrowserProjectIndex, root.ForwardStepWritingMaterialSearch);
+})(typeof globalThis === 'undefined' ? this : globalThis, function (schema, root, coverageApi, prompts, outlineApi, browserIndex, searchApi) {
   'use strict';
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -11,6 +11,8 @@
   const newMaterialId = () => `material-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`}`;
   const articleConfig = schema.getWritingGenreConfig('article');
   const scopeLabels = { general: '通用', genre: articleConfig.name, project: '仅当前项目', article: '仅本篇（旧范围）' };
+  const memoryScopeLabel = memory => memory?.scope === 'genre' ? schema.getWritingGenreConfig(memory.genre)?.name || '文体' : scopeLabels[memory?.scope] || '未知范围';
+  const memoryOriginLabel = memory => memory?.origin === 'repeated-round' ? `跨文章重复建议（${memory.evidenceArticleIds?.length || 0} 篇）` : '用户明确保存';
   const GENRE_NAMES = Object.fromEntries(schema.WRITING_GENRES.map(genre => {
     const config = schema.getWritingGenreConfig(genre);
     return config?.name ? [config.name, genre] : null;
@@ -35,12 +37,76 @@
     let filteredCandidatesOpen = false;
     let candidatePage = 1;
     const projectSources = new Map();
+    const materialSearch = searchApi?.createWritingMaterialSearch?.() || null;
+    let activeSearchJob = null;
+    let writingAssistantStatus = { loading: true, configured: false, mode: '', modelId: '' };
     let articleId = '';
     let managerOpen = false;
+    let memoryFocus = false;
     let focusAfterRenderId = '';
     const memoryDrafts = new Map();
     const state = () => getState() || {};
     const workspace = id => id ? coordinator.getWorkspace(id) : null;
+    function openMemoryManager() { managerOpen = true; memoryFocus = true; render(); }
+    function showWritingWorkbench() { managerOpen = false; memoryFocus = false; render(); }
+    function prepareNewDraft({ goal, materials, mode = 'new', confirmMaterials = true }) {
+      const previous = drafts.get('');
+      const hasInput = previous && (previous.dirty.length > 0 || previous.materials.length > 0 || previous.wizardSourceDocument
+        || ['title', 'goal', 'draft', 'newDraft', 'feedback', 'preference', 'example', 'counterexample', 'constraints', 'success', 'preserve', 'prompt']
+          .some(key => String(previous[key] || '').trim()));
+      if (hasInput && !confirm('当前新写作草稿含有未提交输入。带入新来源会替换该新草稿；已保存稿件不受影响。是否继续？')) return false;
+      drafts.delete('');
+      articleId = '';
+      const f = form('');
+      f.goal = String(goal || '').trim();
+      f.draft = '';
+      f.materials = materials;
+      f.wizardMaterialIds = confirmMaterials ? materials.map(source => source.id) : [];
+      f.wizardCandidateMaterialIds = [];
+      f.wizardRecommendedMaterialIds = [];
+      f.wizardRecommendedCandidates = [];
+      f.wizardMode = mode;
+      f.wizardStage = 1;
+      f.wizardSuggestion = null;
+      f.wizardError = '';
+      f.wizardSourceDocument = null;
+      f.writingView = 'guided';
+      managerOpen = false;
+      memoryFocus = false;
+      navigate?.('article', 'writing');
+      render();
+      return true;
+    }
+    function prepareAnnotationDraft({ goal = '', sources = [] } = {}) {
+      const normalizedSources = schema.normalizeWritingRound({ sources }).sources
+        .filter(source => source.annotationSnapshot?.length)
+        .map(source => ({ ...source, kind: 'source' }));
+      if (!normalizedSources.length) throw new TypeError('沒有可帶入寫作的有效批注');
+      return prepareNewDraft({ goal: String(goal || '').trim() || '根据已选批注意见修改所附原文，并保留未涉及内容。',
+        materials: normalizedSources, mode: 'rewrite' });
+    }
+    function prepareLibraryDraft({ source = {} } = {}) {
+      const excerpt = String(source.excerpt || '').trim();
+      if (!excerpt) throw new TypeError('这条资料没有已保存的摘要或摘录，未带入写作');
+      const material = schema.normalizeWritingRound({ materials: [{
+        ...source, id: `library-${source.id || 'entry'}`, sourceId: source.id, sourceVersion: `V${source.version || 1}`,
+        sourceType: 'library-entry', origin: 'knowledge-library', purpose: 'content', excerpt,
+        selectedForPrompt: true, attachmentRequired: false, kind: 'material'
+      }] }).materials[0];
+      return prepareNewDraft({ goal: `参考资料库《${source.title || '未命名资料'}》V${source.version || 1} 的已保存摘要/摘录完成本次写作；先核对来源和适用范围。`,
+        materials: [{ ...material, kind: 'material' }], confirmMaterials: false });
+    }
+    function preparePromptDraft({ promptId = '', title = '', version = 1, text = '' } = {}) {
+      const excerpt = String(text || '').trim();
+      if (!excerpt) throw new TypeError('提示词正文为空，未带入写作');
+      const material = schema.normalizeWritingRound({ materials: [{
+        id: `prompt-${promptId || 'version'}`, title: `收藏提示词：${title || '未命名提示词'}`,
+        sourceId: promptId, sourceVersion: `V${version || 1}`, sourceType: 'prompt-library', origin: 'user-pasted',
+        purpose: 'content', excerpt, selectedForPrompt: true, attachmentRequired: false, kind: 'material'
+      }] }).materials[0];
+      return prepareNewDraft({ goal: `依据收藏提示词《${title || '未命名提示词'}》V${version || 1} 执行本次写作；先检查已填写变量后的完整正文。`,
+        materials: [{ ...material, kind: 'material' }], confirmMaterials: false });
+    }
     function promptLimitGuidance(message, id, submitted) {
       if (!/8000\s*字/.test(message) || !/超|超过/.test(message)) return message;
       const activeUnits = (workspace(id)?.units || []).filter(unit => !unit.archived);
@@ -102,7 +168,7 @@
           academicCitationStyle: academicTarget.citationStyle || '', academicRequirements: clone(academicTarget.requirements || []),
           goal: a.goal || '', audience: a.audience || '', platform: a.platform || '',
           success: (a.successCriteria || []).join('\n'), preserve: (a.preserveItems || []).join('\n'), constraints: a.constraints || '',
-          dimensions: a.dimensions || [], draft: round?.draft || '', newDraft: '', feedback: '', preference: '', example: '', counterexample: '',
+          dimensions: a.dimensions || [], draft: typeof a.draft === 'string' ? a.draft : round?.draft || '', newDraft: '', feedback: '', preference: '', example: '', counterexample: '',
           scope: 'general', corrections: w?.styleProfile.userCorrections || '', materials: round ? references(round) : [],
           linkTitle: '', linkUrl: '',
           packSelections: savedSelections || recommendedSelections,
@@ -113,17 +179,61 @@
           issueEvidence: '', issueSuggestion: '', issuePriority: 'medium', routeResult: '', routeEvidence: '',
           routeBlockReason: '', routeReturnToStageId: '',
           error: '', promptNotice: '', notifications: [], dirty: [],
-          wizardStage: 1, wizardMode: 'new', wizardSuggestion: null, wizardError: '', wizardMaterialIds: [], wizardMaterialSearch: '', wizardIssueIds: [], wizardPromptEdited: false, wizardUsedPrompt: '', wizardWorkspaceId: '', wizardWorkspaceName: '',
+          wizardStage: 1, wizardMode: 'new', wizardSuggestion: null, wizardError: '', wizardMaterialIds: [], wizardCandidateMaterialIds: [], wizardRecommendedMaterialIds: [], wizardRecommendedCandidates: [], wizardMaterialSearch: '', wizardIssueIds: [], wizardPromptEdited: false, wizardUsedPrompt: '', wizardWorkspaceId: '', wizardWorkspaceName: '',
           wizardSourceDocument: round?.sourceDocument ? clone(round.sourceDocument) : null,
           wizardSourceBusy: false, wizardSourceError: '', wizardShowFiltered: false,
           wizardFilteredCandidates: [], wizardInventoryComplete: true,
+          wizardUseAssistant: false, wizardAssistantStatus: '',
           researchMethod: '普通文章如何减少空泛总结并保留具体证据', researchKeywords: ''
         });
       }
       return drafts.get(id);
     }
+    async function refreshWritingAssistantStatus() {
+      try {
+        const result = typeof desktopApi?.getConfig === 'function'
+          ? await desktopApi.getConfig()
+          : await fetchImpl('/api/config').then(response => response.ok ? response.json() : null);
+        // 浏览器直接读取本机服务；桌面端以 Electron 安全配置为准。
+        // 桌面主进程同时返回的本地服务状态可能没有同步保存的凭证。
+        const service = desktopApi ? result : (result?.service && result.service.available !== false ? result.service : result);
+        writingAssistantStatus = { loading: false, configured: service?.writingAssistant?.configured === true,
+          mode: service?.writingAssistant?.mode || '', modelId: service?.writingAssistant?.modelId || '' };
+      } catch {
+        writingAssistantStatus = { loading: false, configured: false, mode: '', modelId: '' };
+      }
+      render();
+    }
+    async function evaluateWritingAssistant(candidates, taskSummary) {
+      const selected = candidates;
+      if (!selected.length) return { ok: true, evaluated: 0, results: [], unevaluated: [] };
+      try {
+        const result = typeof desktopApi?.evaluateWritingAssistant === 'function'
+          ? await desktopApi.evaluateWritingAssistant({ candidates: selected, taskSummary })
+          : await fetchImpl('/api/writing-assistant/evaluate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ candidates: selected, taskSummary }) }).then(response => response.json());
+        return result;
+      } catch (error) {
+        return { ok: false, code: 'WRITING_ASSISTANT_REQUEST_FAILED', message: error.message || '辅助判断请求失败', unevaluated: [] };
+      }
+    }
+    function formatAssistantAssessment(result, candidates) {
+      const byId = new Map((result.results || []).map(item => [item.id, item]));
+      const evaluated = candidates.filter(item => byId.has(item.id)).map(item => {
+        const assessment = byId.get(item.id);
+        return `${item.id}｜相关度 ${Math.round(Number(assessment.relevance || 0) * 100)}%｜${String(assessment.rationale || '未提供依据').slice(0, 300)}`;
+      });
+      const unevaluated = candidates.filter(item => !byId.has(item.id)).map(item => item.id);
+      const reasons = new Map((result.unevaluated || []).map(item => [item.id, item.reason]));
+      return [
+        `辅助判断状态：已评估 ${evaluated.length}/${candidates.length} 个候选。`,
+        evaluated.length ? `评估结果：\n${evaluated.join('\n')}` : '',
+        unevaluated.length ? `未评估候选：${unevaluated.map(id => `${id}${reasons.has(id) ? `（${reasons.get(id)}）` : ''}`).join('、')}；未评估不代表不相关，继续交给主模型复核。` : '',
+        result.estimatedTokens ? `辅助请求预算估算：${result.estimatedTokens}/4000 tokens。` : '',
+        !result.ok ? `辅助判断失败：${result.message || '未知原因'}；以下候选继续交给主模型。` : ''
+      ].filter(Boolean).join('\n');
+    }
     function references(round) {
-      return [...(round.materials || []).map(m => ({ ...m, kind: 'material' })), ...(round.sources || []).map(m => ({ ...m, kind: 'source' }))].slice(0, 3);
+      return [...(round.materials || []).map(m => ({ ...m, kind: 'material' })), ...(round.sources || []).map(m => ({ ...m, kind: 'source' }))];
     }
     function field(key, label, value, options = {}) {
       const id = `writing-${key}`;
@@ -225,7 +335,7 @@
       const outline = source?.outline?.length && source.processingScope === 'sections' ? `<fieldset><legend>选择要改写的章节</legend>${source.outline.map(item =>
         `<label class="writing-source-section"><input id="writing-source-section-${escape(item.id)}" type="checkbox" data-source-section="${escape(item.id)}" ${source.selectedSectionIds.includes(item.id) ? 'checked' : ''}>${escape(item.title)} <small>${escape(item.locator || '位置未识别')}</small></label>`).join('')}</fieldset>` : '';
       return `<section class="writing-source-document" aria-label="待改原文文件">
-        <h3>长原文文件（可选）</h3><p>手册可从文件导入；短文也可以直接粘贴。原文不计入 3 份辅助参考材料。支持 TXT、MD、DOCX、PDF；DOCX/PDF 不超过 20 MB，PDF 不超过 100 页，解析文本最多 30,000 字符。</p>
+        <h3>长原文文件（可选）</h3><p>手册可从文件导入；短文也可以直接粘贴。待改原文与参考材料分开管理。支持 TXT、MD、DOCX、PDF；DOCX/PDF 不超过 20 MB，PDF 不超过 100 页，解析文本最多 30,000 字符。</p>
         <input id="writing-source-file" type="file" accept=".txt,.md,.docx,.pdf" aria-label="导入待改原文文件" hidden>
         <button type="button" data-writing-action="import-source-file" ${f.wizardSourceBusy ? 'disabled' : ''}>${source ? '更换原文文件' : '导入原文文件'}</button>
         ${f.wizardSourceBusy ? '<p role="status">正在读取原文文件…</p>' : ''}
@@ -347,8 +457,13 @@
       const labels = config?.targetFields || articleConfig.targetFields;
       const locked = busy.has(articleId) || processingMaterials;
       const articles = coordinator.listArticles();
-      const guidedToolbar = `<div class="social-tools"><button type="button" class="button-secondary" data-writing-action="new">新建写作任务</button><label>已保存任务 <select id="writing-article-list"><option value="">新写作</option>${articles.map(item => `<option value="${escape(item.id)}" ${item.id === articleId ? 'selected' : ''}>${escape(item.title || item.goal || '未命名任务')}</option>`).join('')}</select></label><button type="button" class="button-secondary" data-writing-action="manage-memories">管理写作记忆</button><button type="button" class="button-secondary" data-writing-action="manage-packs">管理专业规则包</button></div>`;
-      const isGuided = !w || [2, 3, 4].includes(f.wizardStage);
+      if (memoryFocus) {
+        mount.innerHTML = `<div class="writing-memory-focus"><div class="social-tools"><div><h2>写作偏好</h2><p class="social-muted">仅管理已保存的写作偏好；来源、适用范围和编辑记录沿用现有记忆数据。</p></div>${button('close-memory-manager', '返回写作工作台')}</div>${renderMemories(w, true)}</div>`;
+        return;
+      }
+      const isGuided = !w || ([2, 3, 4].includes(f.wizardStage) && f.writingView !== 'center');
+      const guidedToolbar = `<div class="social-tools"><button type="button" class="button-secondary" data-writing-action="new">新建写作任务</button><label>已保存任务 <select id="writing-article-list"><option value="">新写作</option>${articles.map(item => `<option value="${escape(item.id)}" ${item.id === articleId ? 'selected' : ''}>${escape(item.title || item.goal || '未命名任务')}</option>`).join('')}</select></label><button type="button" class="button-secondary" data-writing-action="manage-memories">管理写作记忆</button><button type="button" class="button-secondary" data-writing-action="manage-packs">管理专业规则包</button>${w ? button('open-article-center', '打开稿件中心') : ''}</div>`;
+      const articleToolbar = `<div class="social-tools"><button type="button" class="button-secondary" data-writing-action="new">新建写作任务</button><label>已保存任务 <select id="writing-article-list"><option value="">新写作</option>${articles.map(item => `<option value="${escape(item.id)}" ${item.id === articleId ? 'selected' : ''}>${escape(item.title || item.goal || '未命名任务')}</option>`).join('')}</select></label><button type="button" class="button-secondary" data-writing-action="manage-memories">管理写作记忆</button><button type="button" class="button-secondary" data-writing-action="manage-packs">管理专业规则包</button><button type="button" class="button-secondary" data-writing-action="continue-writing-flow">继续引导流程</button></div>`;
       const guidedMarkup = isGuided ? (() => {
         const stage = Math.max(1, Math.min(4, f.wizardStage || 1));
         const titles = ['描述任务', '确认方向', '生成提示词', '带回结果'];
@@ -366,7 +481,7 @@
         const materialPageSize = 20;
         const materialPageCount = Math.max(1, Math.ceil(visibleResult.total / materialPageSize));
         candidatePage = Math.max(1, Math.min(candidatePage, materialPageCount));
-        const candidateMaterials = visibleMaterials.map(({ material, index }) => `<article class="writing-wizard-material"><label><input type="checkbox" data-wizard-material="${index}" ${f.wizardMaterialIds.includes(material.id) ? 'checked' : ''} ${f.wizardMaterialIds.length >= 3 && !f.wizardMaterialIds.includes(material.id) ? 'disabled' : ''}>${escape(material.title || `材料 ${index + 1}`)}</label><p title="${escape(material.relativePath || '')}" aria-label="文件路径：${escape(material.relativePath || material.title || '')}">${escape(material.relativePath || material.contentError || '可读取参考材料')}</p><details><summary>查看摘录</summary><p>${escape(material.contentError || material.excerpt || '没有可用摘录')}</p></details><p>${recommendationIds.has(material.id) ? escape(localRecommendations.find(item => item.id === material.id)?.selectionReason || '本机关键词初筛建议') : '本机初筛未推荐，可手动选择'}</p><button type="button" data-writing-action="wizard-remove-material" data-index="${index}">移除</button></article>`).join('') || '<p role="status">没有匹配的候选文件。</p>';
+        const candidateMaterials = visibleMaterials.map(({ material, index }) => `<article class="writing-wizard-material"><label><input type="checkbox" data-wizard-material="${index}" ${f.wizardMaterialIds.includes(material.id) ? 'checked' : ''}>${escape(material.title || `材料 ${index + 1}`)}</label><p title="${escape(material.relativePath || '')}" aria-label="文件路径：${escape(material.relativePath || material.title || '')}">${escape(material.relativePath || material.contentError || '可读取参考材料')}</p>${['library-entry', 'prompt-library'].includes(material.sourceType) ? `<p>来源快照：${escape(material.sourceId || '')} · ${escape(material.sourceVersion || '版本未记录')}${material.url && /^https?:\/\//i.test(material.url) ? ` · <a href="${escape(material.url)}" target="_blank" rel="noreferrer">查看来源</a>` : ''}</p>` : ''}${material.annotationSnapshot?.length ? `<p>${material.annotationSnapshot.length} 条批注快照；原附件需另行附加</p>` : ''}<details><summary>查看摘录</summary><p>${escape(material.contentError || material.excerpt || '没有可用摘录')}</p></details><p>${recommendationIds.has(material.id) ? escape(localRecommendations.find(item => item.id === material.id)?.selectionReason || '本机关键词初筛建议') : '本机初筛未推荐，可手动选择'}</p><button type="button" data-writing-action="wizard-remove-material" data-index="${index}">移除</button></article>`).join('') || '<p role="status">没有匹配的候选文件。</p>';
         const candidatePagination = visibleResult.total > materialPageSize
           ? `<nav aria-label="参考材料候选分页"><button type="button" data-writing-action="wizard-candidate-page" data-page="${candidatePage - 1}" ${candidatePage <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${candidatePage}/${materialPageCount} 页 · 每页 20 项</span><button type="button" data-writing-action="wizard-candidate-page" data-page="${candidatePage + 1}" ${candidatePage >= materialPageCount ? 'disabled' : ''}>下一页</button></nav>` : '';
         const filteredMatches = (f.wizardFilteredCandidates || []).filter(item => !materialQuery
@@ -376,19 +491,24 @@
           ? filteredMatches.map(item => `<article class="writing-wizard-material"><strong>${escape(item.title)}</strong><p title="${escape(item.relativePath)}">${escape(item.relativePath)}</p><p>${escape(item.reason || '默认过滤')}</p><button type="button" data-writing-action="wizard-restore-filtered" data-project-source="${escape(item.projectSourceId)}" data-relative-path="${escape(item.relativePath)}">恢复并读取</button></article>`).join('') || '<p role="status">没有可恢复的过滤项。</p>' : ''}</section>`;
         const sourceMarkup = f.wizardMode === 'rewrite' ? `${field('draft', '待改原文（可粘贴短文）', f.draft)}${renderWritingSourceDocument(f)}` : '';
         let body = '';
-        if (stage === 1) body = `<fieldset><legend>你要做什么？</legend><label><input id="writing-wizard-mode-new" type="radio" name="writing-wizard-mode" data-writing-field="wizardMode" value="new" ${f.wizardMode !== 'rewrite' ? 'checked' : ''}>新写作：从目标开始，准备写作提示词</label><label><input id="writing-wizard-mode-rewrite" type="radio" name="writing-wizard-mode" data-writing-field="wizardMode" value="rewrite" ${f.wizardMode === 'rewrite' ? 'checked' : ''}>文章改写：基于已有原文定向修改</label></fieldset>${sourceMarkup}${field('goal', f.wizardMode === 'rewrite' ? '希望怎么改' : '你想写什么', f.goal)}<section><h3>辅助参考材料（可选）</h3><p>已选 ${f.wizardMaterialIds.length}/3 份辅助资料${f.wizardMode === 'rewrite' ? '；待改原文不计入此上限' : ''}。</p><button type="button" data-writing-action="wizard-import-files">选择文件</button><button type="button" data-writing-action="wizard-import-folder">临时添加文件夹</button><label>常用工作空间 <select data-writing-field="wizardWorkspaceId"><option value="">不使用</option>${(state().writingWorkspaces || []).map(item => `<option value="${escape(item.id)}" ${f.wizardWorkspaceId === item.id ? 'selected' : ''}>${escape(item.name)}</option>`).join('')}</select></label><input id="writing-material-files" type="file" multiple hidden><input id="writing-material-folder" type="file" multiple webkitdirectory directory hidden><label>工作空间名称<input data-writing-field="wizardWorkspaceName" value="${escape(f.wizardWorkspaceName || '')}"></label><button type="button" data-writing-action="wizard-save-workspace" ${!f.materials.some(item => item.relativePath && f.wizardMaterialIds.includes(item.id)) || !f.wizardWorkspaceName?.trim() ? 'disabled' : ''}>保存已选文件夹材料为常用工作空间</button><label>搜索候选文件<input id="writing-wizard-material-search" data-writing-field="wizardMaterialSearch" value="${escape(f.wizardMaterialSearch)}" placeholder="按文件名、路径或摘录搜索"></label><button type="button" data-writing-action="wizard-clear-material-search">清除搜索</button><div>${candidateMaterials}${candidatePagination}${filteredMarkup}</div>${visibleMaterials.length > 3 ? '<p role="status">可查看和搜索全部候选；直接参考材料最多 3 份。</p>' : ''}${!f.materials.length ? `<p role="status">${f.wizardInventoryComplete ? '还没有可读的候选材料。' : '目录扫描未完成；已显示扫描到的范围。'}</p>` : ''}<p>目录只在本机初筛；只有你确认的摘录会用于任务分析。</p></section><button type="button" class="button-primary" data-writing-action="wizard-analyze" ${processingMaterials || f.wizardSourceBusy ? 'disabled' : ''}>确认材料并分析任务</button>`;
+        if (stage === 1) body = `<fieldset><legend>你要做什么？</legend><label><input id="writing-wizard-mode-new" type="radio" name="writing-wizard-mode" data-writing-field="wizardMode" value="new" ${f.wizardMode !== 'rewrite' ? 'checked' : ''}>新写作：从目标开始，准备写作提示词</label><label><input id="writing-wizard-mode-rewrite" type="radio" name="writing-wizard-mode" data-writing-field="wizardMode" value="rewrite" ${f.wizardMode === 'rewrite' ? 'checked' : ''}>文章改写：基于已有原文定向修改</label></fieldset>${sourceMarkup}${field('goal', f.wizardMode === 'rewrite' ? '希望怎么改' : '你想写什么', f.goal)}<section><h3>辅助参考材料（可选）</h3><p>已手动选择 ${f.wizardMaterialIds.length} 份；材料不设文件数上限，模型依据相关片段和上下文预算判断。</p><button type="button" data-writing-action="wizard-import-files">选择文件</button><button type="button" data-writing-action="wizard-import-folder">临时添加文件夹</button><label>常用工作空间 <select data-writing-field="wizardWorkspaceId"><option value="">不使用</option>${(state().writingWorkspaces || []).map(item => `<option value="${escape(item.id)}" ${f.wizardWorkspaceId === item.id ? 'selected' : ''}>${escape(item.name)}</option>`).join('')}</select></label><input id="writing-material-files" type="file" multiple hidden><input id="writing-material-folder" type="file" multiple webkitdirectory directory hidden><label>工作空间名称<input data-writing-field="wizardWorkspaceName" value="${escape(f.wizardWorkspaceName || '')}"></label><button type="button" data-writing-action="wizard-save-workspace" ${!projectSources.size || !f.wizardWorkspaceName?.trim() ? 'disabled' : ''}>保存此文件夹为常用工作空间</button><small>无需先勾选材料；浏览器只保存目录名称和选择记录，不保存文件夹授权。</small><label>搜索候选文件<input id="writing-wizard-material-search" data-writing-field="wizardMaterialSearch" value="${escape(f.wizardMaterialSearch)}" placeholder="按文件名、路径或摘录搜索"></label><button type="button" data-writing-action="wizard-clear-material-search">清除搜索</button><div>${candidateMaterials}${candidatePagination}${filteredMarkup}</div>${visibleMaterials.length > 3 ? '<p role="status">可查看和搜索全部候选；材料数量不设文件数上限。</p>' : ''}${!f.materials.length ? `<p role="status">${f.wizardInventoryComplete ? '还没有可读的候选材料。' : '目录扫描未完成；已显示扫描到的范围。'}</p>` : ''}${f.wizardIndexProgress ? `<p role="status">正在建立本机候选目录：${f.wizardIndexProgress.scanned}/${f.wizardIndexProgress.total}</p>` : ""}<p>目录在本机逐文件扫描全文；仅将任务相关的有界命中片段发送给模型。材料内容只作资料，不作为指令。</p>${f.wizardSearchProgress ? `<p role="status">正在扫描全文：${f.wizardSearchProgress.scanned}/${f.wizardSearchProgress.total}，${escape(f.wizardSearchProgress.relativePath || "")}</p><button type="button" data-writing-action="wizard-cancel-scan">取消扫描</button>` : f.wizardSearchStatus ? `<p role="status">${escape(f.wizardSearchStatus)}</p>` : ""}<label class="check-row"><input type="checkbox" data-writing-field="wizardUseAssistant" ${f.wizardUseAssistant ? 'checked' : ''} ${writingAssistantStatus.loading || !writingAssistantStatus.configured ? 'disabled' : ''}>使用辅助模型判断候选材料</label><p role="status">${writingAssistantStatus.loading ? '正在检查辅助模型配置…' : writingAssistantStatus.configured ? `已配置：${escape(writingAssistantStatus.mode)}${writingAssistantStatus.modelId ? ` · ${escape(writingAssistantStatus.modelId)}` : ''}。按4,000 token累计预算评估，未评估项继续交给主模型。` : '未配置辅助模型；主模型会直接根据全文检索结果判断。'}</p>${f.wizardAssistantStatus ? `<p role="status">${escape(f.wizardAssistantStatus)}</p>` : ''}</section><button type="button" class="button-primary" data-writing-action="wizard-analyze" ${processingMaterials || f.wizardSourceBusy ? 'disabled' : ''}>确认材料并分析任务</button>`;
         if (stage === 2) {
           const suggestion = f.wizardSuggestion || {};
           const confirmedGenre = f.wizardManualGenre || suggestion.genre || 'article';
           const selectable = (packUI?.getAvailablePacks?.() || []).filter(pack => pack.id === 'builtin-softcopyright-content' && ['article', 'technical-document'].includes(confirmedGenre));
           const missingInfo = Array.isArray(suggestion.missingInfo) ? suggestion.missingInfo.filter(Boolean) : [];
-          body = `<p>任务理解：${escape(f.goal)}</p>${f.wizardError ? `<p role="alert">${escape(f.wizardError)} 可手动选择后继续。</p>` : ''}<label class="field"><span class="field-label">推荐文体</span><select id="writing-wizard-genre" data-writing-field="wizardGenre">${schema.WRITING_GENRES.map(id => `<option value="${id}" ${(confirmedGenre) === id ? 'selected' : ''}>${escape(schema.getWritingGenreConfig(id)?.name || id)}</option>`).join('')}</select></label><label class="field"><span class="field-label">任务类型</span><select id="writing-wizard-task-type" data-writing-field="wizardTaskType"><option value="revision" ${f.wizardTaskType === 'revision' || !f.wizardTaskType && suggestion.taskType === 'revision' ? 'selected' : ''}>改写/优化</option><option value="diagnosis" ${f.wizardTaskType === 'diagnosis' || !f.wizardTaskType && suggestion.taskType === 'diagnosis' ? 'selected' : ''}>检查/诊断</option>${(schema.getWritingGenreConfig(confirmedGenre)?.taskTypes || []).map(task => `<option value="${escape(task)}" ${f.wizardTaskType === task || !f.wizardTaskType && suggestion.taskType === task ? 'selected' : ''}>${escape(task)}</option>`).join('')}</select></label><p>推荐依据：${escape(suggestion.reason || '模型不可用，请手动确认。')}</p>${missingInfo.length ? `<section aria-label="还需要确认的信息"><h3>还需要确认</h3><ul>${missingInfo.map(item => `<li>${escape(item)}</li>`).join('')}</ul><p>这些信息目前不阻断流程；可以在下方补充，或直接继续。</p></section>` : ''}<details><summary>更多设置（可选）</summary>${Object.entries(schema.getWritingGenreConfig(confirmedGenre)?.domainFields || {}).map(([key,label]) => `<label class="field"><span>${escape(label)}</span><textarea data-writing-domain-field="${escape(key)}">${escape(f.domainInputs?.[key] || suggestion.suggestedFields?.[key] || '')}</textarea></label>`).join('')}</details><fieldset><legend>专业规则包（与参考材料分开，可同时使用）</legend>${selectable.map(pack => `<label><input type="checkbox" data-writing-pack-selection="${escape(pack.id)}" ${f.packSelections.includes(pack.id) ? 'checked' : ''}>${escape(pack.name)}：普通文章或操作/技术文档适用</label>`).join('')||'当前文体没有兼容的规则包'}</fieldset><p>已确认材料：${f.wizardMaterialIds.length}份 ${f.wizardMaterialIds.map(id => escape(f.materials.find(m=>m.id===id)?.title)).join('、')}</p><button type="button" data-writing-action="wizard-back">返回修改目标</button><button type="button" class="button-primary" data-writing-action="wizard-confirm">确认并生成提示词</button>`;
+          const recommendedMaterials = [...new Set((f.wizardRecommendedCandidates || []).map(item => item.materialId))]
+            .map(materialId => ({ material: f.materials.find(item => item.id === materialId),
+              evidence: f.wizardRecommendedCandidates.filter(item => item.materialId === materialId) }))
+            .filter(item => item.material);
+          const recommendationEvidence = recommendedMaterials.map(({ material, evidence }, index) => `<article class="writing-wizard-material"><label><input type="checkbox" data-wizard-recommended-material="${escape(material.id)}" ${f.wizardCandidateMaterialIds.includes(material.id) ? 'checked' : ''}>确认使用：${escape(material.title || `材料 ${index + 1}`)}</label><p>${escape(material.relativePath || material.title || '')}</p>${evidence.map(item => `<details><summary>${escape(item.locator || '位置未识别')} · 检索证据</summary><p>${escape(item.excerpt)}</p></details>`).join('')}${evidence.some(item => item.selectionReason) ? `<p>模型关联理由：${escape(evidence.find(item => item.selectionReason).selectionReason)}</p>` : '<p>模型未提供单项关联理由；请根据检索位置和摘录自行确认。</p>'}</article>`).join('');
+          body = `<p>任务理解：${escape(f.goal)}</p>${f.wizardError ? `<p role="alert">${escape(f.wizardError)} 可手动选择后继续。</p>` : ''}<label class="field"><span class="field-label">推荐文体</span><select id="writing-wizard-genre" data-writing-field="wizardGenre">${schema.WRITING_GENRES.map(id => `<option value="${id}" ${(confirmedGenre) === id ? 'selected' : ''}>${escape(schema.getWritingGenreConfig(id)?.name || id)}</option>`).join('')}</select></label><label class="field"><span class="field-label">任务类型</span><select id="writing-wizard-task-type" data-writing-field="wizardTaskType"><option value="revision" ${f.wizardTaskType === 'revision' || !f.wizardTaskType && suggestion.taskType === 'revision' ? 'selected' : ''}>改写/优化</option><option value="diagnosis" ${f.wizardTaskType === 'diagnosis' || !f.wizardTaskType && suggestion.taskType === 'diagnosis' ? 'selected' : ''}>检查/诊断</option>${(schema.getWritingGenreConfig(confirmedGenre)?.taskTypes || []).map(task => `<option value="${escape(task)}" ${f.wizardTaskType === task || !f.wizardTaskType && suggestion.taskType === task ? 'selected' : ''}>${escape(task)}</option>`).join('')}</select></label><p>推荐依据：${escape(suggestion.reason || (f.wizardError ? '本次未获得模型推荐；请查看上方原因，或手动确认。' : '尚未获得模型推荐，请手动确认。'))}</p>${missingInfo.length ? `<section aria-label="还需要确认的信息"><h3>还需要确认</h3><ul>${missingInfo.map(item => `<li>${escape(item)}</li>`).join('')}</ul><p>这些信息目前不阻断流程；可以在下方补充，或直接继续。</p></section>` : ''}<details><summary>更多设置（可选）</summary>${Object.entries(schema.getWritingGenreConfig(confirmedGenre)?.domainFields || {}).map(([key,label]) => `<label class="field"><span>${escape(label)}</span><textarea data-writing-domain-field="${escape(key)}">${escape(f.domainInputs?.[key] || suggestion.suggestedFields?.[key] || '')}</textarea></label>`).join('')}</details><fieldset><legend>专业规则包（与参考材料分开，可同时使用）</legend>${selectable.map(pack => `<label><input type="checkbox" data-writing-pack-selection="${escape(pack.id)}" ${f.packSelections.includes(pack.id) ? 'checked' : ''}>${escape(pack.name)}：普通文章或操作/技术文档适用</label>`).join('')||'当前文体没有兼容的规则包'}</fieldset><section aria-label="模型推荐材料"><h3>模型推荐的参考材料</h3><p>推荐不等于已确认；请查看命中位置和摘录后逐项勾选。没有提供单项理由时，不会替模型补写理由。</p>${recommendationEvidence || '<p>没有可追溯到本次实际检索片段的材料推荐。</p>'}</section><p>手动参考：${f.wizardMaterialIds.length}份 ${f.wizardMaterialIds.map(id => escape(f.materials.find(m=>m.id===id)?.title)).join('、') || '无'}</p><p>已确认推荐材料：${f.wizardCandidateMaterialIds.length}份 ${f.wizardCandidateMaterialIds.map(id => escape(f.materials.find(m=>m.id===id)?.title)).join('、') || '无'}</p><button type="button" data-writing-action="wizard-back">返回修改目标</button><button type="button" class="button-primary" data-writing-action="wizard-confirm">确认并生成提示词</button>`;
         }
         const latestRound = w?.rounds?.at(-1);
         const roundIssues = (w?.issues || []).filter(issue => issue.roundId === latestRound?.id);
         if (stage >= 3) body = `<p>已确认：${escape(schema.getWritingGenreConfig(w.article.genre)?.name || w.article.genre)} · ${escape(w.rounds.at(-1)?.taskType || '')}</p><button type="button" data-writing-action="wizard-stage" data-stage="2">修改任务设置</button><label class="field"><span>可编辑提示词</span><textarea id="writing-prompt" data-writing-field="prompt">${escape(f.prompt)}</textarea></label><button type="button" data-writing-action="copy-prompt">复制提示词</button><button type="button" data-writing-action="save-prompt-version">保存提示词版本</button>${stage === 3 ? `<button type="button" data-writing-action="wizard-used">我已在其他 AI 中使用</button>` : `<p>任务：${escape(w.article.goal)}</p><label class="field"><span>外部 AI 结果</span><textarea id="writing-newDraft" data-writing-field="newDraft">${escape(f.newDraft)}</textarea></label>${field('feedback','这次结果哪里不满意（可选）',f.feedback)}<button type="button" data-writing-action="wizard-check">检查这份结果</button>${f.diagnosis ? `<h3>检查结果</h3><pre>${escape(f.diagnosis)}</pre><fieldset><legend>选择需要处理的问题（可选）</legend>${roundIssues.length ? roundIssues.map(issue => `<label><input id="writing-wizard-issue-${escape(issue.id)}" type="checkbox" data-wizard-issue="${escape(issue.id)}" ${f.wizardIssueIds.includes(issue.id) ? 'checked' : ''}>${escape(issue.observation || issue.excerpt || issue.suggestion)}</label>`).join('') : '<p>没有可单独选择的问题；可按完整诊断生成下一轮提示词。</p>'}</fieldset><button type="button" data-writing-action="wizard-next">生成下一轮修改提示词</button><button type="button" data-writing-action="wizard-finish">本轮完成</button>` : ''}`}`;
         const advanced = w ? `<details class="writing-wizard-advanced"><summary>更多写作工具</summary>${renderHistory(w, f)}${renderMemories(w)}${renderRoute(w, f, locked)}</details>` : '';
-        return `<section class="social-panel"><h2>写作工作台</h2>${guidedToolbar}${progress}<h1>${titles[stage - 1]}</h1>${body}<p role="alert">${escape(f.error)}</p><p role="status">${escape(f.promptNotice)}</p>${advanced}</section>`;
+        return `<section class="social-panel"><h2>写作工作台</h2>${guidedToolbar}${progress}<h1>${titles[stage - 1]}</h1>${body}${stage === 4 && latestRound?.draftDecision ? renderDraftDecision(w, latestRound, locked) : ''}${stage >= 3 ? renderResourceStatus(w) : ''}<p role="alert">${escape(f.error)}</p><p role="status">${escape(f.promptNotice)}</p>${advanced}</section>`;
       })() : '';
       const builtinId = genre === 'academic-paper' ? 'builtin-academic-paper' : 'builtin-article';
       const selectablePacks = (packUI?.getAvailablePacks?.() || []).filter(pack => pack.id !== builtinId
@@ -410,7 +530,6 @@
       packUI?.connectWorkbenchRenderer?.(render);
       const legacyMarkup = `<section class="social-panel">
         <div class="social-tools"><h2>写作工作台</h2>${button('new', '新建文章')}${button('manage-memories', managerOpen ? '收起记忆管理' : '管理全部写作记忆')}${button('manage-packs', '专业基础包')}</div>
-        <label class="field" for="writing-article-list"><span class="field-label">文章列表</span><select id="writing-article-list"><option value="">新文章</option>${articles.map(a => `<option value="${escape(a.id)}" ${a.id === articleId ? 'selected' : ''}>${escape(a.title || a.goal || '未命名文章')}</option>`).join('')}</select></label>
         <div class="social-form-grid">${field('title', escape(labels.title), f.title, { input: true })}<label class="field" for="writing-genre"><span class="field-label">文体</span><input id="writing-genre" data-writing-field="genre" list="writing-genre-options" value="${escape(f.genre)}" ${w ? 'disabled' : ''}><datalist id="writing-genre-options">${schema.WRITING_GENRES.map(id => `<option value="${escape(schema.getWritingGenreConfig(id)?.name || id)}">`).join('')}</datalist></label></div>
         ${renderAcademicTarget(f, genre, locked)}
         ${domainInputs}
@@ -432,13 +551,13 @@
       </section>
       ${renderAcademicTasks(w, f, genre, locked)}
         ${renderDomainTasks(w, f, genre, locked)}
-      <section class="social-panel"><h2>参考材料与风格</h2><p class="social-muted">内容 / 风格 / 要求合计最多3份。学术项目会把三种用途分开展示；风格样本不作事实证据。材料编辑在新建或下一轮时应用。</p>
-        ${renderMaterials(f, w, genre)}<div class="social-tools">${button('add-material', '粘贴/填写材料', '', f.materials.length >= 3 || processingMaterials)}${button('import-material-files', '导入文件', '', f.materials.length >= 3 || processingMaterials)}${button('select-materials', '从资料库/授权目录选择', '', !w || locked)}</div>
+      <section class="social-panel"><h2>参考材料与风格</h2><p class="social-muted">材料可按需添加，实际生成内容受上下文预算控制。学术项目会把三种用途分开展示；风格样本不作事实证据。材料编辑在新建或下一轮时应用。</p>
+        ${renderMaterials(f, w, genre)}<div class="social-tools">${button('add-material', '粘贴/填写材料', '', processingMaterials)}${button('import-material-files', '导入文件', '', processingMaterials)}${button('select-materials', '从资料库/授权目录选择', '', !w || locked)}</div>
         <input id="writing-material-files" type="file" aria-label="导入写作参考材料" accept=".txt,.md,.csv,.json,.pdf,.docx,.png,.jpg,.jpeg,.webp" multiple hidden __COND__>
         <details><summary>添加公开链接并按需读取正文</summary>
           <label class="field" for="writing-material-link-title"><span class="field-label">来源标题（可选）</span><input id="writing-material-link-title" data-writing-field="linkTitle" value="${escape(f.linkTitle)}"></label>
           <label class="field" for="writing-material-link-url"><span class="field-label">HTTP 或 HTTPS 链接</span><input id="writing-material-link-url" type="url" data-writing-field="linkUrl" value="${escape(f.linkUrl)}"></label>
-          ${button('add-material-link', '加入链接', '', f.materials.length >= 3 || processingMaterials)}
+          ${button('add-material-link', '加入链接', '', processingMaterials)}
         </details>
         <p class="social-muted">读取公开网页会向该网站发送链接请求并暴露你的网络地址；含查询参数的链接也会发送给该网站。不会携带登录状态或工作区内容。读取文本只暂存在当前页面，选摘后才进入本轮提示词；来源仍未核验。不可访问或需要登录时，请粘贴可读摘录。目录需先在本地资料设置中授权。</p>
         ${renderStyle(w)}${field('style-corrections', '用户纠正（最多2000字）', f.corrections, { name: 'corrections' })}${button('correct-style', '应用风格纠正', '', !w || locked)}
@@ -453,12 +572,12 @@
       <section class="social-panel"><h2>带回外部新稿与反馈</h2>${field('new-draft', '外部 AI 新稿', f.newDraft, { name: 'newDraft' })}<label class="field" for="writing-source-prompt-version"><span class="field-label">此结果使用的提示词版本</span><select id="writing-source-prompt-version" data-writing-field="sourcePromptVersionId"><option value="" ${f.sourcePromptVersionId ? '' : 'selected'}>来源提示词未关联</option>${promptVersionOptions}</select></label>${field('feedback', '本轮反馈（不会自动变成长久偏好）', f.feedback)}
         <h3>可选偏好候选</h3><p class="social-muted">只统计你在下方明确填写的候选；两篇不同文章重复时可晋升，并提供撤销。</p>
         ${field('preference', '偏好候选（可编辑）', f.preference)}<div class="social-form-grid">${field('example', '例句', f.example)}${field('counterexample', '反例', f.counterexample)}</div>
-        ${button('append', '回带并新增同篇一轮', '', !w || locked)}
+        ${button('append', '保存新稿并比较', '', !w || locked)}
         <label class="field" for="writing-memory-scope"><span class="field-label">显式记忆范围</span><select id="writing-memory-scope" data-writing-field="scope">${Object.entries(scopeLabels).map(([value, label]) => `<option value="${value}" ${f.scope === value ? 'selected' : ''}>${escape(label)}</option>`).join('')}</select></label>
         ${button('remember', '记住这个偏好', '', !w || locked)}${renderNotifications(f)}
       </section>
-      ${renderHistory(w, f)}${renderMemories(w)}${packManager}`;
-      mount.innerHTML = isGuided ? `${guidedMarkup}<div hidden>${legacyMarkup}</div>` : legacyMarkup;
+        ${isGuided ? renderHistory(w, f) : ''}${renderMemories(w)}${packManager}`;
+      mount.innerHTML = isGuided ? `${guidedMarkup}<div hidden>${legacyMarkup}</div>` : renderArticleCenter(w, f, locked, articleToolbar, legacyMarkup);
       if (focusAfterRenderId) {
         document.getElementById(focusAfterRenderId)?.focus?.();
         focusAfterRenderId = '';
@@ -500,10 +619,12 @@
       const recommendations = typeof prompts?.recommendMaterials === 'function'
         ? prompts.recommendMaterials(f.materials, target, taskType)
         : f.materials.filter(item => item.excerpt && !['failed', 'unsupported', 'pending'].includes(item.contentStatus))
-          .slice(0, 3).map(item => ({ ...item, selectionReason: '当前任务未提供可用关键词，按顺序保留；请人工调整。' }));
+          .map(item => ({ ...item, selectionReason: '当前任务未提供可用关键词，按顺序保留；请人工调整。' }));
       const recommendedIds = new Set(recommendations.map(item => item.id));
       return f.materials.map((m, i) => {
         const latestRound = w?.rounds.at(-1);
+        const webResult = webReadResults.get(m.id);
+        const webVersionChanged = !!(webResult?.ok && m.sourceVersion && m.sourceVersion !== webResult.contentHash);
         const savedInLatestRound = !!m.id && !!latestRound
           && [...latestRound.materials, ...latestRound.sources].some(item => item.id === m.id);
         const recommended = recommendedIds.has(m.id);
@@ -515,15 +636,16 @@
         <label class="field">标题<input id="writing-material-${i}-title" data-material-index="${i}" data-material-field="title" value="${escape(m.title)}"></label>
         ${m.kind === 'source' ? `<label class="field">链接<input id="writing-material-${i}-url" data-material-index="${i}" data-material-field="url" value="${escape(m.url)}"></label>` : ''}
         <label class="field">用途<select id="writing-material-${i}-purpose" data-material-index="${i}" data-material-field="purpose" data-material-purpose="${i}">${[['content', '研究内容/证据'], ['style', '风格参考'], ['both', '内容与风格'], ...(genre === 'academic-paper' ? [['requirement', '目标要求']] : [])].map(([value, label]) => `<option value="${value}" ${m.purpose === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-        <label class="field">摘要或样本（最多1200字）<textarea id="writing-material-${i}-excerpt" data-material-index="${i}" data-material-field="excerpt">${escape(m.excerpt)}</textarea></label>
+        <label class="field">摘要或样本（最多${['library-entry', 'prompt-library'].includes(m.sourceType) ? '8000' : '1200'}字）<textarea id="writing-material-${i}-excerpt" data-material-index="${i}" data-material-field="excerpt">${escape(m.excerpt)}</textarea></label>
         ${[['provider', '提供方/发布方'], ['accessedAt', '访问/提供日期'], ['license', '许可/授权说明'], ['applicability', '适用范围'], ['limitations', '限制']].map(([key, label]) => `<label class="field">${label}<input id="writing-material-${i}-${key}" aria-label="${label}" data-material-index="${i}" data-material-field="${key}" value="${escape(m[key] || '')}"></label>`).join('')}
         ${(w?.units || []).length ? `<fieldset class="writing-material-units"><legend>材料适用范围</legend><label class="check-row"><input type="checkbox" data-material-index="${i}" data-material-unit-id="" ${m.unitIds?.length ? '' : 'checked'}>全文材料</label>${w.units.map(unit => `<label class="check-row"><input id="writing-material-${i}-unit-${escape(unit.id)}" type="checkbox" data-material-index="${i}" data-material-unit-id="${escape(unit.id)}" ${m.unitIds?.includes(unit.id) ? 'checked' : ''}>${escape(unit.title)}${unit.archived ? ' · 已归档' : ''}</label>`).join('')}${button('apply-material-units', '应用材料范围', `data-index="${i}"`, !savedInLatestRound)}</fieldset>` : ''}
         ${m.url && /^https?:\/\//i.test(m.url) ? `<a href="${escape(m.url)}" target="_blank" rel="noreferrer">来源</a>` : ''}
+        ${['library-entry', 'prompt-library'].includes(m.sourceType) ? `<p>来源记录 ID：${escape(m.sourceId || '')}</p>` : ''}
         <p>来源核验：${escape(verificationLabels[m.verificationStatus] || '未核验')}</p>
         ${m.sourceLocator ? `<p>来源位置：${escape(m.sourceLocator)}</p>` : ''}${m.sourceVersion ? `<p>来源版本：${escape(m.sourceVersion)}</p>` : ''}
         ${m.excerptLocator ? `<p>摘录位置：${escape(m.excerptLocator)}</p>` : ''}${m.selectionReason ? `<p>选用理由：${escape(m.selectionReason)}</p>` : ''}
         ${m.extractionMethod ? `<p>解析方式：${escape({ 'pdf-text': 'PDF 文本抽取', 'pdf-ocr': 'PDF 本机 OCR', 'docx-text': 'Word 文本抽取', 'image-ocr': '本机 OCR' }[m.extractionMethod] || m.extractionMethod)} · 共${Number(m.extractedCharacterCount) || 0}字${m.pageCount ? ` · ${Number(m.pageCount)}页` : ''} · 未核验</p>` : ''}
-        ${m.sourceType === 'link' ? `<p role="status">${escape(webReadResults.get(m.id)?.error || (webReadResults.get(m.id) ? `已读取${webReadResults.get(m.id).characterCount}字 · ${webReadResults.get(m.id).incomplete ? '内容不完整' : '正文未核验'}` : '网页正文尚未读取'))}</p>${button('read-web-material', '读取网页', `data-index="${i}"`, processingMaterials)}${webReadResults.get(m.id)?.ok ? `<p>页面标题：${escape(webReadResults.get(m.id).title)}</p><p>最终来源：${escape(webReadResults.get(m.id).finalUrl)}</p>${webReadResults.get(m.id).incomplete ? '<p role="status">只提供部分正文，内容长度受限。</p>' : ''}<fieldset><legend>网页正文（仅当前页面暂存）</legend><p>${escape(webReadResults.get(m.id).text.slice(0, 1000))}${webReadResults.get(m.id).text.length > 1000 ? '…' : ''}</p>${button('use-web-segment', '选入摘录', `data-index="${i}"`, processingMaterials)}</fieldset>` : ''}` : ''}
+        ${['link', 'web-text'].includes(m.sourceType) ? `<p role="status">${escape(webResult?.error || (webResult?.ok ? `已读取${webResult.characterCount}字 · ${webResult.incomplete ? '内容不完整' : '正文未核验'}` : m.sourceVersion ? `已保存网页版本：${m.sourceVersion}` : '网页正文尚未读取'))}</p>${button('read-web-material', m.sourceType === 'link' ? '读取网页' : '重新读取网页', `data-index="${i}"`, processingMaterials)}${webResult?.ok ? `<p>页面标题：${escape(webResult.title)}</p><p>最终来源：${escape(webResult.finalUrl)}</p><p>抓取时间：${escape(webResult.fetchedAt || '未记录')} · 页面内容版本：${escape(webResult.contentHash || '未提供')}</p>${webResult.renderMode === 'static-html' ? '<p role="status">仅读取静态 HTML，不运行网页脚本；动态内容可能缺失。</p>' : ''}${m.sourceVersion && !webVersionChanged ? '<p role="status">本次读取与已选摘录版本一致。</p>' : ''}${webVersionChanged ? '<p role="status">本次读取版本与已选摘录不同；原摘录保持不变，选择“更新为此版本的摘录”后才会替换。</p>' : ''}${webResult.incomplete ? '<p role="status">只提供部分正文，内容长度受限。</p>' : ''}<fieldset><legend>网页正文（仅当前页面暂存）</legend><p>${escape(webResult.text.slice(0, 1000))}${webResult.text.length > 1000 ? '…' : ''}</p>${button('use-web-segment', webVersionChanged ? '更新为此版本的摘录' : '选入摘录', `data-index="${i}"`, processingMaterials)}</fieldset>` : ''}` : ''}
         ${m.parseWarnings?.length ? `<p role="status">${m.parseWarnings.map(escape).join('；')}</p>` : ['image-ocr', 'pdf-ocr'].includes(m.extractionMethod) ? `<p role="status">OCR 结果可能有误${Number.isFinite(m.recognitionConfidence) ? ` · 置信度 ${Math.round(m.recognitionConfidence)}%` : ''}；手写、公式和版面结构需人工核对。</p>` : ''}
         ${m.parsedSegments?.length ? `<fieldset><legend>本机解析片段（仅当前页面暂存）</legend>${m.parsedSegments.map((segment, segmentIndex) => `<div><p>${escape(segment.locator)} · ${segment.text.length}字</p><p>${escape(segment.text.slice(0, 180))}${segment.text.length > 180 ? '…' : ''}</p>${button('use-material-segment', '选入摘录', `data-index="${i}" data-segment-index="${segmentIndex}"`, processingMaterials)}</div>`).join('')}</fieldset>` : ''}
         ${m.attachmentRequired ? '<p>原附件需另行提供；本轮提示词只包含卡片中的可见摘录。</p>' : ''}
@@ -562,6 +684,20 @@
       const p = w?.styleProfile;
       return `<h3>提炼风格特征</h3><p>来源：${escape(sourceLabels[p?.source] || '临时判断')} · 把握度：${escape(confidenceLabels[p?.confidence] || '低')} · ${!p || p.source === 'temporary' ? '临时判断，等待样本或用户确认' : '只统计可观察形式，含义仍待核实'}</p><ul>${(p?.traits || []).map(t => `<li>${escape(t)}</li>`).join('')}</ul>`;
     }
+    function renderResourceStatus(w) {
+      const round = w?.rounds?.at(-1);
+      const resources = round?.resourceSnapshot || round?.packSnapshot?.resources || [];
+      const states = [...(round?.resourceUsage || []), ...(round?.skippedResources || []), ...(round?.unavailableResources || [])];
+      if (!resources.length && !states.length) return '';
+      const labels = { used: '已加载', executed: '已执行', skipped: '未加载', unavailable: '不可用', failed: '失败', pending: '待执行' };
+      const scriptResources = resources.filter(resource => resource.kind === 'script' && resource.actionId);
+      const roots = (state().promptAgentSources || []).filter(source => source.enabled && !source.unavailable);
+      const actionControls = scriptResources.length ? `<section class="writing-resource-actions"><h4>受控资源动作</h4><p class="social-muted">动作只读取选定的已授权目录；执行前请确认目录范围。模型不能直接执行这些动作。</p>${roots.length && typeof desktopApi?.executeWritingResource === 'function' ? `<label class="field"><span class="field-label">项目目录</span><select id="writing-resource-root">${roots.map(root => `<option value="${escape(root.id)}">${escape(root.label || '已授权目录')}</option>`).join('')}</select></label>${scriptResources.map(resource => button('execute-writing-resource', `执行：${resource.title || resource.id}`, `data-resource-id="${escape(resource.id)}" data-resource-action="${escape(resource.actionId)}"`, false)).join('')}` : '<p role="status">浏览器版或当前会话没有可用的本地目录授权；脚本动作暂不可执行。</p>'}</section>` : '';
+      return `<details class="writing-resource-status"><summary>本轮资源使用情况</summary><p class="social-muted">规则、模板、示例和脚本分开记录；示例仅供参考，用户材料才是事实来源。</p>${actionControls}<ul>${resources.map(resource => {
+        const state = states.find(item => item.id === resource.id);
+        return `<li><strong>${escape(resource.title || resource.id)}</strong> · ${escape(resource.kind)} · ${escape(labels[state?.status] || '已选择')} · ${escape(resource.version || '版本未提供')} · ${escape(resource.verificationStatus || 'unverified')}<br><span class="social-muted">${escape(resource.relativePath || resource.archive || '')}${state?.reason ? `；${escape(state.reason)}` : ''}</span></li>`;
+      }).join('')}</ul></details>`;
+    }
     function renderHistory(w, f) {
       if (!w) return '';
       const round = w.rounds.find(r => r.id === f.historyId);
@@ -588,9 +724,61 @@
       const forkControls = round ? `<fieldset class="writing-fork-contexts"><legend>从此轮继续时复制的内容</legend>${contexts.map(([key, label]) =>
         `<label class="check-row"><input type="checkbox" data-writing-fork-context="${key}" ${f.forkContexts.includes(key) ? 'checked' : ''}>${label}</label>`).join('')}
         ${button('continue-from-round', '从此轮继续', `data-round-id="${escape(round.id)}"`)}</fieldset>` : '';
-      return `<section class="social-panel"><h2>轮次回看与比较</h2><div class="social-tools">${w.rounds.map((r, i) => button('round', `第${i + 1}轮`, `data-round-id="${escape(r.id)}"`)).join('')}</div>${round ? `<label class="field">历史原稿<textarea id="writing-history-draft" readonly>${escape(round.draft)}</textarea></label><label class="field">历史反馈<textarea readonly>${escape(round.feedback || round.userFeedback)}</textarea></label><label class="field">历史诊断<textarea readonly>${escape(round.diagnosis)}</textarea></label><label class="field">历史提示词<textarea readonly>${escape(round.prompt)}</textarea></label>
+      const decisionLabels = { pending: '待决定', kept: '未采用', adopted: '已采用', undone: '已撤销采用' };
+      const decision = round ? renderDraftDecision(w, round, busy.has(w.id)) : '';
+      const roundSources = round ? [...(round.materials || []), ...(round.sources || [])] : [];
+      const sourceVersions = roundSources.map(source => `${escape(source.title || source.id || '未命名来源')}${source.sourceVersion ? ` · ${escape(source.sourceVersion)}` : ''}${source.url ? ` · ${escape(source.url)}` : ''}`);
+      const sourcePrompt = round?.sourcePromptVersionId ? w.rounds.flatMap(item => item.promptVersions || []).find(version => version.id === round.sourcePromptVersionId) : null;
+      const roundContext = round ? `<section aria-label="本轮来源和规则"><h3>本轮来源与规则</h3><p>来源：${sourceVersions.join('；') || '未关联资料'}${sourcePrompt ? `；提示词：${escape(sourcePrompt.content.slice(0, 80))}` : ''}</p><p>保留要求：${(w.article.preserveItems || []).map(escape).join('；') || '未设置'}</p><p>专业包：${(round.packSnapshot?.packs || []).map(pack => `${escape(pack.name || pack.id)} v${escape(pack.version || '')}`).join('；') || '未记录'}</p></section>` : '';
+      return `<section class="social-panel"><h2>轮次回看与比较</h2><div class="social-tools">${w.rounds.map((r, i) => button('round', `第${i + 1}轮${r.draftDecision ? ` · ${decisionLabels[r.draftDecision.status] || '稿件'}` : ''}`, `data-round-id="${escape(r.id)}"`)).join('')}</div>${round ? `${decision}<label class="field">历史原稿<textarea id="writing-history-draft" readonly>${escape(round.draft)}</textarea></label>${roundContext}<label class="field">历史反馈<textarea readonly>${escape(round.feedback || round.userFeedback)}</textarea></label><label class="field">历史诊断<textarea readonly>${escape(round.diagnosis)}</textarea></label><label class="field">历史提示词<textarea readonly>${escape(round.prompt)}</textarea></label>
         <label class="field" for="writing-history-compare"><span class="field-label">与另一轮比较</span><select id="writing-history-compare" data-writing-field="historyCompareId">${otherRounds.map(item => `<option value="${escape(item.id)}" ${item.id === compareRoundId ? 'selected' : ''}>第${w.rounds.findIndex(candidate => candidate.id === item.id) + 1}轮</option>`).join('')}</select></label>
         ${comparison ? `<div id="writing-history-comparison"><h3>逐行对照</h3>${comparedFields}${comparedIssues}</div>` : '<p>至少有两个轮次后可比较。</p>'}${forkControls}` : '<p>选择一个轮次查看，不会替换当前表单。</p>'}</section>`;
+    }
+    function renderDraftDecision(w, round, locked = false) {
+      const decision = round.draftDecision;
+      if (!decision) return '';
+      const actionButton = (value, label) => `<button type="button" class="button-secondary" data-writing-action="draft-decision" data-decision="${value}" data-round-id="${escape(round.id)}" ${locked ? 'disabled' : ''}>${label}</button>`;
+      const canUndo = decision.status === 'adopted' && w.article.draftRoundId === round.id;
+      const action = decision.status === 'pending' ? `${actionButton('adopt', '采用这版')}${actionButton('keep', '保留当前稿')}`
+        : decision.status === 'kept' ? actionButton('adopt', '改为采用这版')
+          : decision.status === 'undone' ? actionButton('adopt', '重新采用这版')
+            : canUndo ? actionButton('undo', '撤销采用') : '';
+      const note = decision.status === 'pending' ? '这是一份待比较的新稿；当前稿件尚未替换。'
+        : decision.status === 'kept' ? '你保留了当前稿；这份新稿仍在历史中，可再查看或比较。'
+          : decision.status === 'adopted' ? canUndo ? '这版已成为当前稿；撤销只恢复采用前的稿件。' : '这版曾被采用，但当前稿已经进入后续版本。'
+            : '这次采用已撤销；原稿与本轮来源仍保留。';
+      return `<section class="writing-draft-decision" aria-label="稿件采用状态"><p role="status">${note}</p><div class="social-tools">${action}</div></section>`;
+    }
+    function renderArticleCenter(w, f, locked, toolbar, editorMarkup) {
+      const currentRound = w.rounds.find(round => round.id === w.article.draftRoundId) || w.rounds[0];
+      const pendingRound = [...w.rounds].reverse().find(round => round.draftDecision?.status === 'pending');
+      const sourceItems = [...(currentRound?.materials || []), ...(currentRound?.sources || [])];
+      const sources = sourceItems.length ? sourceItems.map(source => {
+        const annotations = source.annotationSnapshot || [];
+        const annotationList = annotations.length ? `<details><summary>${annotations.length} 条批注快照 · 原附件需另行附加</summary><ul>${annotations.map(annotation => {
+          const target = annotation.target?.exact || annotation.target?.excerpt || annotation.target?.selector || annotation.target?.kind || '位置未提供';
+          const page = source.sourceType === 'pdf' ? `第 ${annotation.pageIndex + 1} 页 · ` : '';
+          return `<li><strong>${escape(annotation.intent)} / ${escape(annotation.category)} · ${escape(annotation.id)}</strong><p>${page}${escape(target)}</p><p>${escape(annotation.comment)}</p></li>`;
+        }).join('')}</ul></details>` : '';
+        return `<li><strong>${escape(source.title || source.displayName || source.id || '未命名来源')}</strong>${source.sourceVersion ? ` · ${escape(source.sourceVersion)}` : ''}${source.url ? ` · ${escape(source.url)}` : ''}${annotationList}</li>`;
+      }).join('') : '<p class="social-muted">当前稿尚未关联资料来源。</p>';
+      const sourceList = sourceItems.length ? `<ul>${sources}</ul>` : sources;
+      const preserveItems = w.article.preserveItems || [];
+      const packs = currentRound?.packSnapshot?.packs || [];
+      const rounds = w.rounds.map((round, index) => {
+        const status = round.draftDecision?.status;
+        const statusLabel = ({ pending: '待比较', kept: '未采用', adopted: '已采用', undone: '已撤销' })[status] || '';
+        return button('round', `第${index + 1}轮${statusLabel ? ` · ${statusLabel}` : ''}`, `data-round-id="${escape(round.id)}"`);
+      }).join('');
+      const history = `<details class="writing-history-details" ${f.historyId ? 'open' : ''}><summary>查看修改轮次与版本比较</summary>${renderHistory(w, f)}</details>`;
+      return `<div class="writing-article-center" aria-label="稿件中心">${toolbar}
+        <header class="writing-article-heading"><p class="social-muted">稿件中心</p><h1>${escape(w.article.title || w.article.goal || '未命名稿件')}</h1><p>${escape(w.article.goal || '尚未设置写作目标')}</p></header>
+        <section class="social-panel writing-current-document"><div class="social-tools"><h2>当前稿件</h2><span role="status">${escape(persistenceStatus(w))}</span></div>
+          <pre class="writing-current-draft">${escape(w.article.draft || '还没有当前稿件。打开写作工具即可补充初稿，或从批注/外部 AI 带回新稿。')}</pre></section>
+        ${pendingRound ? `<section class="social-panel writing-pending-draft"><h2>有一份新稿待比较</h2><p>${escape(pendingRound.draft.slice(0, 260))}</p>${renderDraftDecision(w, pendingRound, locked)}</section>` : ''}
+        <section class="social-panel writing-article-context"><h2>稿件依据</h2><div class="social-form-grid"><div><h3>资料来源</h3>${sourceList}</div><div><h3>保留要求</h3>${preserveItems.length ? `<ul>${preserveItems.map(item => `<li>${escape(item)}</li>`).join('')}</ul>` : '<p class="social-muted">尚未设置保留要求。</p>'}</div><div><h3>专业规则包</h3>${packs.length ? `<ul>${packs.map(pack => `<li>${escape(pack.name || pack.id)}${pack.version ? ` · v${escape(pack.version)}` : ''}</li>`).join('')}</ul>` : '<p class="social-muted">本轮没有专业规则包快照。</p>'}</div></div></section>
+        <section class="social-panel writing-rounds-overview"><h2>修改轮次</h2><div class="social-tools">${rounds || '<p class="social-muted">还没有修改轮次。</p>'}</div>${history}</section>
+        <details class="writing-editor-tools"><summary>展开写作、资料与诊断工具</summary>${editorMarkup}</details></div>`;
     }
     function renderUnits(w, f, locked) {
       if (!w) return '';
@@ -704,17 +892,37 @@
       return `<section class="social-panel" id="writing-route-workflow"><h2>专业路线</h2><p class="social-muted">路线仅来自当前已选且适用的基础包；来源核验状态保持原样。</p>${routeList}${current}</section>`;
     }
     function renderNotifications(f) {
-      return f.notifications.map(n => `<p role="status">${escape(n.message)}${button('undo-memory', '撤销新增记忆', `data-memory-id="${escape(n.memoryId)}"`)}</p>`).join('');
+      return f.notifications.map(n => `<p role="status">${escape(n.message)}${n.type === 'memory-candidate'
+        ? button('open-memory-manager', '查看待确认建议')
+        : button('undo-memory', '撤销新增记忆', `data-memory-id="${escape(n.memoryId)}"`)}</p>`).join('');
     }
-    function renderMemories(w) {
-      const relevant = coordinator.getRelevantMemories(w ? w.genre : 'article', w?.id);
-      const all = (state().writingMemories || []).filter(m => !m.undo?.undoneAt);
-      return `<section class="social-panel"><h2>当前相关记忆（最多3条）</h2>${relevant.map(m => `<p>${escape(m.preference)} · ${escape(scopeLabels[m.scope])}${m.example ? `<br>例句：${escape(m.example)}` : ''}${m.counterexample ? `<br>反例：${escape(m.counterexample)}` : ''}</p>`).join('') || '<p>暂无相关记忆。</p>'}
-        ${managerOpen ? `<h3>全部有效记忆（${all.length}）</h3>${all.map(m => {
-          if (!memoryDrafts.has(m.id)) memoryDrafts.set(m.id, clone(m));
-          const edit = memoryDrafts.get(m.id);
-          return `<div class="writing-memory"><p>范围：${escape(scopeLabels[m.scope])} · 来源文章：${escape(m.sourceArticleId)} · 更新时间：${escape(m.updatedAt)}</p>${['preference', 'example', 'counterexample'].map((key, i) => `<label class="field">${['偏好', '例句', '反例'][i]}<textarea id="writing-memory-${escape(m.id)}-${key}" data-memory-id="${escape(m.id)}" data-memory-field="${key}">${escape(edit[key] || '')}</textarea></label>`).join('')}${button('edit-memory', '保存记忆修改', `data-memory-id="${escape(m.id)}"`)}${button('delete-memory', '删除记忆', `data-memory-id="${escape(m.id)}"`)}</div>`;
-        }).join('')}` : ''}</section>`;
+    function renderMemoryHistory(memory) {
+      const history = memory.history || [];
+      if (!history.length) return '';
+      return `<details><summary>历史版本（${history.length}）</summary>${history.map(version => `<div class="writing-memory-version"><p>${escape(version.savedAt || '时间未记录')} · ${escape(version.preference)}</p><button type="button" class="button-secondary" data-writing-action="restore-memory-version" data-memory-id="${escape(memory.id)}" data-memory-version="${escape(version.id)}" data-memory-updated-at="${escape(memory.updatedAt || '')}">恢复此版本</button></div>`).join('')}</details>`;
+    }
+    function renderMemoryEditor(memory, candidate = false) {
+      if (!memoryDrafts.has(memory.id)) memoryDrafts.set(memory.id, clone(memory));
+      const edit = memoryDrafts.get(memory.id);
+      const fields = ['preference', 'reason', 'example', 'counterexample'];
+      const labels = ['偏好内容', '说明/来源理由', '正例', '反例'];
+      return `${candidate ? `<label class="field">应用范围<select id="writing-memory-${escape(memory.id)}-scope" data-memory-id="${escape(memory.id)}" data-memory-field="scope"><option value="genre" ${edit.scope === 'genre' ? 'selected' : ''}>${escape(schema.getWritingGenreConfig(memory.genre)?.name || '当前文体')}</option><option value="general" ${edit.scope === 'general' ? 'selected' : ''}>通用</option></select></label>` : ''}${fields.map((key, i) => `<label class="field">${labels[i]}<textarea id="writing-memory-${escape(memory.id)}-${key}" data-memory-id="${escape(memory.id)}" data-memory-field="${key}">${escape(edit[key] || '')}</textarea></label>`).join('')}`;
+    }
+    function renderMemories(w, focused = false) {
+      const all = coordinator.listMemories();
+      const relevant = w ? coordinator.getRelevantMemories(w.genre, w.id, { includeSkipped: true }) : [];
+      const skipped = new Set(w?.article.skippedMemoryIds || []);
+      const latest = w?.rounds.at(-1);
+      const previousUse = latest?.memorySnapshot;
+      const relevantMarkup = focused ? '' : `<h2>本篇适用的偏好（最多3条）</h2><p class="social-muted">勾选项会用于后续生成；已生成的历史提示词不变。</p>${relevant.map(m => `<article class="writing-memory"><p>${escape(m.preference)}</p><p>范围：${escape(memoryScopeLabel(m))} · 来源：${escape(memoryOriginLabel(m))}</p><button type="button" class="button-secondary" data-writing-action="skip-memory" data-memory-id="${escape(m.id)}" data-skipped="${skipped.has(m.id) ? 'false' : 'true'}">${skipped.has(m.id) ? '恢复本篇使用' : '本篇后续跳过'}</button></article>`).join('') || '<p>当前没有可应用的已确认偏好。</p>'}${latest ? `<details><summary>上次生成时实际采用（${previousUse?.length || 0} 条）</summary>${previousUse?.length ? previousUse.map(item => `<p>${escape(item.preference)} · ${escape(memoryScopeLabel(item))} · ${escape(memoryOriginLabel(item))}</p>`).join('') : '<p>该历史轮次未保存偏好使用快照。</p>'}</details>` : ''}`;
+      const candidates = all.filter(m => m.status === 'pending' && !m.undo?.undoneAt);
+      const confirmed = all.filter(m => m.status === 'confirmed' && !m.undo?.undoneAt);
+      const ignored = all.filter(m => m.status === 'ignored' || m.undo?.undoneAt);
+      const card = (m, kind) => `<div class="writing-memory"><p>范围：${escape(memoryScopeLabel(m))} · 来源：${escape(memoryOriginLabel(m))} · 来源文章：${escape(m.sourceArticleId || '未记录')} · 更新时间：${escape(m.updatedAt || '未记录')}</p>${renderMemoryEditor(m, kind === 'candidate')}${kind === 'candidate'
+        ? `${button('confirm-memory', '确认并应用', `data-memory-id="${escape(m.id)}"`)}${button('ignore-memory', '忽略建议', `data-memory-id="${escape(m.id)}"`)}`
+        : `${button('edit-memory', '保存修改', `data-memory-id="${escape(m.id)}"`)}${button('set-memory-enabled', m.enabled === false ? '恢复启用' : '停用', `data-memory-id="${escape(m.id)}" data-enabled="${m.enabled === false ? 'true' : 'false'}"`)}${button('delete-memory', '移除', `data-memory-id="${escape(m.id)}"`)}`}${renderMemoryHistory(m)}</div>`;
+      const managerMarkup = managerOpen ? `<h2>待确认建议（${candidates.length}）</h2><p class="social-muted">重复输入只形成建议，不会自动进入提示词；确认、编辑后才会应用。</p>${candidates.map(m => card(m, 'candidate')).join('') || '<p>暂无待确认建议。</p>'}<h2>已确认偏好（${confirmed.length}）</h2>${confirmed.map(m => card(m, 'confirmed')).join('') || '<p>暂无已确认偏好。</p>'}<details><summary>已忽略或停用（${ignored.length}）</summary>${ignored.map(m => `<article class="writing-memory"><p>${escape(m.preference)} · ${escape(memoryScopeLabel(m))} · ${escape(memoryOriginLabel(m))}</p><button type="button" class="button-secondary" data-writing-action="restore-memory" data-memory-id="${escape(m.id)}">${m.status === 'ignored' && m.origin === 'repeated-round' ? '重新放回待确认' : '恢复启用'}</button>${renderMemoryHistory(m)}</article>`).join('') || '<p>暂无已忽略或停用项。</p>'}</details>` : '';
+      return `<section class="social-panel">${relevantMarkup}${managerMarkup}</section>`;
     }
     function capture(target) {
       const f = form();
@@ -786,7 +994,6 @@
     }
     function addMaterialLink() {
       const f = form();
-      if (f.materials.length >= 3) { f.error = '本轮最多添加3份材料'; render(); return; }
       let url;
       try { url = new URL(f.linkUrl.trim()); } catch { url = null; }
       if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
@@ -800,7 +1007,7 @@
       if (processingMaterials) return;
       const f = form();
       const material = f.materials[Number(index)];
-      if (!material || material.sourceType !== 'link') return;
+      if (!material || !['link', 'web-text'].includes(material.sourceType) || !material.url) return;
       if (!confirm(`将向该网站发送读取请求，并暴露你的网络地址。链接中的查询参数也会发送给网站。是否继续？\n${material.url}`)) return;
       const job = { articleId, materialId: material.id, controller: new AbortController() };
       activeMaterialJob = job;
@@ -815,12 +1022,13 @@
         const result = await response.json();
         if (activeMaterialJob !== job || job.controller.signal.aborted || articleId !== job.articleId) return;
         if (!response.ok) throw new Error(result.message || '网页读取失败。');
+        if (!/^sha256:[a-f0-9]{64}$/i.test(String(result.contentHash || ''))) throw new Error('网页版本摘要缺失；页面内容未能安全关联到来源版本。');
         webReadResults.set(material.id, { ...result, ok: true });
         f.error = '';
       } catch (error) {
         if (activeMaterialJob !== job || job.controller.signal.aborted || articleId !== job.articleId) return;
         webReadResults.set(material.id, { ok: false, error: String(error.message || '网页读取失败。').slice(0, 240) });
-        f.error = '网页读取失败；链接卡片仍保留，可粘贴需要使用的摘录。';
+        f.error = '网页读取失败；链接卡片和已选摘录仍保留，可重试或粘贴需要使用的摘录。';
       } finally {
         if (activeMaterialJob === job) {
           activeMaterialJob = null;
@@ -849,8 +1057,9 @@
       processingMaterials = true;
       render();
       try {
-        for (const file of Array.from(files || [])) {
-          if (f.materials.length >= (articleId ? 3 : 10000)) { f.error = articleId ? '本轮最多添加3份材料，剩余文件未添加' : '参考文件最多索引10,000份，剩余文件未添加'; break; }
+        const importedFiles = Array.from(files || []);
+        for (const file of importedFiles) {
+          if (f.materials.length >= 10000) { f.error = '参考材料候选达到 10,000 项扫描上限，剩余文件未添加'; break; }
           const relativePath = String(file?.webkitRelativePath || '').replace(/\\/g, '/').slice(0, 500);
           const name = (relativePath || String(file?.name || '未命名文件')).slice(0, 160);
           const fingerprint = `${Number(file?.size) || 0}:${(Number(file?.lastModified) || 0).toString(16).slice(0, 8) || '0'}`;
@@ -859,29 +1068,33 @@
           if (['txt', 'md', 'csv', 'json'].includes(extension)) {
             if (Number(file.size) > 2 * 1024 * 1024) {
               const message = `${name} 超过2MB，未读取`;
-              f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
+          f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
                 contentStatus: 'failed', contentError: message, originalLength: Number(file.size), attachmentRequired: true, kind: 'material' });
-              f.error = message;
+               f.wizardMaterialIds = [...new Set([...f.wizardMaterialIds, f.materials.at(-1).id])];
+               f.error = message;
               continue;
             }
             try {
               if (typeof file.text !== 'function') throw new Error('当前环境无法读取此文件');
               const content = await file.text();
               if (typeof content !== 'string') throw new Error('文件没有可读取的文本');
-              f.materials.push({ id: newMaterialId(), relativePath, fingerprint,
+               f.materials.push({ id: newMaterialId(), relativePath, fingerprint,
                 title: name, purpose: 'content', excerpt: content.slice(0, 1200), sourceType: 'text-file', origin: 'file-import',
                 contentStatus: content.length > 1200 ? 'truncated' : 'embedded', originalLength: content.length,
                 attachmentRequired: content.length > 1200, kind: 'material' });
+               f.wizardMaterialIds = [...new Set([...f.wizardMaterialIds, f.materials.at(-1).id])];
             } catch (error) {
               const message = String(error.message || error);
-              f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
+               f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
                 contentStatus: 'failed', contentError: message, originalLength: 0, attachmentRequired: true, kind: 'material' });
+               f.wizardMaterialIds = [...new Set([...f.wizardMaterialIds, f.materials.at(-1).id])];
               f.error = `${name} 读取失败，只保留了文件名引用：${message}`;
             }
           } else if (['pdf', 'docx', 'png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
             const material = { id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
               contentStatus: 'reference-only', originalLength: 0, attachmentRequired: true, kind: 'material' };
-            f.materials.push(material);
+             f.materials.push(material);
+             f.wizardMaterialIds = [...new Set([...f.wizardMaterialIds, material.id])];
             try {
               const mimeType = fileMimeType(file, extension);
               if (!mimeType) throw new Error('文件类型与扩展名不匹配');
@@ -912,24 +1125,33 @@
             }
           } else {
             const message = `${name} 格式暂不支持`;
-            f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
+             f.materials.push({ id: newMaterialId(), title: name, relativePath, fingerprint, purpose: 'content', excerpt: '', sourceType: 'unread-file-reference', origin: 'file-import',
               contentStatus: 'unsupported', contentError: message, originalLength: 0, attachmentRequired: true, kind: 'material' });
+             f.wizardMaterialIds = [...new Set([...f.wizardMaterialIds, f.materials.at(-1).id])];
             f.error = message;
           }
+        }
+        for (const file of importedFiles) {
+          if (Number(file?.size) > 1024 * 1024) continue;
+          const sourcePath = String(file?.webkitRelativePath || file?.name || '').replace(/\\/g, '/');
+          const relativePath = sourcePath.includes('/') ? sourcePath.slice(sourcePath.indexOf('/') + 1) : sourcePath;
+          const fingerprint = `${Number(file?.size) || 0}:${(Number(file?.lastModified) || 0).toString(16).slice(0, 8) || '0'}`;
+          const candidate = [...f.materials].reverse().find(item => item.origin === 'file-import' && item.fingerprint === fingerprint
+            && ['embedded', 'truncated'].includes(item.contentStatus) && (item.title === sourcePath || item.title === relativePath));
+          if (candidate) materialSearch?.registerSource(`file-${candidate.id}`, [file], [{ id: candidate.id, title: candidate.title, relativePath }]);
         }
       } finally {
         if (activeMaterialJob === job) {
           activeMaterialJob = null;
           processingMaterials = false;
           f.dirty = [...new Set([...f.dirty, 'materials'])];
-          if (!articleId && !f.wizardMaterialIds.length) f.wizardMaterialIds = (prompts?.recommendMaterials?.(f.materials, { goal: f.goal }, f.taskType) || []).map(item => item.id).slice(0, 3);
           if (!articleId && f.wizardWorkspaceId) {
             const saved = (state().writingWorkspaces || []).find(item => item.id === f.wizardWorkspaceId);
             const folder = f.materials.filter(item => item.relativePath);
             const root = folder[0]?.relativePath?.split('/')[0] || '';
             const matches = saved && saved.rootLabel === root && saved.selectedPaths.length > 0
               && saved.selectedPaths.every(path => folder.some(item => item.relativePath === path.path && item.fingerprint === path.fingerprint));
-            if (matches) f.wizardMaterialIds = saved.selectedPaths.map(path => f.materials.find(item => item.relativePath === path.path)?.id).filter(Boolean).slice(0, 3);
+            if (matches) f.wizardMaterialIds = saved.selectedPaths.map(path => f.materials.find(item => item.relativePath === path.path)?.id).filter(Boolean);
             else if (folder.length) f.error = '所选文件夹或文件版本与已保存工作空间不匹配；未恢复历史勾选。可继续作为临时文件夹使用。';
           }
           render();
@@ -947,11 +1169,13 @@
       const rootLabel = String(fileList[0]?.webkitRelativePath || fileList[0]?.name || '').split(/[\\/]/)[0].slice(0, 120);
       const job = { articleId, controller: new AbortController() };
       activeMaterialJob?.controller.abort();
-      activeMaterialJob = job; processingMaterials = true; render();
+      activeMaterialJob = job; processingMaterials = true; f.wizardIndexProgress = { scanned: 0, total: fileList.length }; render();
       try {
-        const result = await browserIndex.indexBrowserProjectFiles(fileList, { signal: job.controller.signal });
+        const result = await browserIndex.indexBrowserProjectFiles(fileList, { signal: job.controller.signal,
+          onProgress: progress => { f.wizardIndexProgress = progress; if (progress.scanned % 25 === 0 || progress.scanned === progress.total) render(); } });
         if (activeMaterialJob !== job || job.controller.signal.aborted) return;
         projectSources.set(sourceId, { sourceId, rootLabel, files: fileList, result });
+        materialSearch?.registerSource(sourceId, fileList, result.files.map(item => ({ ...item, id: `project:${item.relativePath}` })));
         for (const item of result.files) {
           const existing = f.materials.find(candidate => (candidate.relativePath || candidate.title) === item.relativePath);
           if (existing) {
@@ -968,20 +1192,17 @@
         f.wizardFilteredCandidates = [...(f.wizardFilteredCandidates || []), ...filtered]
           .filter((item, index, list) => list.findIndex(other => other.relativePath === item.relativePath) === index);
         f.wizardInventoryComplete = result.inventoryComplete && [...projectSources.values()].every(source => source.result.inventoryComplete);
-        if (!f.wizardMaterialIds.length) {
-          f.wizardMaterialIds = (prompts?.recommendMaterials?.(f.materials, { goal: f.goal }, f.taskType) || []).map(item => item.id).slice(0, 3);
-        }
         const matchedWorkspace = (state().writingWorkspaces || []).find(item => item.id === f.wizardWorkspaceId);
         const folderMatches = matchedWorkspace && matchedWorkspace.rootLabel === rootLabel
           && matchedWorkspace.selectedPaths.every(saved => result.files.some(item => item.relativePath === saved.path && item.fingerprint === saved.fingerprint));
         if (folderMatches) f.wizardMaterialIds = matchedWorkspace.selectedPaths
-          .map(saved => f.materials.find(item => item.relativePath === saved.path)?.id).filter(Boolean).slice(0, 3);
+          .map(saved => f.materials.find(item => item.relativePath === saved.path)?.id).filter(Boolean);
         else if (matchedWorkspace) f.error = '所选文件夹与常用工作空间不匹配；未恢复历史勾选。请核对目录后继续。';
         if (!result.inventoryComplete) f.error = '文件夹超过 10,000 项扫描上限；其余文件未扫描。';
       } catch (error) {
         if (error?.name !== 'AbortError') f.error = String(error.message || '文件夹索引失败').slice(0, 300);
       } finally {
-        if (activeMaterialJob === job) { activeMaterialJob = null; processingMaterials = false; render(); }
+        if (activeMaterialJob === job) { activeMaterialJob = null; processingMaterials = false; f.wizardIndexProgress = null; render(); }
       }
     }
     async function importWritingSourceFile(file) {
@@ -1055,7 +1276,7 @@
       }
     }
     async function operate(action, data = {}) {
-      if (action === 'new') { activeMaterialJob?.controller.abort(); sourceImportJob?.controller.abort(); webReadResults.clear(); if (articleId) coordinator.cancelResearch(articleId); articleId = ''; const fresh = form(); fresh.wizardStage = 1; fresh.wizardMode = 'new'; fresh.wizardSuggestion = null; fresh.wizardError = ''; fresh.wizardSourceDocument = null; fresh.draft = ''; render(); return; }
+      if (action === 'new') { activeMaterialJob?.controller.abort(); activeSearchJob?.controller.abort(); sourceImportJob?.controller.abort(); materialSearch?.clear(); projectSources.clear(); webReadResults.clear(); if (articleId) coordinator.cancelResearch(articleId); articleId = ''; const fresh = form(); fresh.wizardStage = 1; fresh.wizardMode = 'new'; fresh.wizardSuggestion = null; fresh.wizardError = ''; fresh.wizardSourceDocument = null; fresh.draft = ''; render(); return; }
       if (action === 'wizard-clear-material-search') { form().wizardMaterialSearch = ''; render(); document.getElementById('writing-wizard-material-search')?.focus?.(); return; }
       if (action === 'wizard-candidate-page') { candidatePage = Math.max(1, Number(data.page) || 1); render(); return; }
       if (action === 'wizard-filtered-toggle') { const f = form(); f.wizardShowFiltered = !f.wizardShowFiltered; render(); return; }
@@ -1087,6 +1308,7 @@
       if (action === 'wizard-remove-project-source') {
         const f = form();
         projectSources.delete(data.projectSource);
+        materialSearch?.removeSource(data.projectSource);
         for (const item of f.materials) {
           item.projectSourceIds = (item.projectSourceIds || [item.projectSourceId].filter(Boolean)).filter(id => id !== data.projectSource);
           if (item.projectSourceId === data.projectSource) {
@@ -1121,35 +1343,81 @@
       if (action === 'wizard-save-workspace') {
         const f = form();
         try {
-          const selected = f.materials.filter(item => f.wizardMaterialIds.includes(item.id) && item.relativePath);
-          const firstPath = selected[0]?.relativePath || '';
+          const source = [...projectSources.values()][0];
+          if (!source) throw new Error('请先添加一个文件夹，再保存为常用工作空间');
+          const selected = f.materials.filter(item => f.wizardMaterialIds.includes(item.id)
+            && item.projectSourceIds?.includes(source.sourceId) && item.relativePath);
           const record = schema.normalizeWritingWorkspaceRecord({ id: `writing-workspace-${Date.now()}`, name: f.wizardWorkspaceName,
-            rootLabel: firstPath.includes('/') ? firstPath.split('/')[0] : firstPath,
+            rootLabel: source.rootLabel,
             sourceKind: 'browser-directory',
             selectedPaths: selected.map(item => ({ path: item.relativePath, fingerprint: item.fingerprint || '' })), createdAt: new Date().toISOString() });
-          if (!record.id || !record.name || !selected.length) throw new Error('请填写名称，并先选中至少一份文件夹材料');
+          if (!record.id || !record.name) throw new Error('请填写常用工作空间名称');
           if (typeof persistState !== 'function') throw new Error('当前页面无法保存工作空间');
           persistState({ ...state(), writingWorkspaces: [record, ...(state().writingWorkspaces || []).filter(item => item.name !== record.name)].slice(0, 20) });
-          f.wizardWorkspaceId = record.id; f.promptNotice = '已保存；下次使用时需重新选择文件夹并核对文件版本。';
+          f.wizardWorkspaceId = record.id; f.promptNotice = selected.length
+            ? '已保存；下次使用时需重新选择文件夹并核对已选文件版本。'
+            : '已保存文件夹名称；下次使用时需重新选择该文件夹，模型会重新筛选其中的可读材料。';
         } catch (error) { f.error = error.message || '保存工作空间失败'; }
         render(); return;
       }
       if (action === 'wizard-analyze') {
         const f = form(); f.wizardError = ''; f.error = '';
-        if (!f.goal.trim() || f.wizardMode === 'rewrite' && !f.draft.trim() && !f.wizardSourceDocument) {
+        const hasSelectedAnnotations = f.materials.some(item => f.wizardMaterialIds.includes(item.id) && item.annotationSnapshot?.length);
+        if (!f.goal.trim() || f.wizardMode === 'rewrite' && !f.draft.trim() && !f.wizardSourceDocument && !hasSelectedAnnotations) {
           f.error = f.wizardMode === 'rewrite' ? '请先提供待改原文和改写目标' : '请先描述写作目标'; render(); return;
         }
-        if (f.wizardMaterialIds.length > 3) { f.error = '直接参考材料最多3份，请取消多余选择'; render(); return; }
+        f.wizardSuggestion = null;
+        f.wizardRecommendedCandidates = [];
+        f.wizardRecommendedMaterialIds = [];
+        f.wizardCandidateMaterialIds = [];
         busy.add(''); render();
+        const job = { articleId, controller: new AbortController() };
+        activeSearchJob?.controller.abort();
+        activeSearchJob = job;
+        f.wizardSearchProgress = { scanned: 0, total: materialSearch?.size?.() || 0 };
+        f.wizardSearchStatus = '正在扫描授权文件全文';
         try {
-          const confirmed = f.materials.filter(item => f.wizardMaterialIds.includes(item.id) && item.excerpt && !['failed','unsupported'].includes(item.contentStatus));
+          const confirmed = f.materials.filter(item => f.wizardMaterialIds.includes(item.id)
+            && (item.excerpt || item.annotationSnapshot?.length) && !['failed','unsupported'].includes(item.contentStatus));
+          const initialSearch = materialSearch
+            ? await materialSearch.search(f.goal, { signal: job.controller.signal, budgetTokens: 6000,
+              onProgress: progress => { f.wizardSearchProgress = progress; if (progress.scanned % 25 === 0 || progress.scanned === progress.total) render(); } })
+            : { results: [], errors: [], scanned: 0, total: 0, complete: true };
+          if (activeSearchJob !== job || job.controller.signal.aborted) throw Object.assign(new Error('全文检索已取消'), { code: 'MODEL_CANCELLED' });
+          f.wizardSearchStatus = `全文扫描完成：${initialSearch.scanned}/${initialSearch.total} 个可读候选，命中 ${initialSearch.results.length} 个文件`;
+          const uploadCandidates = initialSearch.results.filter(item => item.excerpt).map(item => ({
+            id: item.id, materialId: item.materialId, title: item.title, relativePath: item.relativePath,
+            excerpt: item.excerpt, locator: item.locator, offset: item.offset, score: item.score,
+            matchedTerms: item.matchedTerms
+          }));
+          let assistantAssessment = '';
+          if (f.wizardUseAssistant && writingAssistantStatus.configured) {
+            const assistantResult = await evaluateWritingAssistant(uploadCandidates, f.goal);
+            f.wizardAssistantStatus = assistantResult.ok
+              ? formatAssistantAssessment(assistantResult, uploadCandidates)
+              : `辅助判断未完成：${assistantResult.message || '未知原因'}；主模型继续判断全部检索候选。`;
+            if (assistantResult.ok) assistantAssessment = formatAssistantAssessment(assistantResult, uploadCandidates);
+          }
           f.wizardSuggestion = await coordinator.analyzeTask({ goal: f.goal, draft: f.wizardMode === 'rewrite' && !f.wizardSourceDocument ? f.draft : '',
-            sourceDocument: f.wizardMode === 'rewrite' ? f.wizardSourceDocument : null, materials: confirmed });
+            sourceDocument: f.wizardMode === 'rewrite' ? f.wizardSourceDocument : null, materials: confirmed, uploadCandidates,
+            assistantAssessment,
+            retrievalStatus: { scanned: initialSearch.scanned, total: initialSearch.total, complete: initialSearch.complete, errors: initialSearch.errors } }, {
+            signal: job.controller.signal,
+            searchMaterials: async queries => (await materialSearch.search(queries, { signal: job.controller.signal, budgetTokens: 3000 })).results,
+            readMaterial: (id, offset, length) => materialSearch.read(id, offset, { signal: job.controller.signal, length })
+          });
+          const sentCandidates = Array.isArray(f.wizardSuggestion.selectedUploadCandidates) ? f.wizardSuggestion.selectedUploadCandidates : [];
+          const validMaterialIds = new Set(f.materials.map(item => item.id));
+          f.wizardRecommendedCandidates = sentCandidates.filter(item => item && validMaterialIds.has(item.materialId)
+            && typeof item.id === 'string' && (f.wizardSuggestion.selectedUploadMaterialIds || []).includes(item.id));
+          f.wizardRecommendedMaterialIds = [...new Set(f.wizardRecommendedCandidates.map(item => item.materialId))];
+          f.wizardCandidateMaterialIds = [];
           f.wizardManualGenre = f.wizardSuggestion.genre; f.wizardTaskType = f.wizardSuggestion.taskType; f.wizardStage = 2;
         } catch (error) { f.wizardError = error.message || '任务分析不可用'; f.wizardStage = 2; }
-        finally { busy.delete(''); render(); }
+        finally { f.wizardSearchProgress = null; busy.delete(''); if (activeSearchJob === job) activeSearchJob = null; render(); }
         return;
       }
+      if (action === 'wizard-cancel-scan') { activeSearchJob?.controller.abort(); return; }
       if (action === 'wizard-confirm') {
         const f = form();
         try {
@@ -1157,7 +1425,9 @@
           const genre = genreId(f.wizardManualGenre || f.wizardSuggestion?.genre) || 'article';
           f.genre = schema.getWritingGenreConfig(genre).name;
           f.taskType = f.wizardTaskType || f.wizardSuggestion?.taskType || (genre === 'article' ? 'revision' : schema.getWritingGenreConfig(genre).taskTypes[0]);
-          f.materials = f.materials.filter(item => f.wizardMaterialIds.includes(item.id)).slice(0, 3);
+          const selectedIds = new Set([...f.wizardMaterialIds, ...f.wizardCandidateMaterialIds]);
+          f.materials = f.materials.filter(item => selectedIds.has(item.id))
+            .map(item => ({ ...item, excerpt: item.excerpt || (item.parsedSegments || []).map(segment => `${segment.locator}\n${segment.text}`).join('\n').slice(0, 1200), selectedForPrompt: true }));
           const input = { ...articlePatch(f), draft: f.wizardMode === 'rewrite' && !f.wizardSourceDocument ? f.draft : '',
             sourceDocument: f.wizardMode === 'rewrite' ? f.wizardSourceDocument : undefined,
             materials: f.materials.filter(m => m.kind !== 'source'), sources: f.materials.filter(m => m.kind === 'source'), taskType: f.taskType, packSelections: f.packSelections };
@@ -1195,7 +1465,10 @@
         const f = form(); f.error = '';
         try {
           const latest = coordinator.getWorkspace(articleId).rounds.at(-1);
-          if (latest.draft !== f.newDraft) await coordinator.appendRound(articleId, { draft: f.newDraft, feedback: f.feedback, taskType: f.taskType, packSelections: f.packSelections });
+          if (latest.draft !== f.newDraft) {
+            const received = await coordinator.appendRound(articleId, { draft: f.newDraft, draftDecision: { status: 'pending' }, feedback: f.feedback, taskType: f.taskType, packSelections: f.packSelections });
+            f.historyId = received.round.id;
+          }
           const result = await coordinator.runModelDiagnosis(articleId); f.diagnosis = result.diagnosis; f.prompt = result.prompt;
         }
         catch (error) { f.error = error.message || '检查失败'; }
@@ -1325,13 +1598,51 @@
       }
       if (action === 'cancel-material-parse') { activeMaterialJob?.controller.abort(); form().error = '本机解析已取消；原附件引用仍保留。'; render(); return; }
       if (action === 'manage-memories') { managerOpen = !managerOpen; render(); return; }
+      if (action === 'open-memory-manager') { managerOpen = true; memoryFocus = true; render(); return; }
+      if (action === 'close-memory-manager') { if (navigate) navigate('article', 'writing'); else showWritingWorkbench(); return; }
+      if (['confirm-memory', 'ignore-memory', 'restore-memory', 'set-memory-enabled', 'restore-memory-version', 'skip-memory', 'edit-memory', 'delete-memory', 'undo-memory'].includes(action)) {
+        const f = form(articleId);
+        try {
+          if (action === 'confirm-memory') await coordinator.confirmMemory(data.memoryId, memoryDrafts.get(data.memoryId) || {});
+          else if (action === 'ignore-memory') await coordinator.ignoreMemory(data.memoryId);
+          else if (action === 'restore-memory') await coordinator.restoreMemory(data.memoryId);
+          else if (action === 'set-memory-enabled') await coordinator.setMemoryEnabled(data.memoryId, data.enabled === 'true');
+          else if (action === 'restore-memory-version') {
+            if (!await confirm('恢复此历史偏好？当前版本会保留为新的历史记录。')) return;
+            await coordinator.restoreMemoryVersion(data.memoryId, data.memoryVersion, data.memoryUpdatedAt);
+          } else if (action === 'skip-memory') {
+            if (!articleId) throw new Error('请先打开一篇写作任务，再设置本篇是否使用此偏好。');
+            await coordinator.setMemorySkipped(articleId, data.memoryId, data.skipped === 'true');
+          } else if (action === 'edit-memory') await coordinator.editMemory(data.memoryId, memoryDrafts.get(data.memoryId) || {});
+          else if (action === 'delete-memory') await coordinator.deleteMemory(data.memoryId);
+          else if (action === 'undo-memory') { await coordinator.undoMemory(data.memoryId); f.notifications = f.notifications.filter(n => n.memoryId !== data.memoryId); }
+          memoryDrafts.delete(data.memoryId);
+          f.error = '';
+        } catch (error) { f.error = error.message || '偏好状态未保存'; }
+        render(); return;
+      }
       if (action === 'manage-packs') { packUI && packUI.handle('pack-open'); return; }
+      if (action === 'open-article-center') { form().writingView = 'center'; render(); return; }
+      if (action === 'continue-writing-flow') { const f = form(); f.writingView = 'guided'; f.wizardStage = 3; render(); return; }
       if (action === 'import-material-files') { document.getElementById('writing-material-files')?.click(); return; }
       if (action === 'add-material-link') { addMaterialLink(); return; }
       if (action === 'read-web-material') { await readWebMaterial(data.index); return; }
       if (action?.startsWith('pack-')) { await packUI?.handle(action, data); return; }
       const id = articleId;
       const f = form(id);
+      if (action === 'draft-decision') {
+        if (!id || busy.has(id)) return;
+        busy.add(id); f.error = ''; render();
+        try {
+          const result = await coordinator.decideRoundDraft(id, data.roundId, data.decision);
+          f.draft = result.articleDraft;
+          f.historyId = data.roundId;
+          f.promptNotice = data.decision === 'adopt' ? '已采用这版稿件，原稿、来源和其他轮次均保留。'
+            : data.decision === 'undo' ? '已撤销采用，只恢复了采用前的稿件。' : '已保留当前稿；新稿仍可在历史中比较。';
+        } catch (error) { f.error = error.message || '稿件决定未保存，当前稿件与输入保持不变'; }
+        finally { busy.delete(id); render(); }
+        return;
+      }
       if (action === 'use-material-segment') {
         const material = f.materials[Number(data.index)];
         const segment = material?.parsedSegments?.[Number(data.segmentIndex)];
@@ -1352,8 +1663,11 @@
         if (!material || !result?.ok) return;
         material.title = result.title.slice(0, 160);
         material.excerpt = result.text.slice(0, 1200);
+        material.url = result.finalUrl;
+        material.sourceVersion = result.contentHash;
         material.excerptLocator = `网页选摘 · ${result.finalUrl}`.slice(0, 120);
         material.sourceType = 'web-text';
+        material.accessedAt = result.fetchedAt || '';
         material.contentStatus = 'embedded';
         material.originalLength = result.characterCount;
         material.attachmentRequired = false;
@@ -1469,7 +1783,7 @@
         finally { busy.delete(id); render(); }
         return;
       }
-      if (action === 'add-material') { if (f.materials.length < 3) f.materials.push({ id: newMaterialId(), title: '', excerpt: '', purpose: 'content', kind: 'material', sourceType: 'pasted-text', origin: 'user-pasted', contentStatus: 'reference-only' }); render(); return; }
+      if (action === 'add-material') { f.materials.push({ id: newMaterialId(), title: '', excerpt: '', purpose: 'content', kind: 'material', sourceType: 'pasted-text', origin: 'user-pasted', contentStatus: 'reference-only' }); render(); return; }
       if (action === 'remove-material') { const [removed] = f.materials.splice(Number(data.index), 1); if (removed) webReadResults.delete(removed.id); render(); return; }
       if (action === 'copy-diagnosis') {
         try { await copyText?.(f.diagnosis); }
@@ -1515,6 +1829,23 @@
       }
       const writingActions = new Set(['add-unit', 'update-unit', 'archive-unit', 'apply-material-units', 'add-issue', 'update-issue',
         'select-writing-route', 'route-start', 'route-complete', 'route-skip', 'route-block']);
+      if (action === 'execute-writing-resource') {
+        if (busy.has(id)) return;
+        const resourceId = String(data.resourceId || '');
+        const actionId = String(data.resourceAction || '');
+        const rootId = document.getElementById('writing-resource-root')?.value || '';
+        busy.add(id); f.error = ''; render();
+        try {
+          if (!rootId || typeof desktopApi?.executeWritingResource !== 'function') throw new Error('当前没有可用的桌面目录授权，无法执行资源动作');
+          const result = await desktopApi.executeWritingResource({ actionId, resourceId, rootId, params: {}, mode: 'builtin' });
+          const failed = result?.status !== 'executed';
+          await coordinator.recordResourceUsage(id, resourceId, { status: failed ? 'failed' : 'executed', reason: result?.message, outputSummary: result?.outputSummary || result?.output?.summary });
+          if (failed) throw new Error(result?.message || '资源动作执行失败');
+          f.promptNotice = result.outputSummary || result.output?.summary || '资源动作已完成，结果已记录到本轮。';
+        } catch (error) { f.error = error.message || '资源动作执行失败'; }
+        finally { busy.delete(id); render(); }
+        return;
+      }
       if (writingActions.has(action)) {
         if (busy.has(id)) return;
         const submitted = clone(f);
@@ -1636,7 +1967,7 @@
             if (!confirmAsArticle) return;
             genre = 'article';
           }
-          const memoryIds = new Set((state().writingMemories || []).map(m => m.id));
+          const memoryIds = new Set(coordinator.listMemories().map(m => m.id));
           const w = await coordinator.createArticle({ ...articlePatch(submitted), ...roundInput(submitted, submitted.draft, ''), genre, confirmAsArticle });
           drafts.delete(''); drafts.set(w.id, f);
           if (articleId === '') articleId = w.id;
@@ -1645,9 +1976,9 @@
           f.taskType = w.rounds.at(-1).taskType || 'revision';
           updateOutputs(f, w.rounds.at(-1), submitted);
           acknowledge(f, submitted, ['title', 'goal', 'audience', 'platform', 'success', 'preserve', 'constraints', 'dimensions', 'materials', 'corrections', 'draft', 'packSelections', 'academicRequirements', 'domainInputs']);
-          for (const m of state().writingMemories || []) {
-            if (!memoryIds.has(m.id) && m.undo?.action === 'auto-promote' && !m.undo.undoneAt && m.evidenceArticleIds.includes(w.id)) {
-              f.notifications.push({ memoryId: m.id, message: '已记住跨文章重复偏好，可撤销' });
+          for (const m of coordinator.listMemories()) {
+            if (!memoryIds.has(m.id) && m.status === 'pending' && m.evidenceArticleIds.includes(w.id)) {
+              f.notifications.push({ type: 'memory-candidate', memoryId: m.id, message: '发现跨文章重复的偏好建议；确认后才会应用。' });
             }
           }
         } else if (action === 'update' || action === 'build') {
@@ -1685,8 +2016,8 @@
             // 旧失败轮可能超长；目标已更新后允许精简新稿绕过旧轮，原文仍留会话。
             if (!(error instanceof RangeError) || !submitted.newDraft.trim()) throw error;
           }
-          const result = await coordinator.appendRound(id, roundInput(submitted, submitted.newDraft || submitted.draft, id));
-          f.draft = result.round.draft;
+          const result = await coordinator.appendRound(id, { ...roundInput(submitted, submitted.newDraft || submitted.draft, id), draftDecision: { status: 'pending' } });
+          f.historyId = result.round.id;
           f.sourcePromptVersionId = '';
           if (JSON.stringify(f.materials) === JSON.stringify(submitted.materials)) f.materials = references(result.round);
           updateOutputs(f, result.round, submitted);
@@ -1707,7 +2038,7 @@
           if (JSON.stringify(f.materials) === JSON.stringify(submitted.materials)) {
             const selected = references(result);
             const identity = m => JSON.stringify([m.title, m.excerpt, m.purpose]);
-            f.materials = [...f.materials, ...selected.filter(m => !f.materials.some(old => identity(old) === identity(m)))].slice(0, 3);
+            f.materials = [...f.materials, ...selected.filter(m => !f.materials.some(old => identity(old) === identity(m)))];
           }
           updateOutputs(f, coordinator.readRound(id, result.roundId), submitted);
         } else if (action === 'preview-research') {
@@ -1728,10 +2059,7 @@
         } else if (action === 'remember') {
           const m = await coordinator.rememberPreference(id, { scope: submitted.scope, preference: submitted.preference, example: submitted.example, counterexample: submitted.counterexample });
           f.notifications.push({ memoryId: m.id, message: '偏好已保存到本机，可撤销' });
-        } else if (action === 'undo-memory') {
-          await coordinator.undoMemory(data.memoryId); f.notifications = f.notifications.filter(n => n.memoryId !== data.memoryId);
-        } else if (action === 'edit-memory') await coordinator.editMemory(data.memoryId, memoryDrafts.get(data.memoryId));
-        else if (action === 'delete-memory') await coordinator.deleteMemory(data.memoryId);
+        }
       } catch (error) {
         f.error = promptLimitGuidance(error.message || '操作失败，输入已保留', error.articleId || id, submitted);
         if (action === 'approve-research' && error.code === 'PERSIST_FAILED') {
@@ -1759,6 +2087,15 @@
         const search = document.getElementById('writing-wizard-material-search');
         search?.focus?.();
         search?.setSelectionRange?.(caret, caret);
+        return;
+      }
+      if (target.dataset?.writingField === 'wizardWorkspaceName') {
+        const caret = target.selectionStart;
+        capture(target);
+        render();
+        const nameInput = mount.querySelector('[data-writing-field="wizardWorkspaceName"]');
+        nameInput?.focus?.();
+        nameInput?.setSelectionRange?.(caret, caret);
         return;
       }
       const isReplacingFileSource = target.dataset?.writingField === 'draft' && Boolean(form().wizardSourceDocument);
@@ -1800,11 +2137,17 @@
       else if (target.dataset?.wizardMaterial !== undefined) {
         const f = form();
         const item = f.materials[Number(target.dataset.wizardMaterial)];
-        if (item && target.checked && !f.wizardMaterialIds.includes(item.id) && f.wizardMaterialIds.length >= 3) {
-          f.error = '直接参考材料最多 3 份；请先取消一份已选材料。';
-        } else if (item) f.wizardMaterialIds = target.checked
+        if (item) f.wizardMaterialIds = target.checked
           ? [...new Set([...f.wizardMaterialIds, item.id])]
           : f.wizardMaterialIds.filter(id => id !== item.id);
+        render();
+      }
+      else if (target.dataset?.wizardRecommendedMaterial) {
+        const f = form();
+        const materialId = target.dataset.wizardRecommendedMaterial;
+        f.wizardCandidateMaterialIds = target.checked
+          ? [...new Set([...f.wizardCandidateMaterialIds, materialId])]
+          : f.wizardCandidateMaterialIds.filter(id => id !== materialId);
         render();
       }
       else if (target.dataset?.sourceSection !== undefined) {
@@ -1833,7 +2176,8 @@
       return operate(target.dataset.writingAction || target.dataset.action, target.dataset);
     });
     render();
-    return { render, openArticle(id) { if (articleId && articleId !== id) coordinator.cancelResearch(articleId); activeMaterialJob?.controller.abort(); sourceImportJob?.controller.abort(); webReadResults.clear(); articleId = id || ''; render(); },
+    refreshWritingAssistantStatus();
+    return { render, refreshWritingAssistantStatus, openMemoryManager, showWritingWorkbench, prepareAnnotationDraft, prepareLibraryDraft, preparePromptDraft, openArticle(id) { memoryFocus = false; managerOpen = false; if (articleId && articleId !== id) coordinator.cancelResearch(articleId); activeMaterialJob?.controller.abort(); sourceImportJob?.controller.abort(); webReadResults.clear(); articleId = id || ''; render(); refreshWritingAssistantStatus(); },
       refreshFromStorage() {
         memoryDrafts.clear();
         const ids = new Set(coordinator.listArticles().map(a => a.id));

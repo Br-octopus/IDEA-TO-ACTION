@@ -67,7 +67,6 @@
       sourceRuntimeStates.set(runtimeStateKey(platform, targetProfileId), state);
     }
     function domesticPlatforms() { return platforms.filter(item => item.domestic === true && DOMESTIC_PLATFORM_IDS.has(item.platform)); }
-    function selectedPlatforms() { return [...document.querySelectorAll("[data-social-platform]:checked")].map(input => input.value); }
     function currentTask() { return (getState()?.researchTasks || []).find(task => task.id === activeTaskId) || null; }
     function researchIsBusy() {
       const task = currentTask();
@@ -130,11 +129,6 @@
     }
 
     function renderPlatformChoices() {
-      $("social-research-platforms").innerHTML = domesticPlatforms().map(item => {
-        const available = item.browserSearchRegistered === true && item.supportsSearch === true;
-        const verified = item.connection?.profileId === profileId(item.platform) && item.connection?.searchVerified === true;
-        return `<label class="social-platform"><span class="social-inline-check"><input type="checkbox" data-social-platform value="${escape(item.platform)}" ${available ? "checked" : "disabled"}> <strong>${escape(item.displayName || names[item.platform] || item.platform)}</strong></span><span class="social-meta">浏览器搜索适配器：${available ? "已注册" : "不可用"} · 实测：${verified ? "已验证" : "待实测"}</span></label>`;
-      }).join("");
       const options = `<option value="">全部平台</option>${platforms.map(item => `<option value="${escape(item.platform)}">${escape(item.displayName || names[item.platform] || item.platform)}</option>`).join("")}`;
       $("social-filter-platform").innerHTML = options;
       renderPlatformCards();
@@ -142,7 +136,10 @@
 
     function renderPlatformCards() {
       const task = currentTask();
-      $("social-platform-cards").innerHTML = domesticPlatforms().map(item => {
+      const visiblePlatforms = task
+        ? domesticPlatforms().filter(item => task.platforms.includes(item.platform))
+        : domesticPlatforms();
+      $("social-platform-cards").innerHTML = visiblePlatforms.map(item => {
         const connection = item.connection || {};
         const status = connection.browserStatus || connection.status || "needs-recheck";
         const apiStatus = !item.apiAvailable ? "未接入" : connection.apiConfigured ? "已配置" : "支持，未配置";
@@ -153,11 +150,13 @@
         const searchSupported = item.browserSearchRegistered === true && item.supportsSearch === true;
         return `<article class="social-platform" data-platform-card="${escape(item.platform)}"><header><div><h3>${escape(item.displayName || names[item.platform] || item.platform)}</h3><div class="social-meta">API：${apiStatus} · 浏览器：${escape(stateText)} · 登录：${escape(loginLabel(connection.loginState))}</div></div><label class="social-muted">连接方式 <select data-connection-mode="${escape(item.platform)}"><option value="auto">自动回退</option>${item.apiAvailable ? '<option value="api">只用 API</option>' : ""}<option value="browser" ${searchSupported ? "" : "disabled"}>真实浏览器</option></select></label></header><div class="social-meta">浏览器搜索适配器：${searchAdapter} · 实测：${verificationText} · 能力：搜索 ${searchSupported ? "已注册" : "不可用"} · 详情 ${capabilities.supportsDetail || connection.supportsDetail ? "可用" : "未知"} · 评论 ${capabilities.supportsComments || connection.supportsComments ? "可用" : "未知"} · 只读</div><div class="social-meta">最近检查：${escape(connection.lastCheckedAt || connection.checkedAt || "无记录")} · 最近成功搜索：${escape(connection.lastSuccessfulSearchAt || "无记录")}</div><div class="social-tools"><button class="button-secondary" type="button" data-social-action="login" data-platform="${escape(item.platform)}">开始登录</button><button class="button-secondary" type="button" data-social-action="check" data-platform="${escape(item.platform)}" ${checking.has(item.platform) ? "disabled" : ""}>重新检查</button><button class="button-quiet" type="button" data-social-action="clear" data-platform="${escape(item.platform)}">清理 profile</button></div><div class="social-meta" data-platform-error="${escape(item.platform)}">${escape(connection.lastErrorCode ? `[${connection.lastErrorCode}] ` : "")}${escape(connection.error || connection.lastError || "最近错误：无")}</div></article>`;
       }).join("");
-      domesticPlatforms().forEach(item => { const select = document.querySelector(`[data-connection-mode="${item.platform}"]`); if (select) select.value = task?.connectionModes?.[item.platform] || "auto"; });
+      visiblePlatforms.forEach(item => { const select = document.querySelector(`[data-connection-mode="${item.platform}"]`); if (select) select.value = task?.connectionModes?.[item.platform] || "auto"; });
     }
 
     function setStatus(message) { $("social-research-status").textContent = message; }
+    function setEntryStatus(message) { $("social-research-entry-status").textContent = message; }
     function renderPlan(task) {
+      $("social-research-plan").hidden = !task;
       if (!task) { $("social-research-plan-detail").textContent = "等待生成计划"; return; }
       const plan = task.plan || {};
       $("social-research-plan-detail").innerHTML = `<h3>${escape(plan.objective || task.topic)}</h3><p>模板：${escape(plan.researchType || task.template)} · 平台：${(task.platforms || []).map(platform => escape(names[platform] || platform)).join("、")}</p><p>平台分工：${(plan.platformRoles || []).map(role => `${escape(names[role.platform] || role.platform)}：${escape(role.role)}（${(role.queries || []).map(escape).join("、")}）`).join("；")}</p><p>查询词：${(plan.queries || task.queries || []).map(escape).join("、") || "待生成"} · 时间：${escape(plan.timeRange?.from || "不限")} 至 ${escape(plan.timeRange?.to || "不限")}</p><p>预算：最多 ${escape(plan.budget?.maxPlatforms)} 个平台、每平台 ${escape(plan.budget?.maxQueriesPerPlatform)} 个查询、每查询 ${escape(plan.budget?.maxResultsPerQuery)} 条结果、${escape(plan.budget?.maxPages)} 页、${escape(plan.budget?.maxDetails)} 条详情。停止条件：${(plan.stopConditions || []).map(escape).join("；")}</p>`;
@@ -197,6 +196,8 @@
 
     function renderResults(task) {
       const results = task?.results || [];
+      const attempted = Boolean(task && (results.length || ["searching", "awaiting-save", "partial-failure", "failed", "cancelled", "saved"].includes(task.status)));
+      $("social-research-results").hidden = !attempted;
       const queryValues = [...new Set(results.flatMap(result => result.searchQueries || []))];
       $("social-filter-query").innerHTML = `<option value="">全部查询</option>${queryValues.map(value => `<option>${escape(value)}</option>`).join("")}`;
       const filtered = filterResearchResults(results, {
@@ -243,6 +244,7 @@
     }
 
     function renderReport(task) {
+      $("social-research-report").hidden = !(reportGenerating || task?.report || task?.reportError);
       const hasCompletedMaterials = (task?.results || []).some(result => (result.materials || []).some(material => material.status === "completed"));
       $("social-research-regenerate-report").disabled = task?.status !== "awaiting-save" || reportGenerating || deepReadRunning || !hasCompletedMaterials;
       const report = task?.report;
@@ -377,7 +379,12 @@
           </div>
         </article>` : `<p class="social-muted">字幕来源未登记；不会用视频简介代替字幕。</p>`;
     }
-    function render() { const task = currentTask(); renderPlatformCards(); renderPlan(task); renderResults(task); renderReport(task); renderSourceLifecycle(); }
+    function render() {
+      const task = currentTask();
+      renderPlatformCards(); renderPlan(task); renderResults(task); renderReport(task); renderSourceLifecycle();
+      const sourceDisclosure = $("social-research-source-disclosure");
+      if (sourceDisclosure && task?.status === "awaiting-platform-preparation" && !allPlatformsPrepared(task)) sourceDisclosure.open = true;
+    }
     function restorePrepareOperation(environment) {
       const operation = environment?.lastPrepareOperation;
       if (!operation || operation.sourceId !== registeredSocialSource?.id) return;
@@ -673,12 +680,15 @@
 
     async function createPlan(event) {
       event.preventDefault();
-      const chosen = selectedPlatforms();
-      if (!chosen.length) { setStatus("至少选择一个研究平台。"); return; }
+      setEntryStatus("");
+      const candidates = domesticPlatforms()
+        .filter(item => item.supportsSearch === true && (item.browserSearchRegistered === true || item.apiAvailable === true))
+        .map(item => item.platform);
+      if (!candidates.length) { setEntryStatus("当前没有可用的国内社媒搜索来源；检查平台与数据源状态后重试。"); return; }
       const topic = $("social-research-topic").value.trim();
-      const modes = Object.fromEntries(chosen.map(platform => [platform, document.querySelector(`[data-connection-mode="${platform}"]`)?.value || "auto"]));
+      const modes = Object.fromEntries(candidates.map(platform => [platform, document.querySelector(`[data-connection-mode="${platform}"]`)?.value || "auto"]));
       try {
-        const task = await coordinator.createPlan({ topic, template: $("social-research-template").value, platforms: chosen, connectionModes: modes });
+        const task = await coordinator.createPlan({ topic, template: "auto", candidatePlatforms: candidates, connectionModes: modes });
         activeTaskId = task.id;
         selectedResultIds.clear();
         selectedDeepResultIds.clear();
@@ -687,8 +697,8 @@
         render();
         setStatus(task.planError
           ? `未能生成模型计划，已提供默认计划供核对：${task.planError}`
-          : "计划已生成。请核对目标、查询词和预算后确认；确认前不会开始搜索。");
-      } catch (error) { setStatus(error.message || "研究计划生成失败"); }
+          : "Agent 已根据目标推荐研究类型、平台和范围。请核对计划；确认前不会开始搜索。");
+      } catch (error) { setEntryStatus(error.message || "研究计划生成失败"); }
     }
     async function confirmAndRun() {
       const task = currentTask();
@@ -982,20 +992,23 @@
       render,
       getActiveTaskId: () => activeTaskId,
       async createPlanFromPromptAgent(input = {}) {
-        const requestedPlatforms = Array.isArray(input.platforms) ? input.platforms : [...DOMESTIC_PLATFORM_IDS];
+        const requestedPlatforms = Array.isArray(input.platforms) && input.platforms.length
+          ? input.platforms
+          : domesticPlatforms().map(item => item.platform);
         let domesticPlatformIds = [...new Set(requestedPlatforms
           .map(platform => String(platform || "").trim().toLowerCase())
           .filter(platform => DOMESTIC_PLATFORM_IDS.has(platform)))];
         if (!domesticPlatformIds.length) domesticPlatformIds = [...DOMESTIC_PLATFORM_IDS];
         domesticPlatformIds = domesticPlatformIds.filter(platform => {
           const definition = platforms.find(item => item.platform === platform);
-          return definition?.browserSearchRegistered === true && definition.supportsSearch === true;
+          return definition?.supportsSearch === true
+            && (definition.browserSearchRegistered === true || definition.apiAvailable === true);
         });
-        if (!domesticPlatformIds.length) throw new Error("当前没有已注册的小红书、B 站、微博或知乎搜索适配器。");
+        if (!domesticPlatformIds.length) throw new Error("当前没有可用的小红书、B 站、微博或知乎搜索来源。");
         const task = await coordinator.createPlan({
           topic: String(input.topic || input.objective || '').trim(),
-          template: 'fact-check',
-          platforms: domesticPlatformIds,
+          template: 'auto',
+          candidatePlatforms: domesticPlatformIds,
           queries: Array.isArray(input.queries) ? input.queries : [],
           budget: input.budget && typeof input.budget === 'object' ? input.budget : undefined,
           connectionModes: {}

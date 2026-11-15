@@ -116,6 +116,7 @@
   function fromPrompt(prompt = {}) {
     return knowledgeSchema.normalizeKnowledgeEntry({
       id: prefixId("prompt-", prompt.id),
+      version: prompt.version,
       type: "user-prompt",
       title: prompt.title,
       domains: prompt.domains || prompt.domain,
@@ -135,6 +136,7 @@
       : reviewedCase.status === "失败" ? "failure-case" : "review-insight";
     return knowledgeSchema.normalizeKnowledgeEntry({
       id: prefixId("case-", reviewedCase.id),
+      version: reviewedCase.currentVersion,
       type,
       title: `${reviewedCase.taskType || "任务"}复盘`,
       domains: reviewedCase.domain,
@@ -180,14 +182,14 @@
       .map(entry => String(entry?.linkedCaseId || "").trim())
       .filter(Boolean));
     const entries = [
-      ...references.map(reference => ({ source: "reference", entry: fromReference(reference) })),
-      ...methodCards.map(card => ({ source: "method-card", entry: fromMethodCard(card) })),
+      ...references.map(reference => ({ source: "reference", entry: { ...fromReference(reference), updatedAt: reference.updatedAt || "" } })),
+      ...methodCards.map(card => ({ source: "method-card", entry: { ...fromMethodCard(card), updatedAt: card.updatedAt || "" } })),
       ...knowledgeEntries.map(entry => ({
         source: "knowledge-entry",
         entry: knowledgeSchema.normalizeKnowledgeEntry(entry)
       })),
       ...(Array.isArray(state.prompts)
-        ? state.prompts.map(prompt => ({ source: "prompt", entry: fromPrompt(prompt) }))
+        ? state.prompts.map(prompt => ({ source: "prompt", entry: { ...fromPrompt(prompt), updatedAt: prompt.updatedAt || prompt.createdAt || "" } }))
         : []),
       ...(Array.isArray(state.cases)
         ? state.cases
@@ -195,7 +197,7 @@
             && item.reuseDeferred !== true
             && !String(item.reuseDeferredAt || "").trim()
             && !linkedCaseIds.has(String(item.id || "").trim()))
-          .map(reviewedCase => ({ source: "case", entry: fromCase(reviewedCase) }))
+          .map(reviewedCase => ({ source: "case", entry: { ...fromCase(reviewedCase), updatedAt: reviewedCase.updatedAt || reviewedCase.createdAt || "" } }))
         : [])
     ].filter(item => item.entry.id);
 

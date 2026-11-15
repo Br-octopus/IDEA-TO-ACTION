@@ -37,6 +37,17 @@
     return String(value || "").split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
   }
 
+  function relativeSourcePath(value) {
+    const path = String(value || "").trim().replace(/\\/g, "/");
+    if (!path || path.startsWith("/") || /^[a-z]:/i.test(path) || path.split("/").includes("..")) return "";
+    return path.split("/").filter(part => part && part !== ".").join("/").slice(0, 500);
+  }
+
+  function sourceTimestamp(value) {
+    const timestamp = String(value || "").trim().slice(0, 80);
+    return timestamp && Number.isFinite(Date.parse(timestamp)) ? timestamp : "";
+  }
+
   function normalizeUserRating(value) {
     if (value === null || value === undefined || typeof value === "boolean") return null;
     if (typeof value === "string" && !value.trim()) return null;
@@ -86,10 +97,16 @@
     const now = new Date().toISOString();
     const entry = {
       id: String(source.id || "").trim(),
+      version: Number.isSafeInteger(source.version) && source.version > 0 ? source.version : 1,
       type,
       title: String(source.title || "").trim(),
       sourceUrl: String(source.sourceUrl || source.url || "").trim(),
       sourceType: String(source.sourceType || "用户添加").trim(),
+      sourcePath: relativeSourcePath(source.sourcePath),
+      sourceFetchedAt: sourceTimestamp(source.sourceFetchedAt),
+      sourceVersion: String(source.sourceVersion || '').trim().slice(0, 160),
+      sourceFormat: String(source.sourceFormat || "").trim().slice(0, 80),
+      sourceCapabilities: [...new Set(listValue(source.sourceCapabilities).map(item => item.slice(0, 80)))].slice(0, 12),
       sourceKind,
       sourceId: String(source.sourceId || "").trim(),
       hiddenAt: String(source.hiddenAt || "").trim(),

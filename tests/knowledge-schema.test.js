@@ -55,3 +55,21 @@ test('资料索引元数据有稳定默认值', () => {
   assert.equal(entry.lastUsedAt, '');
   assert.deepEqual(entry.customAliases, []);
 });
+
+test('资料来源元数据保留受限相对路径、有效抓取时间与能力，不保留本机绝对路径', () => {
+  const entry = normalizeKnowledgeEntry({
+    id: 'source-1', sourcePath: '  guides\\writing.md  ',
+    sourceFetchedAt: '2026-11-12T01:02:03.000Z', sourceFormat: 'Markdown',
+    sourceVersion: `sha256:${'a'.repeat(64)}`,
+    sourceCapabilities: ['已保存摘要/摘录', '已保存摘要/摘录', '完整原件仍需随附']
+  });
+  assert.equal(entry.sourcePath, 'guides/writing.md');
+  assert.equal(entry.sourceFetchedAt, '2026-11-12T01:02:03.000Z');
+  assert.equal(entry.sourceVersion, `sha256:${'a'.repeat(64)}`);
+  assert.equal(entry.sourceFormat, 'Markdown');
+  assert.deepEqual(entry.sourceCapabilities, ['已保存摘要/摘录', '完整原件仍需随附']);
+  assert.equal(normalizeKnowledgeEntry({ sourcePath: 'C:\\Users\\someone\\private.pdf' }).sourcePath, '');
+  assert.equal(normalizeKnowledgeEntry({ sourcePath: '../private.pdf' }).sourcePath, '');
+  assert.equal(normalizeKnowledgeEntry({ sourceFetchedAt: 'not-a-date' }).sourceFetchedAt, '');
+  assert.equal(normalizeKnowledgeEntry({ sourceVersion: 'x'.repeat(300) }).sourceVersion.length, 160);
+});

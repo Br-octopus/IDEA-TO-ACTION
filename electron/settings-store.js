@@ -5,8 +5,9 @@ const SETTINGS_FILE = 'secure-settings.json';
 
 function emptyConfig() {
   return {
-    model: { baseUrl: '', name: '', apiKey: '' },
-    search: { baseUrl: '', apiKey: '' }
+    model: { baseUrl: '', name: 'gpt-6-sol', apiKey: '' },
+    search: { baseUrl: '', apiKey: '' },
+    writingAssistant: { mode: '', baseUrl: '', modelId: '', apiKey: '', reuseModelConnection: false }
   };
 }
 
@@ -41,6 +42,17 @@ function hasEncryption(safeStorage) {
   }
 }
 
+function isValidAssistantBaseUrl(value) {
+  try {
+    const url = new URL(value);
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname.toLowerCase());
+    return ['https:', ...(local ? ['http:'] : [])].includes(url.protocol)
+      && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
 function publicConfig(config, safeStorageAvailable) {
   return {
     safeStorageAvailable,
@@ -52,6 +64,17 @@ function publicConfig(config, safeStorageAvailable) {
     search: {
       configured: Boolean(config.search.baseUrl && config.search.apiKey),
       baseUrl: config.search.baseUrl
+    },
+    writingAssistant: {
+      configured: Boolean(config.writingAssistant.mode && config.writingAssistant.modelId
+        && ['system-one', 'decisions', 'openai-chat-completions'].includes(config.writingAssistant.mode)
+        && (config.writingAssistant.reuseModelConnection
+          ? isValidAssistantBaseUrl(config.model.baseUrl) && config.model.apiKey
+          : isValidAssistantBaseUrl(config.writingAssistant.baseUrl) && config.writingAssistant.apiKey)),
+      mode: config.writingAssistant.mode,
+      baseUrl: config.writingAssistant.reuseModelConnection ? config.model.baseUrl : config.writingAssistant.baseUrl,
+      modelId: config.writingAssistant.modelId,
+      reuseModelConnection: Boolean(config.writingAssistant.reuseModelConnection)
     }
   };
 }
@@ -82,10 +105,15 @@ function createSettingsStore({ safeStorage, getUserDataPath, fsModule = fs } = {
     try {
       const config = emptyConfig();
       config.model.baseUrl = decode(safeStorage, raw.model?.baseUrl);
-      config.model.name = decode(safeStorage, raw.model?.name);
+      config.model.name = decode(safeStorage, raw.model?.name) || config.model.name;
       config.model.apiKey = decode(safeStorage, raw.model?.apiKey);
       config.search.baseUrl = decode(safeStorage, raw.search?.baseUrl);
       config.search.apiKey = decode(safeStorage, raw.search?.apiKey);
+      config.writingAssistant.mode = decode(safeStorage, raw.writingAssistant?.mode);
+      config.writingAssistant.baseUrl = decode(safeStorage, raw.writingAssistant?.baseUrl);
+      config.writingAssistant.modelId = decode(safeStorage, raw.writingAssistant?.modelId);
+      config.writingAssistant.apiKey = decode(safeStorage, raw.writingAssistant?.apiKey);
+      config.writingAssistant.reuseModelConnection = raw.writingAssistant?.reuseModelConnection === true;
       return { config, safeStorageAvailable: true };
     } catch {
       return { config: emptyConfig(), safeStorageAvailable: true };
@@ -113,6 +141,9 @@ function createSettingsStore({ safeStorage, getUserDataPath, fsModule = fs } = {
     const previous = read().config;
     const sourceModel = input.model || {};
     const sourceSearch = input.search || {};
+    const sourceAssistant = input.writingAssistant || {};
+    const reuseModelConnection = sourceAssistant.reuseModelConnection === undefined
+      ? previous.writingAssistant.reuseModelConnection : sourceAssistant.reuseModelConnection === true;
     const config = {
       model: {
         baseUrl: cleanText(sourceModel.baseUrl ?? input.modelBaseUrl ?? previous.model.baseUrl),
@@ -122,8 +153,27 @@ function createSettingsStore({ safeStorage, getUserDataPath, fsModule = fs } = {
       search: {
         baseUrl: cleanText(sourceSearch.baseUrl ?? input.searchBaseUrl ?? previous.search.baseUrl),
         apiKey: readCredential(sourceSearch, { credential: input.searchCredential, apiKey: input.searchApiKey }, previous.search.apiKey)
+      },
+      writingAssistant: {
+        mode: cleanText(sourceAssistant.mode ?? previous.writingAssistant.mode),
+        baseUrl: reuseModelConnection ? '' : cleanText(sourceAssistant.baseUrl ?? previous.writingAssistant.baseUrl),
+        modelId: cleanText(sourceAssistant.modelId ?? previous.writingAssistant.modelId),
+        apiKey: reuseModelConnection ? '' : readCredential(sourceAssistant, {}, previous.writingAssistant.apiKey),
+        reuseModelConnection
       }
     };
+
+    const assistantInputProvided = input.writingAssistant !== undefined;
+    const assistantHasValues = Boolean(config.writingAssistant.mode || config.writingAssistant.baseUrl
+      || config.writingAssistant.modelId || config.writingAssistant.apiKey || config.writingAssistant.reuseModelConnection);
+    const assistantBaseUrl = config.writingAssistant.reuseModelConnection ? config.model.baseUrl : config.writingAssistant.baseUrl;
+    const assistantApiKey = config.writingAssistant.reuseModelConnection ? config.model.apiKey : config.writingAssistant.apiKey;
+    if (assistantInputProvided && assistantHasValues
+      && (!['system-one', 'decisions', 'openai-chat-completions'].includes(config.writingAssistant.mode)
+        || !config.writingAssistant.modelId || config.writingAssistant.modelId.length > 160
+        || !isValidAssistantBaseUrl(assistantBaseUrl) || !assistantApiKey || assistantApiKey.length > 4_096)) {
+      return { saved: false, code: 'WRITING_ASSISTANT_INVALID_CONFIG', message: '请检查辅助判断服务协议、Base URL、模型 ID 和 API Key。' };
+    }
 
     try {
       fsModule.mkdirSync(getUserDataPath(), { recursive: true });
@@ -137,6 +187,13 @@ function createSettingsStore({ safeStorage, getUserDataPath, fsModule = fs } = {
         search: {
           baseUrl: encode(safeStorage, config.search.baseUrl),
           apiKey: encode(safeStorage, config.search.apiKey)
+        },
+        writingAssistant: {
+          mode: encode(safeStorage, config.writingAssistant.mode),
+          baseUrl: encode(safeStorage, config.writingAssistant.baseUrl),
+          modelId: encode(safeStorage, config.writingAssistant.modelId),
+          apiKey: encode(safeStorage, config.writingAssistant.apiKey),
+          reuseModelConnection: config.writingAssistant.reuseModelConnection
         }
       };
       fsModule.writeFileSync(filePath(), JSON.stringify(stored), { encoding: 'utf8', mode: 0o600 });

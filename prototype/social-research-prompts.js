@@ -28,8 +28,13 @@
   }
 
   function buildResearchPlanPrompt(input = {}) {
-    const template = TEMPLATES[input.template] || '用户痛点与口碑：区分个案、共性与未经证实的推测。';
-    return `为以下研究目标生成可执行计划。\n模板要求：${template}\n${requirements()}\n计划 JSON 字段：objective、researchType、platformRoles、queries、timeRange、region、audience、filters、expectedResultCount、evidenceRequirements、budget、stopConditions。\n输入：\n${serialize(input)}`;
+    const template = input.template === 'auto'
+      ? '根据研究目标判断最合适的研究类型；可选择趋势与热点、用户痛点与口碑、内容与竞品研究、事实与方案核查。'
+      : TEMPLATES[input.template] || '用户痛点与口碑：区分个案、共性与未经证实的推测。';
+    const platformRule = Array.isArray(input.candidatePlatforms)
+      ? '请根据目标从 candidatePlatforms 中选择最合适且最少的平台，并在 JSON 的 platforms 数组中明确推荐；platformRoles 只能包含这些平台。'
+      : 'platforms 是用户指定范围，platformRoles 只能包含这些平台。';
+    return `为以下研究目标生成可执行计划。\n模板要求：${template}\n${input.template === 'auto' ? 'researchType 必须为 trends、pain-points、content-competitors、fact-check 之一。' : ''}\n平台要求：${platformRule}\n${requirements()}\n计划 JSON 字段：platforms、objective、researchType、platformRoles、queries、timeRange、region、audience、filters、expectedResultCount、evidenceRequirements、budget、stopConditions。\n输入：\n${serialize(input)}`;
   }
 
   function buildSupplementarySearchPrompt(task = {}, evidenceGap = '') {

@@ -6,7 +6,7 @@ const managementContext = { Date };
 const pageRuntimeStart = appSource.indexOf('if (typeof window !== "undefined" && typeof document !== "undefined") {');
 assert.ok(pageRuntimeStart > 0, 'app.js 必须包含页面运行时代码边界');
 vm.runInNewContext(appSource.slice(0, pageRuntimeStart), managementContext);
-const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'consumeBrowserImportGate', 'filterKnowledgeEntriesByScope', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
+const management = Object.fromEntries(['toggleKnowledgeFavorite', 'toggleKnowledgePinned', 'markKnowledgeUsed', 'hideKnowledgeEntry', 'restoreKnowledgeEntry', 'getKnowledgeEntryDependencies', 'deleteKnowledgeEntries', 'selectKnowledgeEntries', 'buildManualKnowledgeEntry', 'confirmBrowserSafetyBackup', 'consumeBrowserImportGate', 'filterKnowledgeEntriesByScope', 'SAFETY_BACKUP_NOT_CONFIRMED'].map(name => [name, managementContext[name]]));
 const { normalizeKnowledgeEntry } = require('../prototype/knowledge-schema.js');const { createBackup, validateBackup, replaceState } = require('../prototype/workspace-backup.js');
 
 function state() {
@@ -33,7 +33,8 @@ test('编辑手动资料保留管理和来源元数据并更新表单字段', ()
     hiddenAt: '2026-10-18T02:00:00.000Z',
     createdAt: '2026-10-01T00:00:00.000Z',
     linkedCaseId: 'case-stable-id',
-    summary: '旧摘要'
+    summary: '旧摘要',
+    updatedAt: '2026-10-18T00:00:00.000Z'
   });
   const edited = management.buildManualKnowledgeEntry(previousEntry, {
     type: 'manual-note',
@@ -51,6 +52,9 @@ test('编辑手动资料保留管理和来源元数据并更新表单字段', ()
   assert.equal(edited.id, previousEntry.id);
   assert.equal(edited.title, '新标题');
   assert.equal(edited.summary, '新摘要');
+  assert.equal(edited.version, previousEntry.version + 1);
+  assert.notEqual(edited.updatedAt, previousEntry.updatedAt);
+  assert.ok(Number.isFinite(Date.parse(edited.updatedAt)));
   assert.equal(edited.sourceUrl, 'https://new.example.com');
   assert.deepEqual(edited.domains, ['软件开发']);
   assert.equal(edited.favorite, true);
@@ -77,7 +81,27 @@ test('最近使用、隐藏和恢复使用稳定时间字段', () => {
   assert.equal(current.knowledgeEntries[1].lastUsedAt, '2026-10-19T01:02:03.000Z');
   current = management.hideKnowledgeEntry(current, 'prompt-1', '2026-10-19T02:00:00.000Z');
   assert.equal(current.knowledgeEntries[1].hiddenAt, '2026-10-19T02:00:00.000Z');
+  assert.equal(current.knowledgeSelection.includes('prompt-1'), false);
   assert.equal(management.restoreKnowledgeEntry(current, 'prompt-1').knowledgeEntries[1].hiddenAt, '');
+});
+
+test('资料依赖汇总任务资料快照和提示词版本', () => {
+  const dependencies = management.getKnowledgeEntryDependencies({ projects: [{
+    id: 'task-1', idea: '修改方案',
+    workbenchKnowledgeSources: [{ sourceId: 'source-a', version: 2 }],
+    workbenchPromptVersions: [
+      { version: 3, sources: [{ sourceId: 'source-a', version: 2 }] },
+      { version: 4, sources: [{ sourceId: 'source-b', version: 1 }] }
+    ]
+  }] }, 'source-a');
+
+  assert.equal(dependencies.length, 1);
+  assert.equal(dependencies[0].projectId, 'task-1');
+  assert.equal(dependencies[0].sourceVersions.length, 1);
+  assert.equal(dependencies[0].sourceVersions[0], 2);
+  assert.equal(dependencies[0].promptVersions.length, 1);
+  assert.equal(dependencies[0].promptVersions[0], 3);
+  assert.deepEqual(management.getKnowledgeEntryDependencies({ projects: [] }, 'source-a'), []);
 });
 
 test('批量删除只删除手动资料，不删除派生提示词或案例', () => {
@@ -102,6 +126,23 @@ test('置顶资料范围只返回置顶且排除非置顶条目', () => {
     management.filterKnowledgeEntriesByScope(entries, 'pinned').map(item => item.id),
     ['pinned-entry']
   );
+});
+
+test('最近移除范围仅显示已隐藏资料供恢复', () => {
+  const entries = [
+    { id: 'active', hiddenAt: '' },
+    { id: 'removed', hiddenAt: '2026-11-11T08:00:00.000Z' }
+  ];
+  assert.deepEqual(management.filterKnowledgeEntriesByScope(entries, 'removed').map(item => item.id), ['removed']);
+  assert.deepEqual(management.filterKnowledgeEntriesByScope(entries, '').map(item => item.id), ['active']);
+});
+
+test('资料详情展示来源路径、访问时间、内容版本、格式与实际可用能力元数据', () => {
+  assert.match(appSource, /来源元数据/);
+  assert.match(appSource, /sourcePath, sourceFetchedAt: normalized\.accessedAt/);
+  assert.match(appSource, /sourceVersion: normalized\.sourceVersion/);
+  assert.match(appSource, /内容版本/);
+  assert.match(appSource, /sourceCapabilities/);
 });
 test('资料范围筛选变更会绑定资料视图刷新', () => {
   const listenerBinding = appSource.match(/\["knowledge-scope"[^\]]*\]\.forEach\(id => document\.getElementById\(id\)\.addEventListener\("change", refreshKnowledgeView\)\)/);

@@ -943,13 +943,31 @@
         license: '链接与自拟摘要；许可待核', checkedAt: '2026-10-23',
         applicability: '面向用户的步骤写作参考',
         limitations: '通用手册写作参考，不提供登记规则。', verificationStatus: 'unverified'
+      },
+      {
+        id: 'user-softcopyright-materials-skill', title: '用户提供：software-copyright-materials skill（未核验）',
+        locator: '用户提供压缩包中的 SKILL.md、application_fields、business_understanding、code_selection、copyright_material、manual_structure',
+        version: '1.3', license: '用户提供资料；许可和内容来源待核验', checkedAt: '2026-10-24',
+        applicability: '软著申请资料生成、业务理解、申请表、代码选择和操作手册流程参考',
+        limitations: '属于用户提供的社区 skill；不代表官方要求，具体字段和提交规则必须回到当期官方系统核对。',
+        verificationStatus: 'unverified'
+      },
+      {
+        id: 'user-softcopyright-evidence-skill', title: '用户提供：software-certificate-skill（未核验）',
+        locator: '用户提供压缩包中的 evidence-model、manual-architecture、quality-gates、source-selection、rules-2026',
+        version: '2026 规则快照及配套流程', license: '用户提供资料；许可和内容来源待核验', checkedAt: '2026-10-24',
+        applicability: '证据图谱、来源选择、操作手册质量门和材料一致性参考',
+        limitations: '包含社区流程建议和规则快照；官方硬规则必须重新查询并记录当前来源，不能直接照搬。',
+        verificationStatus: 'unverified'
       }
     ];
     const checks = [
       { id: 'softcopyright-evidence-grounding', statement: '功能和操作步骤回指真实项目证据；缺证据时列为待补。', sourceIds: ['softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified' },
       { id: 'softcopyright-doc-consistency', statement: '申请表、功能说明和手册中的软件名称、版本及功能名称保持一致。', sourceIds: ['softcopyright-fanbuz', 'softcopyright-suling'], verificationStatus: 'unverified' },
       { id: 'softcopyright-manual-steps', statement: '步骤写清入口、前置条件、用户动作和可见结果；只说明真实存在的异常。', sourceIds: ['user-docs-writing-skill', 'softcopyright-suling'], verificationStatus: 'unverified' },
-      { id: 'softcopyright-requirements-vs-advice', statement: '官方提交要求与社区写作建议分开；要求附来源和适用范围。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' }
+      { id: 'softcopyright-requirements-vs-advice', statement: '官方提交要求与社区写作建议分开；要求附来源和适用范围。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' },
+      { id: 'softcopyright-claim-lifecycle', statement: '功能声明按 candidate、evidenced、human-confirmed、published 管理；未达到人工确认的内容不能进入正式材料。', sourceIds: ['user-softcopyright-evidence-skill'], verificationStatus: 'unverified' },
+      { id: 'softcopyright-quality-gates', statement: '业务理解、申请表字段、代码文件选择、截图方式和 Markdown 草稿分别经过用户确认，再进入下一阶段。', sourceIds: ['user-softcopyright-materials-skill', 'user-softcopyright-evidence-skill'], verificationStatus: 'unverified' }
     ];
     const methods = [
       {
@@ -969,12 +987,55 @@
         checks: ['步骤可复现', '截图对应当前版本'],
         skippable: true, returnWhenMissing: ['入口或预期结果无法从材料确认时，将该步骤标为待确认。'],
         sourceIds: ['user-docs-writing-skill', 'softcopyright-suling'], verificationStatus: 'unverified'
+      },
+      {
+        id: 'softcopyright-evidence-ledger', title: '建立软著证据台账',
+        guidance: '把软件事实、源文件、功能、界面、接口、操作步骤和声明建立可回溯关系；优先使用运行界面、实际响应、测试结果或明确源码作为直接证据。',
+        applicability: ['diagnosis', 'revision'], inputs: ['项目源码', '运行界面或操作记录', '申请表与手册草稿'],
+        outputs: ['功能—证据—文档位置台账', '待人工确认声明'], checks: ['每项主要功能有证据', '事实和声明能回溯来源', '未确认内容不进入正式稿'],
+        skippable: false, returnWhenMissing: ['缺少直接证据时保留为调查项，先补充运行结果、源码位置或用户确认。'],
+        sourceIds: ['user-softcopyright-evidence-skill'], verificationStatus: 'unverified'
+      },
+      {
+        id: 'softcopyright-source-selection', title: '按功能选择代码材料',
+        guidance: '先理解项目业务和入口，再从真实源码中选择能体现主要功能和运行逻辑的文件；排除依赖缓存、构建产物、生成代码、密钥和无关模块，保留文件路径及选择理由。',
+        applicability: ['diagnosis', 'revision'], inputs: ['业务理解', '源码候选清单', '主要功能与手册章节'],
+        outputs: ['代码文件候选清单', '用户可确认的抽取选择'], checks: ['文件归属于本申请软件', '选择能覆盖主要功能', '没有把 AI 生成代码当作源码'],
+        skippable: false, returnWhenMissing: ['无法确认文件归属或功能关系时，标记待确认并停止代码材料生成。'],
+        sourceIds: ['user-softcopyright-materials-skill', 'user-softcopyright-evidence-skill'], verificationStatus: 'unverified'
       }
     ];
     const promptContent = {
-      diagnosis: '检查软著文章或操作手册，生成下一步写作提示词。核对文档用途、软件版本、功能证据、操作步骤和材料一致性，引用问题位置；区分官方提交要求与社区建议，缺项标为待确认，不直接改写成稿。',
-      revision: '生成软著材料定向改写提示词。只改结构和表达；功能、界面、环境及操作结果须有用户提供的项目证据。每步写清入口、前置条件、动作和可见结果；未知内容列为待补，不虚构功能或测试。保持软件名称和版本一致，区分官方要求与社区建议并保留来源范围。'
+      diagnosis: '检查软著文章或操作手册，生成下一步写作提示词。先核对软件业务、版本、功能证据和操作步骤，再检查申请表、代码材料与手册的一致性；用证据台账标明每项声明状态，区分官方提交要求与用户提供资料中的流程建议，缺项标为待确认，不直接改写成稿。',
+      revision: '生成软著材料定向改写提示词。只改结构和表达；功能、界面、环境及操作结果须有用户提供的项目证据。每步写清入口、前置条件、动作和可见结果；未知内容列为待补，不虚构功能或测试。保持软件名称、著作权人和版本一致；代码材料只来自用户确认的真实源码文件，区分官方要求与用户提供资料中的建议并保留来源范围。'
     };
+    const resourceSourceIds = ['user-softcopyright-materials-skill', 'user-softcopyright-evidence-skill'];
+    const resource = (id, kind, title, relativePath, purpose, taskTypes, extra = {}) => ({
+      id, kind, title, relativePath, purpose, taskTypes, sourceIds: resourceSourceIds,
+      archive: extra.archive || (relativePath.startsWith('software-certificate-skill/') ? 'softcopyright-evidence-skill' : 'softcopyright-materials-skill'),
+      verificationStatus: 'unverified', enabled: true, version: extra.version || '用户提供压缩包；未核验',
+      applicability: extra.applicability || '软著申请资料工作流按需参考', summary: extra.summary || '',
+      format: extra.format || (kind === 'script' ? 'python' : kind === 'template' ? 'markdown/json' : 'markdown'),
+      notes: extra.notes || '仅按需加载；不作为项目事实来源。', ...extra
+    });
+    const resources = [
+      resource('softcopyright-application-fields-template', 'template', '申请表字段模板', 'software-certificate-skill/assets/schemas/application-facts.schema.json', '申请表字段结构', ['diagnosis', 'revision', 'technical-design'], { format: 'json-schema', sectionIds: ['application-fields'], summary: '软件全称、版本、权利人、日期、开发方式、发表状态、运行环境等字段结构；硬件和系统环境必须用户确认。' }),
+      resource('softcopyright-application-fields-example', 'example', '申请表事实示例', 'software-certificate-skill/assets/examples/application-facts.example.json', '申请表填写表达参考', ['diagnosis', 'revision', 'technical-design'], { format: 'json', inputSummary: '脱敏软件事实和字段填写示例', expectedShape: '字段值、来源和确认状态', notes: '仅供字段组织参考，不得把示例值当作本软件事实。' }),
+      resource('softcopyright-manual-structure-template', 'template', '传统操作手册章节模板', 'SoftwareCopyright-Skill-main/software-copyright-materials/references/manual_structure.md', '操作手册章节结构', ['diagnosis', 'revision', 'technical-procedure', 'technical-troubleshooting'], { sectionIds: ['相关文档', '说明', '功能特点', '系统要求', '具体页面或功能操作', '常见问题解答', '术语表'], summary: '按真实页面和用户任务组织传统操作手册；每章保留入口、可见内容、动作、限制、反馈和截图预留。' }),
+      resource('softcopyright-manual-example', 'example', '操作手册结构示例', 'software-certificate-skill/assets/examples/manual-input.example.json', '操作手册表达和结构参考', ['diagnosis', 'revision', 'technical-procedure'], { format: 'json', inputSummary: '页面用途、用户步骤和结果的脱敏示例', expectedShape: '章节、操作场景、证据位置、待确认项', notes: '仅供表达参考，不是本软件功能事实。' }),
+      resource('softcopyright-code-material-template', 'template', '代码材料排版模板', 'SoftwareCopyright-Skill-main/software-copyright-materials/vendor/docx-toolkit/assets/styles/default_styles.xml', '代码材料文档格式', ['diagnosis', 'revision', 'technical-design'], { format: 'docx-style', summary: '代码材料的文档样式参考；实际页数和提交格式需再核对当前官方要求。' }),
+      resource('softcopyright-project-scan', 'script', '扫描项目并建立证据清单', 'software-certificate-skill/scripts/scan_project.py', '扫描源码、文档和项目结构', ['diagnosis', 'revision', 'technical-design'], { actionId: 'softcopyright.project-scan', allowedRoots: ['authorized-project-root'], timeoutMs: 30000, maxOutputBytes: 256000, maxFiles: 10000, summary: '收集项目文件、可读性、源码行数和候选入口；不替代模型业务理解。' }),
+      resource('softcopyright-project-analyze', 'script', '分析项目业务与入口证据', 'SoftwareCopyright-Skill-main/software-copyright-materials/scripts/analyze_project.py', '分析项目结构和源码证据', ['diagnosis', 'revision', 'technical-design'], { actionId: 'softcopyright.project-analyze', allowedRoots: ['authorized-project-root'], timeoutMs: 60000, maxOutputBytes: 512000, maxFiles: 10000, summary: '输出项目技术和入口证据，行业判断、功能选择和操作手册结构仍由模型复核。' }),
+      resource('softcopyright-code-selection', 'script', '生成代码候选清单', 'SoftwareCopyright-Skill-main/software-copyright-materials/scripts/propose_code_selection.py', '生成待用户确认的代码文件候选', ['diagnosis', 'revision', 'technical-design'], { actionId: 'softcopyright.code-selection', allowedRoots: ['authorized-project-root'], timeoutMs: 60000, maxOutputBytes: 512000, maxFiles: 10000, summary: '列出可读源码候选并保留模型选择理由和用户确认门禁。' }),
+      resource('softcopyright-code-extract', 'script', '抽取已确认代码材料', 'SoftwareCopyright-Skill-main/software-copyright-materials/scripts/extract_code_material.py', '抽取真实源码并生成代码材料草稿', ['revision', 'technical-design'], { actionId: 'softcopyright.code-extract', allowedRoots: ['authorized-project-root'], timeoutMs: 120000, maxOutputBytes: 1000000, maxFiles: 10000, summary: '只读取用户确认的真实源码文件，不允许 AI 编造或越权读取。' }),
+      resource('softcopyright-manual-outline', 'script', '提取手册目录和章节', 'software-certificate-skill/scripts/plan_manual.py', '提取目录并规划章节范围', ['diagnosis', 'revision', 'technical-procedure'], { actionId: 'softcopyright.manual-outline', allowedRoots: ['authorized-project-root'], timeoutMs: 60000, maxOutputBytes: 512000, maxFiles: 10000, summary: '支持整本处理或提取目录后选择章节；复杂文档允许手动指定范围。' }),
+      resource('softcopyright-consistency-check', 'script', '检查软著材料一致性', 'software-certificate-skill/scripts/product_verify.py', '检查名称、版本、功能和证据一致性', ['diagnosis', 'revision', 'technical-procedure', 'technical-design'], { actionId: 'softcopyright.consistency-check', allowedRoots: ['authorized-project-root'], timeoutMs: 60000, maxOutputBytes: 512000, maxFiles: 10000, summary: '检查申请表、代码材料、手册和证据台账的一致性，失败时保留待核验项。' }),
+      resource('softcopyright-docx-verify', 'script', '验证 DOCX 结构', 'SoftwareCopyright-Skill-main/software-copyright-materials/scripts/build_docx_from_md.py', '验证或生成受控 DOCX 材料', ['revision', 'technical-procedure', 'technical-design'], { actionId: 'softcopyright.docx-verify', allowedRoots: ['authorized-project-root'], timeoutMs: 120000, maxOutputBytes: 512000, maxFiles: 1000, summary: '正式输出前检查文档结构；不自动覆盖用户原始文件。' }),
+      resource('softcopyright-evidence-model-reference', 'reference', '软著证据模型', 'software-certificate-skill/references/evidence-model.md', '证据图谱和事实回溯参考', ['diagnosis', 'revision', 'technical-procedure', 'technical-design'], { summary: '区分事实、证据、声明、人工确认和正式产物；缺少直接证据时保留待补。' }),
+      resource('softcopyright-quality-gates-reference', 'reference', '软著质量门', 'software-certificate-skill/references/quality-gates.md', '阶段确认和质量门参考', ['diagnosis', 'revision', 'technical-procedure', 'technical-design'], { summary: '业务理解、申请表、代码选择、截图和 Markdown 草稿分别确认后再进入下一阶段。' }),
+      resource('softcopyright-source-selection-reference', 'reference', '代码来源选择规则', 'software-certificate-skill/references/source-selection.md', '代码文件真实性和选择参考', ['diagnosis', 'revision', 'technical-design'], { summary: '优先入口、页面、路由、接口和核心逻辑；排除依赖、构建产物、密钥和无关文件。' }),
+      resource('softcopyright-rules-snapshot-reference', 'reference', '用户提供规则快照', 'software-certificate-skill/references/rules-2026.md', '软著规则快照参考', ['diagnosis', 'revision', 'technical-procedure', 'technical-design'], { summary: '用户提供的社区规则快照，未核验，不替代申请地当前官方要求。' })
+    ];
     return {
       id: 'builtin-softcopyright-content', name: '软著内容', layer: 'task', genre: 'article', taskType: '',
       version: 1, builtin: false, basePackId: '', enabled: true,
@@ -1005,7 +1066,9 @@
       requirements: [
         { id: 'softcopyright-document-kind', statement: '用户手册可作为软件文档类型提交；登记办法没有规定操作手册必须使用固定目录。', sourceIds: ['software-registration-measures'], verificationStatus: 'source-reviewed' },
         { id: 'softcopyright-document-pages', statement: '文档鉴别材料按规定提交前、后各连续30页；总页数不足60页时提交全文。除特殊情况外，每页不少于30行。此为鉴别材料提交要求，不等于手册必须扩写到60页。', sourceIds: ['software-registration-measures'], verificationStatus: 'source-reviewed' },
-        { id: 'softcopyright-document-paper', statement: '纸质材料按A4规格准备；其余格式按申请地当前官方指南核对。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' }
+        { id: 'softcopyright-document-paper', statement: '纸质材料按A4规格准备；其余格式按申请地当前官方指南核对。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' },
+        { id: 'softcopyright-program-material-workflow', statement: '用户提供资料建议：代码材料先形成完整、可追溯的真实源码语料库，再依据最终渲染页数派生前后连续页；具体页数、行数和上传格式仍须以当前官方要求为准。', sourceIds: ['user-softcopyright-materials-skill', 'user-softcopyright-evidence-skill'], verificationStatus: 'unverified' },
+        { id: 'softcopyright-application-field-confirmation', statement: '申请表中的软件全称、版本、权利人、日期、开发方式、发表状态、硬件和运行环境等字段必须先由用户确认，不能从模板或示例自动补成事实。', sourceIds: ['user-softcopyright-materials-skill'], verificationStatus: 'unverified' }
       ],
       methods,
       prompts: Object.entries(promptContent).map(([taskType, content], index) => ({
@@ -1017,20 +1080,24 @@
       })),
       structures: [
         { id: 'softcopyright-operation-manual-structure', taskType: 'article', sections: ['软件名称、版本与适用范围', '运行环境及启动方式（有证据时）', '主界面与导航', '按用户任务组织的功能操作步骤', '可见结果与实际限制', '异常处理（仅列真实存在的情况）'] },
-        { id: 'softcopyright-evidence-ledger-structure', taskType: 'article', sections: ['功能名称', '项目证据与位置', '手册章节/页码', '申请材料对应表述', '一致性状态', '待确认项'] }
+        { id: 'softcopyright-evidence-ledger-structure', taskType: 'article', sections: ['功能名称', '项目证据与位置', '手册章节/页码', '申请材料对应表述', '一致性状态', '待确认项'] },
+        { id: 'softcopyright-traditional-manual-structure', taskType: 'article', sections: ['相关文档', '说明', '功能特点', '系统要求', '具体页面或功能操作', '典型使用流程（有证据时）', '常见问题解答', '术语表'] }
       ],
       style: [], terminology: [],
       evidenceRules: [
-        { id: 'softcopyright-evidence-location', statement: '功能、步骤和结果需标明项目证据位置；社区示例不能代替本软件证据。', sourceIds: ['softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified' }
+        { id: 'softcopyright-evidence-location', statement: '功能、步骤和结果需标明项目证据位置；社区示例不能代替本软件证据。', sourceIds: ['softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified' },
+        { id: 'softcopyright-evidence-strength', statement: '关键功能优先采用运行界面、实际响应、测试结果或明确源码等直接证据；只有目录名、注释或未经运行验证的 README 时，降级为调查线索。', sourceIds: ['user-softcopyright-evidence-skill'], verificationStatus: 'unverified' },
+        { id: 'softcopyright-cross-material-facts', statement: '软件名称、版本、主要功能、页面名称和代码文件选择应从同一份已确认事实派生，事实变更时标记旧产物过期。', sourceIds: ['user-softcopyright-materials-skill', 'user-softcopyright-evidence-skill'], verificationStatus: 'unverified' }
       ],
       routes: [], checks, repairs: [
         { id: 'softcopyright-fabricated-operation', issue: '步骤或功能缺少项目证据', action: '删除无依据的细节，保留待补字段，并请求真实界面、源码位置或操作记录。', sourceIds: ['softcopyright-rodert', 'softcopyright-suling'], verificationStatus: 'unverified' },
         { id: 'softcopyright-rule-mixed-with-advice', issue: '把社区建议写成官方硬性要求', action: '拆分为“官方提交要求”和“手册写作建议”，分别附来源与适用范围；无法核验时标为待确认。', sourceIds: officialSourceIds, verificationStatus: 'source-reviewed' }
       ],
       nextSteps: [
-        { id: 'softcopyright-next-missing-evidence', when: '关键操作、功能或版本缺少证据', action: '先补充可核实的项目资料，再生成对应章节的改写提示词。', sourceIds: ['softcopyright-suling'], verificationStatus: 'unverified' }
+        { id: 'softcopyright-next-missing-evidence', when: '关键操作、功能或版本缺少证据', action: '先补充可核实的项目资料，再生成对应章节的改写提示词。', sourceIds: ['softcopyright-suling'], verificationStatus: 'unverified' },
+        { id: 'softcopyright-next-confirm-gate', when: '业务理解、申请表、代码选择或 Markdown 草稿尚未确认', action: '停在当前阶段并列出需要用户确认的字段，不进入正式 Word/TXT 生成。', sourceIds: ['user-softcopyright-materials-skill'], verificationStatus: 'unverified' }
       ],
-      examples: [], sources, createdAt: '2026-10-23', updatedAt: '2026-10-23'
+      examples: [], resources, sources, createdAt: '2026-10-23', updatedAt: '2026-10-24'
     };
   }
 

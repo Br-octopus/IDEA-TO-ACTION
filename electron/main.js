@@ -1,10 +1,13 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, dialog, ipcMain, safeStorage, session } = require('electron');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createBackupStore } = require(path.join(__dirname, 'backup-store.js'));
 const { createSettingsStore } = require(path.join(__dirname, 'settings-store.js'));
 const { createModelClient } = require(path.join(__dirname, '..', 'server', 'model-client.js'));
+const { createWritingAssistantClient } = require(path.join(__dirname, '..', 'server', 'writing-assistant-client.js'));
+const { createWritingResourceRunner } = require(path.join(__dirname, '..', 'server', 'writing-resource-runner.js'));
+const { getBuiltinWritingPacks } = require(path.join(__dirname, '..', 'prototype', 'writing-pack-catalog.js'));
 const { createSearchClient } = require(path.join(__dirname, '..', 'server', 'search-client.js'));
 const { createSocialBrowserManager } = require(path.join(__dirname, 'social-browser-manager.js'));
 const { createSocialSourceManager } = require(path.join(__dirname, 'social-source-manager.js'));
@@ -17,6 +20,7 @@ const { createPromptAgentSources } = require(path.join(__dirname, 'prompt-agent-
 const { createPptSourceReader } = require(path.join(__dirname, 'ppt-source-reader.js'));
 const { createPptFeedbackAttachmentStore } = require(path.join(__dirname, 'ppt-feedback-attachment-store.js'));
 const { createPptPreviewManager } = require(path.join(__dirname, 'ppt-preview-manager.js'));
+const { readSavedPort, savePort, selectWorkspacePort } = require(path.join(__dirname, 'workspace-origin.js'));
 
 const DEV_PAGE_URL = process.env.DESKTOP_SERVICE_URL || 'http://127.0.0.1:4173';
 const SERVER_SHUTDOWN_TIMEOUT_MS = 2000;
@@ -32,8 +36,8 @@ const socialBrowserAdapters = new Map();
 let socialAttachmentStore;
 let pptFeedbackAttachmentStore;
 let pptPreviewManager;
+let promptAgentSources;
 const activePptPreviews = new Set();
-const deletedPptAttachments = new Set();
 const socialProfiles = new Map();
 const backupImportStages = new Map();
 const backupImportTransactions = new Map();
@@ -143,6 +147,7 @@ function getPptPreviewManager() {
   if (!pptPreviewManager) {
     pptPreviewManager = createPptPreviewManager({
       BrowserWindow,
+      WebContentsView,
       session,
       fs,
       path,
@@ -182,6 +187,34 @@ function validatePptFeedbackAttachmentRequest(request) {
   return validatePptFeedbackId(request.attachmentId, 'INVALID_ATTACHMENT_ID', '附件标识');
 }
 
+function validatePptFeedbackTaskAttachmentRequest(request) {
+  validatePptFeedbackRequest(request, ['taskId', 'attachmentId']);
+  return {
+    taskId: validatePptFeedbackId(request.taskId, 'INVALID_TASK_ID', '任务标识'),
+    attachmentId: validatePptFeedbackId(request.attachmentId, 'INVALID_ATTACHMENT_ID', '附件标识')
+  };
+}
+
+function validatePptAnnotationSource(source) {
+  if (source === undefined) return undefined;
+  validatePptFeedbackRequest(source, ['url', 'fetchedAt', 'contentHash']);
+  if (typeof source.url !== 'string' || source.url.length > 2048 || typeof source.fetchedAt !== 'string' || source.fetchedAt.length > 80
+    || !Number.isFinite(Date.parse(source.fetchedAt)) || typeof source.contentHash !== 'string'
+    || !/^sha256:[a-f0-9]{64}$/i.test(source.contentHash)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '网页来源版本信息无效。');
+  }
+  let url;
+  try {
+    url = new URL(source.url);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('invalid URL');
+    url.search = '';
+    url.hash = '';
+  } catch {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '网页来源网址无效。');
+  }
+  return { url: url.href, fetchedAt: source.fetchedAt, contentHash: source.contentHash };
+}
+
 function validatePptAnnotationTarget(target) {
   if (!target || typeof target !== 'object' || Array.isArray(target)) {
     throw createPptFeedbackError('INVALID_ANNOTATION', '标注定位无效。');
@@ -193,15 +226,61 @@ function validatePptAnnotationTarget(target) {
     return value;
   };
   if (target.kind === 'element') {
-    validatePptFeedbackRequest(target, ['kind', 'selector']);
+    validatePptFeedbackRequest(target, ['kind', 'selector', 'excerpt', 'source']);
     if (typeof target.selector !== 'string' || !target.selector.trim() || target.selector.length > 500) {
       throw createPptFeedbackError('INVALID_ANNOTATION', 'HTML selector 无效。');
     }
-    return { kind: 'element', selector: target.selector.trim() };
+    if (target.excerpt !== undefined && (typeof target.excerpt !== 'string' || target.excerpt.length > 500)) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', 'HTML 摘录无效。');
+    }
+    const source = validatePptAnnotationSource(target.source);
+    return { kind: 'element', selector: target.selector.trim(), excerpt: (target.excerpt || '').trim(), ...(source ? { source } : {}) };
+  }
+  if (target.kind === 'text') {
+    validatePptFeedbackRequest(target, ['kind', 'selector', 'exact', 'prefix', 'suffix', 'start', 'end', 'source']);
+    if (typeof target.selector !== 'string' || !target.selector.trim() || target.selector.length > 500
+      || typeof target.exact !== 'string' || !target.exact.trim() || target.exact.length > 2000
+      || target.prefix !== undefined && (typeof target.prefix !== 'string' || target.prefix.length > 120)
+      || target.suffix !== undefined && (typeof target.suffix !== 'string' || target.suffix.length > 120)) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '文字选区锚点无效。');
+    }
+    const exact = target.exact.trim();
+    const hasPosition = target.start !== undefined || target.end !== undefined;
+    if (hasPosition && (!Number.isSafeInteger(target.start) || !Number.isSafeInteger(target.end)
+      || target.start < 0 || target.end <= target.start || target.end - target.start !== Array.from(exact).length)) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '文字选区位置无效。');
+    }
+    const source = validatePptAnnotationSource(target.source);
+    return {
+      kind: 'text', selector: target.selector.trim(), exact,
+      prefix: target.prefix || '', suffix: target.suffix || '',
+      ...(hasPosition ? { start: target.start, end: target.end } : {}), ...(source ? { source } : {})
+    };
   }
   if (target.kind === 'point') {
     validatePptFeedbackRequest(target, ['kind', 'x', 'y']);
     return { kind: 'point', x: finiteCoordinate(target.x, '横坐标'), y: finiteCoordinate(target.y, '纵坐标') };
+  }
+  if (target.kind === 'arrow') {
+    validatePptFeedbackRequest(target, ['kind', 'x1', 'y1', 'x2', 'y2']);
+    const x1 = finiteCoordinate(target.x1, '起点横坐标');
+    const y1 = finiteCoordinate(target.y1, '起点纵坐标');
+    const x2 = finiteCoordinate(target.x2, '终点横坐标');
+    const y2 = finiteCoordinate(target.y2, '终点纵坐标');
+    if (Math.hypot(x2 - x1, y2 - y1) < 0.005) throw createPptFeedbackError('INVALID_ANNOTATION', '箭头长度无效。');
+    return { kind: 'arrow', x1, y1, x2, y2 };
+  }
+  if (target.kind === 'path') {
+    validatePptFeedbackRequest(target, ['kind', 'points']);
+    if (!Array.isArray(target.points) || target.points.length < 2 || target.points.length > 128) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '笔迹点数无效。');
+    }
+    const points = target.points.map(point => {
+      validatePptFeedbackRequest(point, ['x', 'y']);
+      return { x: finiteCoordinate(point.x, '横坐标'), y: finiteCoordinate(point.y, '纵坐标') };
+    });
+    if (points.every(point => point.x === points[0].x && point.y === points[0].y)) throw createPptFeedbackError('INVALID_ANNOTATION', '笔迹长度无效。');
+    return { kind: 'path', points };
   }
   if (target.kind === 'region') {
     validatePptFeedbackRequest(target, ['kind', 'x', 'y', 'width', 'height']);
@@ -220,7 +299,7 @@ function validatePptAnnotationTarget(target) {
 function validatePptAnnotation(annotation) {
   const allowedKeys = [
     'id', 'taskId', 'attachmentId', 'contentHash', 'pageIndex', 'target',
-    'comment', 'category', 'createdAt', 'status', 'selected'
+    'comment', 'category', 'intent', 'createdAt', 'updatedAt', 'status', 'selected', 'reassociatedFromId'
   ];
   validatePptFeedbackRequest(annotation, allowedKeys);
   const taskId = validatePptFeedbackId(annotation.taskId, 'INVALID_TASK_ID', '任务标识');
@@ -237,24 +316,38 @@ function validatePptAnnotation(annotation) {
   if (!['content', 'logic', 'evidence', 'style', 'layout', 'format', 'readability', 'other'].includes(category)) {
     throw createPptFeedbackError('INVALID_ANNOTATION', '标注分类无效。');
   }
+  const intent = annotation.intent === undefined ? 'modify' : annotation.intent;
+  if (!['modify', 'add', 'remove', 'keep', 'question', 'verify'].includes(intent)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注意图无效。');
+  }
   const pageIndex = annotation.pageIndex === undefined ? 0 : annotation.pageIndex;
   if (!Number.isSafeInteger(pageIndex) || pageIndex < 0) {
     throw createPptFeedbackError('INVALID_ANNOTATION', '标注页码无效。');
   }
   const status = annotation.status === undefined ? 'active' : annotation.status;
-  if (!['active', 'stale'].includes(status)) {
+  if (!['active', 'stale', 'deleted'].includes(status)) {
     throw createPptFeedbackError('INVALID_ANNOTATION', '标注状态无效。');
   }
   if (annotation.createdAt !== undefined && (typeof annotation.createdAt !== 'string' || annotation.createdAt.length > 80)) {
     throw createPptFeedbackError('INVALID_ANNOTATION', '标注时间无效。');
   }
+  if (annotation.updatedAt !== undefined && (typeof annotation.updatedAt !== 'string' || annotation.updatedAt.length > 80)) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '标注更新时间无效。');
+  }
   if (annotation.selected !== undefined && typeof annotation.selected !== 'boolean') {
     throw createPptFeedbackError('INVALID_ANNOTATION', '标注选择状态无效。');
   }
+  if (status === 'deleted' && annotation.selected === true) {
+    throw createPptFeedbackError('INVALID_ANNOTATION', '已撤销标注不能被选入提示词。');
+  }
   const target = validatePptAnnotationTarget(annotation.target);
   const id = annotation.id || crypto.randomUUID();
+  const reassociatedFromId = annotation.reassociatedFromId === undefined
+    ? '' : validatePptFeedbackId(annotation.reassociatedFromId, 'INVALID_ANNOTATION', '来源批注标识');
+  if (reassociatedFromId && reassociatedFromId === id) throw createPptFeedbackError('INVALID_ANNOTATION', '批注不能重新关联到自身。');
   const createdAt = annotation.createdAt || new Date().toISOString();
-  return { id, taskId, attachmentId, contentHash: annotation.contentHash.trim(), pageIndex, target, comment, category, createdAt, status, selected: annotation.selected === true };
+  const updatedAt = annotation.updatedAt || createdAt;
+  return { id, taskId, attachmentId, contentHash: annotation.contentHash.trim(), pageIndex, target, comment, category, intent, createdAt, updatedAt, status, selected: annotation.selected === true, ...(reassociatedFromId ? { reassociatedFromId } : {}) };
 }
 
 function annotationsPath(taskId) {
@@ -281,38 +374,127 @@ function savePptAnnotations(taskId, annotations) {
 }
 
 function registerPptFeedbackHandlers() {
+  ipcMain.on('ppt-feedback:preview-target', (event, value) => {
+    if (!event.sender?.mainFrame || event.senderFrame !== event.sender.mainFrame) return;
+    const selection = pptPreviewManager?.acceptSelection(event, value);
+    if (!selection || !mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('ppt-feedback:preview-target', selection);
+  });
+  ipcMain.on('ppt-feedback:set-preview-bounds', (event, request) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || !event.sender?.mainFrame || event.senderFrame !== event.sender.mainFrame) return;
+    if (!request || typeof request !== 'object' || Array.isArray(request)
+      || Object.keys(request).some(key => !['attachmentId', 'bounds'].includes(key))
+      || typeof request.attachmentId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(request.attachmentId)) return;
+    pptPreviewManager?.setPreviewBounds(request.attachmentId, request.bounds);
+  });
+
   ipcMain.handle('ppt-feedback:choose-file', async (_event, request) => {
     const taskId = validatePptFeedbackTaskRequest(request);
     const result = await showFileDialog('showOpenDialog', {
-      title: '选择 PPT 反馈附件',
+      title: '选择工作台资料',
       properties: ['openFile'],
-      filters: [{ name: 'HTML 与图片', extensions: ['html', 'htm', 'png', 'jpg', 'jpeg', 'webp'] }]
+      filters: [
+        { name: '可预览的网页、PDF、Office 与图片', extensions: ['html', 'htm', 'pdf', 'pptx', 'docx', 'png', 'jpg', 'jpeg', 'webp'] },
+        { name: '旧版 Office 文件（预览暂不可用）', extensions: ['ppt', 'doc'] }
+      ]
     });
     const sourcePath = result.filePaths?.[0];
     if (result.canceled || !sourcePath) return { canceled: true };
     const extension = path.extname(sourcePath).toLowerCase();
+    if (['.ppt', '.doc'].includes(extension)) {
+      return { canceled: false, status: 'unsupported-preview', format: extension.slice(1) };
+    }
     const mimeType = {
       '.html': 'text/html', '.htm': 'text/html', '.png': 'image/png',
-      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.pdf': 'application/pdf',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     }[extension];
     if (!mimeType) throw createPptFeedbackError('INVALID_ATTACHMENT', '附件格式不受支持。');
     const attachment = await getPptFeedbackAttachmentStore().saveAttachment({ taskId, sourcePath, mimeType });
     return { canceled: false, attachment };
   });
 
+  ipcMain.handle('ppt-feedback:save-web-snapshot', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['taskId', 'snapshot']);
+    const taskId = validatePptFeedbackId(request.taskId, 'INVALID_TASK_ID', '任务标识');
+    const snapshot = request.snapshot;
+    validatePptFeedbackRequest(snapshot, ['title', 'finalUrl', 'fetchedAt', 'contentHash', 'html', 'text', 'incomplete']);
+    if (typeof snapshot.title !== 'string' || typeof snapshot.finalUrl !== 'string'
+      || typeof snapshot.fetchedAt !== 'string' || typeof snapshot.contentHash !== 'string'
+      || typeof snapshot.html !== 'string' || Buffer.byteLength(snapshot.html, 'utf8') > 1_048_576
+      || typeof snapshot.text !== 'string' || typeof snapshot.incomplete !== 'boolean') {
+      throw createPptFeedbackError('INVALID_ATTACHMENT', '网页快照信息不完整。');
+    }
+    const attachment = await getPptFeedbackAttachmentStore().saveHtmlSnapshot({
+      taskId, title: snapshot.title, sourceUrl: snapshot.finalUrl, fetchedAt: snapshot.fetchedAt,
+      sourceContentHash: snapshot.contentHash, html: snapshot.html, text: snapshot.text, incomplete: snapshot.incomplete
+    });
+    return { status: 'ok', attachment };
+  });
+
   ipcMain.handle('ppt-feedback:list-attachments', async (_event, request) => {
     const taskId = validatePptFeedbackTaskRequest(request);
-    const attachments = getPptFeedbackAttachmentStore().listAttachments(taskId)
-      .filter(attachment => !deletedPptAttachments.has(attachment.id));
+    const attachments = getPptFeedbackAttachmentStore().listAttachments(taskId);
     return { status: 'ok', attachments };
   });
 
-  ipcMain.handle('ppt-feedback:open-preview', async (_event, request) => {
+  ipcMain.handle('ppt-feedback:list-deleted-attachments', async (_event, request) => {
+    const taskId = validatePptFeedbackTaskRequest(request);
+    const attachments = getPptFeedbackAttachmentStore().listDeletedAttachments(taskId);
+    return { status: 'ok', attachments };
+  });
+
+  ipcMain.handle('ppt-feedback:list-backup-attachments', async (_event, request) => {
+    const taskId = validatePptFeedbackTaskRequest(request);
+    return { status: 'ok', attachments: getPptFeedbackAttachmentStore().listBackupAttachments(taskId) };
+  });
+
+  ipcMain.handle('ppt-feedback:list-annotations', async (_event, request) => {
+    const taskId = validatePptFeedbackTaskRequest(request);
+    return { status: 'ok', annotations: readPptAnnotations(taskId) };
+  });
+
+  ipcMain.handle('ppt-feedback:read-image', async (_event, request) => {
     const attachmentId = validatePptFeedbackAttachmentRequest(request);
-    if (deletedPptAttachments.has(attachmentId)) throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '附件不存在。');
-    const result = await getPptPreviewManager().openPreview({ attachmentId });
+    return { status: 'ok', attachmentId, dataUrl: getPptFeedbackAttachmentStore().readImageDataUrl(attachmentId) };
+  });
+
+  ipcMain.handle('ppt-feedback:read-pdf', async (_event, request) => {
+    const attachmentId = validatePptFeedbackAttachmentRequest(request);
+    return { status: 'ok', attachmentId, dataUrl: getPptFeedbackAttachmentStore().readPdfDataUrl(attachmentId) };
+  });
+
+  ipcMain.handle('ppt-feedback:read-office', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['attachmentId', 'expectedHash']);
+    const attachmentId = validatePptFeedbackId(request.attachmentId, 'INVALID_ATTACHMENT_ID', '附件标识');
+    if (typeof request.expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(request.expectedHash)) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', 'Office 资料版本摘要无效。');
+    }
+    const data = getPptFeedbackAttachmentStore().readOfficeBuffer(attachmentId, request.expectedHash);
+    return { status: 'ok', attachmentId, data };
+  });
+
+  ipcMain.handle('ppt-feedback:open-preview', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['attachmentId', 'target', 'expectedHash', 'embedded']);
+    const attachmentId = validatePptFeedbackId(request.attachmentId, 'INVALID_ATTACHMENT_ID', '附件标识');
+    if (request.embedded !== undefined && typeof request.embedded !== 'boolean') {
+      throw createPptFeedbackError('INVALID_REQUEST', '预览模式参数无效。');
+    }
+    if (request.expectedHash !== undefined && (typeof request.expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(request.expectedHash))) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '批注版本摘要无效。');
+    }
+    if (request.target !== undefined && request.expectedHash === undefined) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '返回批注原处时必须同时校验资料版本。');
+    }
+    const result = await getPptPreviewManager().openPreview({
+      attachmentId, target: request.target, expectedHash: request.expectedHash,
+      embedded: request.embedded === true, parentWindow: request.embedded === true ? mainWindow : undefined
+    });
     if (result.status === 'opened') activePptPreviews.add(attachmentId);
-    return result;
+    return result.status === 'opened'
+      ? { status: result.status, attachmentId: result.attachmentId }
+      : result;
   });
 
   ipcMain.handle('ppt-feedback:close-preview', async (_event, request) => {
@@ -323,28 +505,45 @@ function registerPptFeedbackHandlers() {
   });
 
   ipcMain.handle('ppt-feedback:delete-attachment', async (_event, request) => {
-    const attachmentId = validatePptFeedbackAttachmentRequest(request);
-    if (deletedPptAttachments.has(attachmentId)) throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '附件不存在。');
+    const { taskId, attachmentId } = validatePptFeedbackTaskAttachmentRequest(request);
     const store = getPptFeedbackAttachmentStore();
-    const attachmentPath = store.getAttachmentPath(attachmentId);
+    if (store.getAttachment(attachmentId).taskId !== taskId) throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '附件不属于当前任务。');
     if (pptPreviewManager) await pptPreviewManager.closePreview(attachmentId);
     activePptPreviews.delete(attachmentId);
-    fs.rmSync(path.dirname(attachmentPath), { recursive: true, force: true });
-    deletedPptAttachments.add(attachmentId);
-    return { status: 'ok', attachmentId };
+    const attachment = store.deleteAttachment(attachmentId);
+    return { status: 'ok', attachment };
+  });
+
+  ipcMain.handle('ppt-feedback:restore-attachment', async (_event, request) => {
+    const { taskId, attachmentId } = validatePptFeedbackTaskAttachmentRequest(request);
+    const store = getPptFeedbackAttachmentStore();
+    const deleted = store.listDeletedAttachments(taskId).some(item => item.id === attachmentId);
+    if (!deleted) throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '已移除资料不属于当前任务。');
+    return { status: 'ok', attachment: store.restoreAttachment(attachmentId) };
   });
 
   ipcMain.handle('ppt-feedback:save-annotation', async (_event, annotation) => {
     const normalized = validatePptAnnotation(annotation);
-    if (deletedPptAttachments.has(normalized.attachmentId)) {
-      throw createPptFeedbackError('INVALID_ATTACHMENT_ID', '附件不存在。');
+    const attachmentStore = getPptFeedbackAttachmentStore();
+    const attachment = attachmentStore.getAttachment(normalized.attachmentId);
+    if (attachment.taskId !== normalized.taskId || attachment.sha256 !== normalized.contentHash) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '标注与当前任务或附件版本不匹配。');
     }
     const annotations = readPptAnnotations(normalized.taskId);
+    if (normalized.reassociatedFromId && !annotations.some(item => item.id === normalized.reassociatedFromId)) {
+      throw createPptFeedbackError('INVALID_ANNOTATION', '来源批注不存在或不属于当前任务。');
+    }
     const index = annotations.findIndex(item => item.id === normalized.id);
-    if (index === -1) annotations.push(normalized);
-    else annotations[index] = normalized;
+    const existing = index === -1 ? null : annotations[index];
+    const saved = {
+      ...normalized,
+      createdAt: existing?.createdAt || normalized.createdAt,
+      updatedAt: existing ? new Date().toISOString() : normalized.updatedAt
+    };
+    if (index === -1) annotations.push(saved);
+    else annotations[index] = saved;
     savePptAnnotations(normalized.taskId, annotations);
-    return { status: 'ok', annotation: normalized };
+    return { status: 'ok', annotation: saved };
   });
 }
 
@@ -644,12 +843,50 @@ async function startBundledService() {
   if (bundledService) return localServiceUrl;
 
   const { startServer } = require(getBundledServerPath());
-  bundledService = await startServer({ port: 0, host: '127.0.0.1', config: getSettingsStore().getServiceConfig() });
+  const userDataPath = app.getPath('userData');
+  const config = getSettingsStore().getServiceConfig();
+  const savedPort = readSavedPort(userDataPath);
+  const port = await selectWorkspacePort(userDataPath, async legacyPort => {
+    let service;
+    try {
+      service = await startServer({ port: legacyPort, host: '127.0.0.1', config });
+    } catch (error) {
+      if (error.code === 'EADDRINUSE') throw new Error(`旧工作区端口 ${legacyPort} 已被占用，未连接其他本地服务`);
+      throw error;
+    }
+    try {
+      const probeWindow = new BrowserWindow({ show: false, webPreferences: {
+        contextIsolation: true, nodeIntegration: false, sandbox: true
+      } });
+      try {
+        await probeWindow.loadURL(`http://127.0.0.1:${legacyPort}/__workspace_probe__`);
+        return await probeWindow.webContents.executeJavaScript(
+          'localStorage.getItem("forward-step.workspace.v2") || localStorage.getItem("forward-step.workspace.v1")'
+        );
+      } finally { probeWindow.destroy(); }
+    } finally {
+      await new Promise((resolve, reject) => service.close(error => error ? reject(error) : resolve()));
+    }
+  }, async ports => {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'question', title: '选择旧工作区', message: '找到多个保存内容的旧工作区，请选择要继续使用的一个。',
+      buttons: [...ports.map(value => `工作区（端口 ${value}）`), '取消'],
+      cancelId: ports.length, defaultId: ports.length
+    });
+    return ports[result.response];
+  });
+  try {
+    bundledService = await startServer({ port, host: '127.0.0.1', config });
+  } catch (error) {
+    if (port && error.code === 'EADDRINUSE') throw new Error(`工作区端口 ${port} 已被占用，原有数据未被更改`);
+    throw error;
+  }
   const address = bundledService.address();
   if (!address || typeof address === 'string') {
     throw new Error('内置本地服务没有返回有效的监听地址');
   }
   localServiceUrl = `http://127.0.0.1:${address.port}`;
+  if (savedPort === null) savePort(userDataPath, address.port);
   return localServiceUrl;
 }
 
@@ -710,13 +947,79 @@ ipcMain.handle('config:save', async (_event, config) => {
   return getSettingsStore().save(config);
 });
 
+ipcMain.handle('writing-assistant:test', async (_event, payload) => {
+  if (payload !== undefined && (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || Object.keys(payload).some(key => !['mode', 'baseUrl', 'modelId', 'apiKey', 'reuseModelConnection'].includes(key)))) {
+    return { ok: false, code: 'WRITING_ASSISTANT_INVALID_CONFIG', message: '连接测试只接受辅助服务配置，不接受任务或文件内容。' };
+  }
+  const config = getSettingsStore().getServiceConfig();
+  const assistant = payload || config.writingAssistant || {};
+  const resolved = assistant.reuseModelConnection
+    ? { ...assistant, baseUrl: config.model.baseUrl, apiKey: config.model.apiKey }
+    : assistant;
+  return createWritingAssistantClient(resolved).testConnection();
+});
+
+ipcMain.handle('writing-assistant:evaluate', async (_event, payload) => {
+  const candidates = Array.isArray(payload) ? payload : payload?.candidates;
+  if (!Array.isArray(candidates) || candidates.length > 10000) {
+    return { ok: false, code: 'WRITING_ASSISTANT_INVALID_INPUT', message: '辅助判断候选数量超过本次安全上限。' };
+  }
+  if (!Array.isArray(payload) && payload?.taskSummary !== undefined && typeof payload.taskSummary !== 'string') {
+    return { ok: false, code: 'WRITING_ASSISTANT_INVALID_INPUT', message: '辅助判断任务摘要格式无效。' };
+  }
+  const config = getSettingsStore().getServiceConfig();
+  const assistant = config.writingAssistant || {};
+  const resolved = assistant.reuseModelConnection
+    ? { ...assistant, baseUrl: config.model.baseUrl, apiKey: config.model.apiKey }
+    : assistant;
+  const client = createWritingAssistantClient(resolved);
+  if (!client.configured) return { ok: false, code: 'WRITING_ASSISTANT_NOT_CONFIGURED', message: '辅助判断未配置。' };
+  const result = await client.evaluateCandidates(candidates, Array.isArray(payload) ? '' : payload.taskSummary || '');
+  return { ...result, mode: client.mode, model: client.modelId };
+});
+
+ipcMain.handle('writing-resource:execute', async (_event, payload) => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || Object.keys(payload).some(key => !['actionId', 'resourceId', 'rootId', 'params', 'mode'].includes(key))) {
+    return { status: 'failed', code: 'RESOURCE_INVALID_REQUEST', message: '资源动作请求格式无效。' };
+  }
+  if (!promptAgentSources || typeof promptAgentSources.resolveAuthorizedRoot !== 'function') {
+    return { status: 'unavailable', code: 'RESOURCE_ROOT_NOT_AUTHORIZED', message: '当前没有可用的本地目录授权。' };
+  }
+  try {
+    const root = promptAgentSources.resolveAuthorizedRoot(payload.rootId);
+    const runner = createWritingResourceRunner({ resources: getBuiltinWritingPacks().flatMap(pack => pack.resources || []),
+      resourceRoots: { 'authorized-project-root': root } });
+    return await runner.execute({ ...payload, rootId: 'authorized-project-root' });
+  } catch (error) {
+    return { status: 'failed', code: error.code || 'RESOURCE_EXEC_FAILED', message: error.message || '资源动作执行失败。' };
+  }
+});
+
+ipcMain.handle('writing-resource:read', async (_event, payload) => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || Object.keys(payload).some(key => !['resourceId', 'relativePath', 'limit'].includes(key))) {
+    return { status: 'failed', code: 'RESOURCE_INVALID_REQUEST', message: '资源读取请求格式无效。' };
+  }
+  const runner = createWritingResourceRunner({ resources: getBuiltinWritingPacks().flatMap(pack => pack.resources || []), resourceArchives: {
+    'softcopyright-evidence-skill': process.env.SOFTCOPYRIGHT_EVIDENCE_SKILL_ARCHIVE || 'D:/百度网盘下载文件/软著材料skill/软著材料skill.zip',
+    'softcopyright-materials-skill': process.env.SOFTCOPYRIGHT_MATERIALS_SKILL_ARCHIVE || 'D:/夸克/软著申请资料skill/SoftwareCopyright-Skill-main(1).zip'
+  } });
+  try {
+    return await runner.read(payload);
+  } catch (error) {
+    return { status: 'failed', code: error.code || 'RESOURCE_READ_FAILED', message: error.message || '资源读取失败。' };
+  }
+});
+
 ipcMain.handle('model:request', async (_event, payload) => {
-  const client = createModelClient(getSettingsStore().getServiceConfig());
+  const client = createModelClient(getSettingsStore().getServiceConfig().model);
   return client.request(payload?.messages, payload?.options);
 });
 
 ipcMain.handle('search:request', async (_event, payload) => {
-  const client = createSearchClient(getSettingsStore().getServiceConfig());
+  const client = createSearchClient(getSettingsStore().getServiceConfig().search);
   return client.search(String(payload?.query || '').trim(), payload?.options);
 });
 
@@ -754,12 +1057,23 @@ ipcMain.handle('backup:export', async (_event, content) => {
   const attachments = content.attachmentIds.map(id => {
     if (typeof id !== 'string') throw Object.assign(new TypeError('附件 ID 无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
     const metadata = backup.data?.researchAttachments?.find(item => item?.id === id);
-    const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32})\.(txt|pdf|png|jpg|webp)$/.exec(id);
-    if (!metadata || !match) throw Object.assign(new TypeError('附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
-    return {
-      id, taskId: match[1], type: metadata.type, size: metadata.size,
-      openStream: () => getSocialAttachmentStore().createReadStream(id)
-    };
+    if (metadata) {
+      const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32})\.(txt|pdf|png|jpg|webp)$/.exec(id);
+      if (!match) throw Object.assign(new TypeError('研究附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+      return { id, taskId: match[1], type: metadata.type, size: metadata.size,
+        openStream: () => getSocialAttachmentStore().createReadStream(id) };
+    }
+    const workbench = backup.data?.workbenchAttachments?.find(item => item?.archiveId === id);
+    const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(pdf|png|jpg|webp|html|pptx|docx)$/.exec(id);
+    const typeByMime = { 'application/pdf': 'application/pdf', 'image/png': 'image/png', 'image/jpeg': 'image/jpeg', 'image/webp': 'image/webp', 'text/html': 'text/html',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+    if (!workbench || !match || workbench.id !== match[2] || workbench.taskId !== match[1]
+      || !typeByMime[workbench.mimeType] || !Number.isSafeInteger(workbench.size) || !/^[a-f0-9]{64}$/.test(workbench.sha256 || '')) {
+      throw Object.assign(new TypeError('工作台附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+    }
+    return { id, taskId: match[1], type: typeByMime[workbench.mimeType], size: workbench.size,
+      openStream: () => getPptFeedbackAttachmentStore().createReadStream(workbench.id, { includeDeleted: workbench.deleted === true }) };
   });
   const tempPath = result.filePath + `.tmp-${process.pid}-${Date.now()}`;
   try {
@@ -792,7 +1106,8 @@ ipcMain.handle('backup:import', async () => {
       return {
         canceled: false, format: 'workspace-archive', stageId,
         content: JSON.stringify(archive.workspace),
-        attachments: archive.attachments.map(({ id, taskId, type, size, sha256 }) => ({ id, taskId, type, size, sha256 }))
+        attachments: archive.attachments.map(({ id, taskId, type, size, sha256 }) => ({ id, taskId, type, size, sha256 })),
+        attachmentErrors: archive.attachmentErrors
       };
     } catch (error) {
       fs.rmSync(stageDirectory, { recursive: true, force: true });
@@ -813,7 +1128,7 @@ ipcMain.handle('backup:import', async () => {
 
 ipcMain.handle('backup:commit-import', async (_event, payload) => {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)
-    || Object.keys(payload).some(key => !['stageId', 'attachmentIds', 'targetAttachmentIds'].includes(key))
+    || Object.keys(payload).some(key => !['stageId', 'attachmentIds', 'targetAttachmentIds', 'workbenchAssets'].includes(key))
     || typeof payload.stageId !== 'string' || !Array.isArray(payload.attachmentIds)
     || payload.attachmentIds.some(id => typeof id !== 'string')
     || payload.targetAttachmentIds !== undefined && (!Array.isArray(payload.targetAttachmentIds)
@@ -832,33 +1147,126 @@ ipcMain.handle('backup:commit-import', async (_event, payload) => {
   }
   const descriptors = new Map(stage.archive.attachments.map(item => [item.id, item]));
   if (selected.some(id => !descriptors.has(id))) throw Object.assign(new TypeError('导入附件不在已校验清单中'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
-  const store = getSocialAttachmentStore();
+  const workbenchAssets = payload.workbenchAssets || { mode: 'merge', attachments: [], annotations: [] };
+  if (!workbenchAssets || !['merge', 'replace'].includes(workbenchAssets.mode)
+    || !Array.isArray(workbenchAssets.attachments) || !Array.isArray(workbenchAssets.annotations)
+    || workbenchAssets.taskIds !== undefined && (!Array.isArray(workbenchAssets.taskIds)
+      || workbenchAssets.taskIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id))
+      || new Set(workbenchAssets.taskIds).size !== workbenchAssets.taskIds.length)) {
+    throw Object.assign(new TypeError('工作台批注导入数据无效'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+  }
+  const workbenchByArchiveId = new Map(workbenchAssets.attachments.map(item => [item.archiveId, item]));
+  if (workbenchByArchiveId.size !== workbenchAssets.attachments.length
+    || new Set(workbenchAssets.attachments.map(item => item.id)).size !== workbenchAssets.attachments.length) {
+    throw Object.assign(new TypeError('工作台附件归档 ID 重复'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+  }
+  const researchStore = getSocialAttachmentStore();
+  const workbenchStore = getPptFeedbackAttachmentStore();
+  const researchIds = [];
+  const workbenchIds = [];
   for (const [index, sourceId] of selected.entries()) {
     const item = descriptors.get(sourceId);
     const targetId = targetIds[index];
+    const workbench = workbenchByArchiveId.get(sourceId);
+    if (workbench) {
+      const mimeType = { 'application/pdf': 'application/pdf', 'image/png': 'image/png', 'image/jpeg': 'image/jpeg', 'image/webp': 'image/webp', 'text/html': 'text/html',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }[workbench.mimeType];
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(targetId)
+        || workbench.id !== targetId || workbench.taskId !== item.taskId
+        || !mimeType || mimeType !== item.type || workbench.size !== item.size || workbench.sha256 !== item.sha256) {
+        throw Object.assign(new TypeError('工作台附件 ID、任务、类型或摘要与 ZIP 不匹配'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+      }
+      workbenchIds.push({ sourceId, targetId, workbench, item });
+      continue;
+    }
     const prefix = `${item.taskId}_`;
     const targetSuffix = targetId.startsWith(prefix) ? targetId.slice(prefix.length) : '';
     if (!/^[a-f0-9]{32}\.(txt|pdf|png|jpg|webp)$/.test(targetSuffix)) {
-      throw Object.assign(new TypeError('工作区附件目标 ID 与所属任务不匹配'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+      throw Object.assign(new TypeError('研究附件目标 ID 与所属任务不匹配'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
     }
-    if (store.has(targetId)) throw Object.assign(new Error('目标设备已存在相同附件 ID；请先处理冲突再导入'), { code: 'BACKUP_IMPORT_ATTACHMENT_CONFLICT' });
+    if (researchStore.has(targetId)) throw Object.assign(new Error('目标设备已存在相同附件 ID；请先处理冲突再导入'), { code: 'BACKUP_IMPORT_ATTACHMENT_CONFLICT' });
+    researchIds.push({ sourceId, targetId, item });
+  }
+  if (workbenchIds.length !== workbenchAssets.attachments.length) {
+    throw Object.assign(new TypeError('工作台附件与 ZIP 暂存清单不一致'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+  }
+  const workbenchAttachmentById = new Map(workbenchAssets.attachments.map(item => [item.id, item]));
+  const annotations = workbenchAssets.annotations.map(annotation => validatePptAnnotation(annotation));
+  if (new Set(annotations.map(item => item.id)).size !== annotations.length
+    || annotations.some(annotation => {
+      const attachment = workbenchAttachmentById.get(annotation.attachmentId);
+      return !attachment || annotation.taskId !== attachment.taskId || annotation.contentHash !== attachment.sha256;
+    })) {
+    throw Object.assign(new TypeError('工作台批注没有对应的有效附件版本'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+  }
+  const importableWorkbenchIds = new Set(workbenchIds.map(entry => entry.workbench.id));
+  if (annotations.some(annotation => !importableWorkbenchIds.has(annotation.attachmentId))) {
+    throw Object.assign(new TypeError('工作台批注引用的附件没有通过 ZIP 校验'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
   }
   const transactionId = randomUUID();
   const transactionRoot = path.join(app.getPath('userData'), 'workspace-backup-transactions');
   fs.mkdirSync(transactionRoot, { recursive: true, mode: 0o700 });
   const journalPath = path.join(transactionRoot, `${transactionId}.json`);
-  const ids = targetIds;
-  const journal = { version: 1, transactionId, stageId: payload.stageId, stageDirectory: stage.stageDirectory, attachmentIds: ids };
+  const existingWorkbench = new Map(workbenchStore.listBackupAttachments().map(item => [item.id, item]));
+  const newWorkbenchIds = [];
+  for (const { workbench } of workbenchIds) {
+    const existing = existingWorkbench.get(workbench.id);
+    if (!existing) {
+      newWorkbenchIds.push(workbench.id);
+      continue;
+    }
+    if (existing.taskId !== workbench.taskId || existing.mimeType !== workbench.mimeType
+      || existing.size !== workbench.size || existing.sha256 !== workbench.sha256
+      || existing.deleted !== (workbench.deleted === true)) {
+      throw Object.assign(new Error('目标设备已存在不同的同 ID 工作台资料'), { code: 'BACKUP_IMPORT_ATTACHMENT_CONFLICT' });
+    }
+  }
+  const annotationTaskIds = [...new Set([
+    ...workbenchAssets.attachments.map(item => item.taskId),
+    ...(workbenchAssets.taskIds || [])
+  ])];
+  for (const taskId of annotationTaskIds) {
+    const snapshotPath = path.join(transactionRoot, `${transactionId}-${taskId}.annotations.json`);
+    if (fs.existsSync(annotationsPath(taskId))) fs.copyFileSync(annotationsPath(taskId), snapshotPath, fs.constants.COPYFILE_EXCL);
+  }
+  const journal = {
+    version: 2, transactionId, stageId: payload.stageId, stageDirectory: stage.stageDirectory,
+    attachmentIds: researchIds.map(item => item.targetId), workbenchAttachmentIds: [...newWorkbenchIds],
+    annotationTaskIds, mode: workbenchAssets.mode
+  };
   writeBackupFileAtomically(journalPath, JSON.stringify(journal));
   backupImportTransactions.set(transactionId, { journalPath, journal });
   try {
-    for (const [index, sourceId] of selected.entries()) {
-      const item = descriptors.get(sourceId);
-      await store.importFile({ id: targetIds[index], type: item.type, size: item.size, sha256: item.sha256, sourcePath: item.path });
+    for (const { targetId, item } of researchIds) {
+      await researchStore.importFile({ id: targetId, type: item.type, size: item.size, sha256: item.sha256, sourcePath: item.path });
     }
+    for (const { targetId, workbench, item } of workbenchIds) {
+      const result = await workbenchStore.importAttachment({
+        taskId: workbench.taskId, id: targetId, mimeType: workbench.mimeType, displayName: workbench.displayName,
+        size: item.size, sha256: item.sha256, sourcePath: item.path, createdAt: workbench.createdAt,
+        deleted: workbench.deleted === true
+      });
+      if (result.imported && !journal.workbenchAttachmentIds.includes(targetId)) journal.workbenchAttachmentIds.push(targetId);
+    }
+    for (const taskId of annotationTaskIds) {
+      const incoming = annotations.filter(item => item.taskId === taskId);
+      const current = workbenchAssets.mode === 'merge' ? readPptAnnotations(taskId) : [];
+      const byId = new Map(current.map(item => [item.id, item]));
+      for (const annotation of incoming) if (!byId.has(annotation.id)) byId.set(annotation.id, annotation);
+      savePptAnnotations(taskId, [...byId.values()]);
+    }
+    writeBackupFileAtomically(journalPath, JSON.stringify(journal));
     return { status: 'ok', transactionId };
   } catch (error) {
-    for (const id of ids) { if (store.has(id)) store.delete(id); }
+    for (const { targetId } of researchIds) { if (researchStore.has(targetId)) researchStore.delete(targetId); }
+    for (const id of journal.workbenchAttachmentIds) workbenchStore.removeImportedAttachment(id);
+    for (const taskId of annotationTaskIds) {
+      const snapshotPath = path.join(transactionRoot, `${transactionId}-${taskId}.annotations.json`);
+      if (fs.existsSync(snapshotPath)) fs.copyFileSync(snapshotPath, annotationsPath(taskId));
+      else fs.rmSync(annotationsPath(taskId), { force: true });
+      fs.rmSync(snapshotPath, { force: true });
+    }
     fs.rmSync(journalPath, { force: true });
     throw Object.assign(new Error('工作区附件安装失败，已回滚导入文件'), { code: error.code || 'BACKUP_IMPORT_COMMIT_FAILED', cause: error });
   }
@@ -878,6 +1286,9 @@ ipcMain.handle('backup:finalize-import', async (_event, transactionId) => {
   if (!transaction) return { status: 'ok', finalized: false };
   fs.rmSync(transaction.journalPath, { force: true });
   const stage = backupImportStages.get(transaction.journal.stageId);
+  for (const taskId of transaction.journal.annotationTaskIds || []) {
+    fs.rmSync(path.join(path.dirname(transaction.journalPath), `${transactionId}-${taskId}.annotations.json`), { force: true });
+  }
   if (stage) fs.rmSync(stage.stageDirectory, { recursive: true, force: true });
   backupImportStages.delete(transaction.journal.stageId);
   backupImportTransactions.delete(transactionId);
@@ -889,6 +1300,14 @@ ipcMain.handle('backup:rollback-import', async (_event, transactionId) => {
   if (!transaction) return { status: 'ok', rolledBack: false };
   const store = getSocialAttachmentStore();
   for (const id of transaction.journal.attachmentIds) { if (store.has(id)) store.delete(id); }
+  const workbenchStore = getPptFeedbackAttachmentStore();
+  for (const id of transaction.journal.workbenchAttachmentIds || []) workbenchStore.removeImportedAttachment(id);
+  for (const taskId of transaction.journal.annotationTaskIds || []) {
+    const snapshotPath = path.join(path.dirname(transaction.journalPath), `${transactionId}-${taskId}.annotations.json`);
+    if (fs.existsSync(snapshotPath)) fs.copyFileSync(snapshotPath, annotationsPath(taskId));
+    else fs.rmSync(annotationsPath(taskId), { force: true });
+    fs.rmSync(snapshotPath, { force: true });
+  }
   fs.rmSync(transaction.journalPath, { force: true });
   const stage = backupImportStages.get(transaction.journal.stageId);
   if (stage) fs.rmSync(stage.stageDirectory, { recursive: true, force: true });
@@ -898,22 +1317,49 @@ ipcMain.handle('backup:rollback-import', async (_event, transactionId) => {
 });
 
 ipcMain.handle('backup:recover-imports', async (_event, attachmentIds) => {
-  if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string')) {
+  const recovery = Array.isArray(attachmentIds)
+    ? { attachmentIds, workbenchAttachmentIds: [] }
+    : attachmentIds;
+  if (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)
+    || Object.keys(recovery).some(key => !['attachmentIds', 'workbenchAttachmentIds'].includes(key))
+    || !Array.isArray(recovery.attachmentIds) || recovery.attachmentIds.some(id => typeof id !== 'string')
+    || !Array.isArray(recovery.workbenchAttachmentIds) || recovery.workbenchAttachmentIds.some(id => typeof id !== 'string')) {
     throw Object.assign(new TypeError('附件引用列表无效'), { code: 'BACKUP_IMPORT_INVALID_REQUEST' });
   }
   const transactionRoot = path.join(app.getPath('userData'), 'workspace-backup-transactions');
-  const references = new Set(attachmentIds);
+  const references = new Set(recovery.attachmentIds);
+  const workbenchReferences = new Set(recovery.workbenchAttachmentIds);
   const store = getSocialAttachmentStore();
+  const workbenchStore = getPptFeedbackAttachmentStore();
   let recovered = 0;
   if (fs.existsSync(transactionRoot)) {
     for (const filename of fs.readdirSync(transactionRoot).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
       const journalPath = path.join(transactionRoot, filename);
       let journal;
       try { journal = JSON.parse(fs.readFileSync(journalPath, 'utf8')); } catch { fs.rmSync(journalPath, { force: true }); continue; }
-      if (journal?.version !== 1 || !Array.isArray(journal.attachmentIds)
-        || journal.attachmentIds.some(id => typeof id !== 'string')) { fs.rmSync(journalPath, { force: true }); continue; }
-      const committed = journal.attachmentIds.every(id => references.has(id));
-      if (!committed) for (const id of journal.attachmentIds) { if (store.has(id)) store.delete(id); }
+      if (![1, 2].includes(journal?.version) || !Array.isArray(journal.attachmentIds)
+        || journal.attachmentIds.some(id => typeof id !== 'string')
+        || journal.version === 2 && (journal.transactionId !== filename.slice(0, -5)
+          || !Array.isArray(journal.workbenchAttachmentIds) || journal.workbenchAttachmentIds.some(id => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
+          || !Array.isArray(journal.annotationTaskIds) || journal.annotationTaskIds.some(id => !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id)))) {
+        fs.rmSync(journalPath, { force: true }); continue;
+      }
+      const committed = journal.attachmentIds.every(id => references.has(id))
+        && (journal.workbenchAttachmentIds || []).every(id => workbenchReferences.has(id));
+      if (!committed) {
+        for (const id of journal.attachmentIds) { if (store.has(id)) store.delete(id); }
+        for (const id of journal.workbenchAttachmentIds || []) workbenchStore.removeImportedAttachment(id);
+        for (const taskId of journal.annotationTaskIds || []) {
+          const snapshotPath = path.join(transactionRoot, `${journal.transactionId}-${taskId}.annotations.json`);
+          if (fs.existsSync(snapshotPath)) fs.copyFileSync(snapshotPath, annotationsPath(taskId));
+          else fs.rmSync(annotationsPath(taskId), { force: true });
+          fs.rmSync(snapshotPath, { force: true });
+        }
+      } else {
+        for (const taskId of journal.annotationTaskIds || []) {
+          fs.rmSync(path.join(transactionRoot, `${journal.transactionId}-${taskId}.annotations.json`), { force: true });
+        }
+      }
       if (typeof journal.stageDirectory === 'string') {
         const expectedRoot = path.resolve(app.getPath('userData'), 'workspace-backup-import-staging');
         const resolved = path.resolve(journal.stageDirectory);
@@ -957,7 +1403,7 @@ ipcMain.handle('backup:read', async (_event, filename) => getBackupStore().readB
 
 registerSocialHandlers();
 registerPptFeedbackHandlers();
-createPromptAgentSources({ fs, path, userDataPath: app.getPath('userData'), dialog, ipcMain });
+promptAgentSources = createPromptAgentSources({ fs, path, userDataPath: app.getPath('userData'), dialog, ipcMain });
 createPptSourceReader({ fs, path, dialog, ipcMain });
 
 app.whenReady().then(() => createWindow()).catch(reportStartupError);

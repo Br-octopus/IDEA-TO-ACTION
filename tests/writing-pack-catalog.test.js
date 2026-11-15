@@ -65,6 +65,16 @@ test('软著内容包可用于普通文章诊断与改写提示词，并区分�
   assert.ok(pack.prompts.every(item => item.sourceIds.every(id => pack.sources.some(source => source.id === id))));
 });
 
+test('软著内容包登记两份原始 skill 的按需资源', () => {
+  const pack = catalog.getBuiltinWritingPacks().find(item => item.id === 'builtin-softcopyright-content');
+  assert.ok(pack);
+  assert.ok(pack.resources.length >= 10);
+  assert.ok(pack.resources.every(resource => resource.archive && resource.relativePath));
+  assert.ok(pack.resources.some(resource => resource.archive === 'softcopyright-evidence-skill' && resource.kind === 'reference'));
+  assert.ok(pack.resources.some(resource => resource.archive === 'softcopyright-materials-skill' && resource.kind === 'script'));
+  assert.ok(pack.resources.filter(resource => resource.kind === 'script').every(resource => resource.actionId));
+});
+
 test('catalog 提供三类综述路线和可追溯的官方报告来源', () => {
   const pack = catalog.getBuiltinWritingPacks().find(item => item.id === 'builtin-academic-review');
   assert.ok(pack, '综述工作台应能取得专用内置包');
