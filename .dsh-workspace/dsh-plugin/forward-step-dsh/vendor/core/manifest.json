@@ -1,0 +1,119 @@
+{
+  "source": "prototype",
+  "files": [
+    {
+      "path": "academic-literature.js",
+      "sha256": "ea9f6fd75dd24c01caf95adc06d9387ba1e582db74551d2429209bc7563f17fd"
+    },
+    {
+      "path": "academic-publishing.js",
+      "sha256": "b8fe09c4787a5b19dc525413c50262a365963cd34223d2a6445bd508632ca7b4"
+    },
+    {
+      "path": "academic-review.js",
+      "sha256": "c0f6cbf9d6f20fcbfb86cb4c387f730645850fbeea96532052e447771dac20e2"
+    },
+    {
+      "path": "knowledge-schema.js",
+      "sha256": "158ea52b93dc033b26eca678167b618c89121e38a7ea90b5cf25afef4034e5f7"
+    },
+    {
+      "path": "knowledge-search.js",
+      "sha256": "62c73deb577bf7ba7131980a61f73050a47c958afd14e3b993bb33c4282c44ac"
+    },
+    {
+      "path": "method-cards.js",
+      "sha256": "f301c4fec04ae7bd10eb210af937dd70fcbf61cfa0fdf0ccc8d526969d656709"
+    },
+    {
+      "path": "ppt-scene-prompts.js",
+      "sha256": "f38781583b54aff5ea12cc4470ab95088e80c1819ca74275eed6b157464dada9",
+      "sourceSha256": "02fb8cecb421170a409d954c3902f600e9ec1b1bddf4c1b88f51e82a588b32eb",
+      "overlay": "ppt-annotated-image-target-v9"
+    },
+    {
+      "path": "ppt-scene-schema.js",
+      "sha256": "5084ceffb7e68795a345fe44a06b5942206147328db4a2fefa0ca0bd0d5dca07",
+      "sourceSha256": "4fe52e40f86f379e39f6c54bec77cf2b20bd5cbbcbc5c4ec066b5b9357860962",
+      "overlay": "ppt-annotated-image-target-v10"
+    },
+    {
+      "path": "ppt-scene-workflow.js",
+      "sha256": "15d905234d260a2f2cf3fc277ee43f99d969e2f11ab18b4916be4e10273aff9b"
+    },
+    {
+      "path": "prompt-agent-coordinator.js",
+      "sha256": "2618d82bbb857dc3b4e2413acf0ee8ce22fc7d834b460e8955b1a26aaf39ecd8"
+    },
+    {
+      "path": "prompt-agent-prompts.js",
+      "sha256": "98c1055caed6ad2a37064872fff46cb82302891cdbbcdee0f13262f48f203163"
+    },
+    {
+      "path": "prompt-agent-research-bridge.js",
+      "sha256": "ae3a2a70cf8c90e9cce2b8b2522ca21013ca4f8a6966f81ecf8ef92cb9218475"
+    },
+    {
+      "path": "prompt-agent-schema.js",
+      "sha256": "be01941fbe53b598f4a7d0411d0d56d3f6ff2727d97cea55f26abdd26ab217a7"
+    },
+    {
+      "path": "prompt-agent-workflow.js",
+      "sha256": "c230248009aba21184900313f5708a74945d8ac5af80a4281132a770750ec774"
+    },
+    {
+      "path": "prompt-engine.js",
+      "sha256": "a183ad626b2bd17ad7e911bc0c4948e82b4579f9af0dac3a3bf1df3c201cd233"
+    },
+    {
+      "path": "research-catalog.js",
+      "sha256": "baca9bff362c68c63609665ac008bab60ad83f6418c3c4b2503cfa6c1642da93"
+    },
+    {
+      "path": "retriever.js",
+      "sha256": "e9025af2c49fcd88428cdc06abf1d452a58d9cc0faa9343cfdf777b06ef76956"
+    },
+    {
+      "path": "search-dictionary.js",
+      "sha256": "72958d660ee9085bb5338ba63fbd9893d7db73e7a47e8d9354e79ab95eee2c02"
+    },
+    {
+      "path": "social-research-schema.js",
+      "sha256": "55470505864f278263cc19b5e9d5d786a58a6c68cb911585ef270d456eb61f0d"
+    },
+    {
+      "path": "social-research-workflow.js",
+      "sha256": "c29e7a1d7a53aa2d3a04c14d63e6366658a306cd8e047949f01fda9301c4e821"
+    },
+    {
+      "path": "writing-material-coverage.js",
+      "sha256": "8789f098cd19d4ff6ab21d1b3df74515d4d5f354787a758f74507dbdb07f3a1d"
+    },
+    {
+      "path": "writing-pack-catalog.js",
+      "sha256": "6f3c15f801c6da4745f95d3de0c7493c2a4bf6d11aa715b8e8bd16c870287ca6"
+    },
+    {
+      "path": "writing-pack-schema.js",
+      "sha256": "47978bc7ed47a98c8070515e893ded664a25f608a6c6f1314b49857c96aebbc7",
+      "sourceSha256": "9370fe30f6365ecb833d0fce0b33ce592f67bfa85431f566c8a5ce9e2678ccd7",
+      "overlay": "writing-pack-settings-history-v3"
+    },
+    {
+      "path": "writing-resource-registry.js",
+      "sha256": "ca079bcb4b95d08c3bc387185a83b4f49d2e0d9318b6495b3bbfa68a389b708c"
+    },
+    {
+      "path": "writing-workbench-prompts.js",
+      "sha256": "c79dd7b262a5633aed48cbc04756da8a1d377cc7949a7e3cf0cebc415ac6a954",
+      "sourceSha256": "556b8019885e58352fc2f5c23e4fc9078a02a2724617e4733641ff48a90cde57",
+      "overlay": "writing-pack-snapshot-selections-v1"
+    },
+    {
+      "path": "writing-workbench-schema.js",
+      "sha256": "2e141d479960792704542ab942aca0098d8d3f6c0ede51ec4fa2130d4dc2e241",
+      "sourceSha256": "8bbedd3e089894e7223faf94407c8bf424fad71759d9f904cfdea5602c01f921",
+      "overlay": "writing-pack-snapshot-selections-v1"
+    }
+  ]
+}

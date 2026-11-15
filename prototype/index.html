@@ -56,21 +56,23 @@
     .activity-rail [data-tooltip] { position:relative; }
     .activity-rail [data-tooltip]::after { content:attr(data-tooltip); position:absolute; z-index:30; left:45px; top:50%; transform:translateY(-50%); padding:5px 8px; border-radius:6px; background:#24312b; color:#fff; font-size:11px; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .12s; }
     .activity-rail [data-tooltip]:hover::after, .activity-rail [data-tooltip]:focus-visible::after { opacity:1; }
-    .task-sidebar { min-width:0; height:100vh; position:sticky; top:0; background:#f5f7f5; border-right:1px solid var(--line); padding:14px 12px 10px; display:flex; flex-direction:column; gap:8px; overflow:hidden; }
-    .sidebar-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:42px; padding:0 2px 11px; border-bottom:1px solid var(--line); }
+    .task-sidebar { min-width:0; height:100vh; position:sticky; top:0; background:#fbfcfa; border-right:1px solid var(--line); padding:16px 12px 12px; display:flex; flex-direction:column; gap:0; overflow:hidden; }
+    .sidebar-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:44px; padding:0 2px 13px; border-bottom:1px solid var(--line); }
     .sidebar-header .brand { padding:0 6px; }
     .sidebar-header .brand-mark { width:27px; height:27px; border-radius:9px; }
     .sidebar-header .brand-name { font-size:14px; }
     .sidebar-header .brand-sub { display:none; }
-    .sidebar-scroll { min-width:0; min-height:0; flex:1; overflow-x:hidden; overflow-y:auto; scrollbar-width:thin; }
+    .sidebar-scroll { min-width:0; min-height:0; flex:1; padding-top:7px; overflow-x:hidden; overflow-y:auto; scrollbar-width:thin; }
     .sidebar-scroll .nav { gap:2px; }
-    .sidebar-scroll .nav-group { display:flex; align-items:center; gap:10px; margin:0 2px; padding:14px 10px 8px; color:var(--muted); font-size:12px; font-weight:650; }
+    .sidebar-scroll .nav-group { display:flex; align-items:center; gap:10px; margin:0 2px; padding:14px 10px 9px; color:#52645b; font-size:12px; font-weight:700; letter-spacing:.025em; }
     .sidebar-scroll .nav-group::after { display:none; }
     .sidebar-scroll .nav button { gap:9px; min-height:34px; padding:7px 9px; font-size:12px; }
     .sidebar-recent-list { display:grid; grid-template-columns:minmax(0,1fr); gap:3px; min-width:0; padding:0 2px; }
-    .sidebar-recent-list .empty-recent { display:grid; gap:5px; margin:0; padding:8px 10px; border:0; border-radius:6px; background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
-    .sidebar-recent-list .empty-recent strong { color:var(--ink); font-size:13px; font-weight:650; }
-    .sidebar-recent-list .empty-recent span { color:var(--muted); }
+    .sidebar-recent-list .empty-recent { display:grid; justify-items:start; gap:7px; margin:2px 0 0; padding:14px 12px; border:1px solid #e4ebe5; border-radius:8px; background:#f7faf7; color:#5b6962; font-size:12px; line-height:1.55; }
+    .sidebar-recent-list .empty-recent strong { color:var(--ink); font-size:13px; font-weight:650; line-height:1.4; }
+    .sidebar-recent-list .empty-recent span:last-child { color:#5b6962; }
+    .empty-recent-mark { display:grid; place-items:center; width:34px; height:34px; margin-bottom:2px; border-radius:9px; background:#e8f2ec; color:var(--green); }
+    .empty-recent-mark svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
     .sidebar-recent-list .recent-item { align-items:center; gap:8px; min-width:0; min-height:54px; padding:9px 10px; border:1px solid transparent; border-radius:8px; background:transparent; transition:background .14s ease,border-color .14s ease; }
     .sidebar-recent-list .recent-item:hover { border-color:#e4eae5; background:#fff; }
     .sidebar-recent-list .recent-item:active { background:#e7efea; }
@@ -80,8 +82,8 @@
     .sidebar-recent-list .recent-item > span:first-child { min-width:0; }
     .sidebar-recent-list .recent-title { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; font-size:13px; font-weight:650; line-height:1.45; }
     .sidebar-recent-list .recent-meta { display:block; overflow:hidden; margin-top:4px; color:var(--muted); font-size:12px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
-    .sidebar-toggle { width:30px; height:30px; display:grid; place-items:center; flex:none; padding:0; border:0; border-radius:8px; background:var(--green-soft); color:var(--green-dark); transition:background .14s ease,color .14s ease; }
-    .sidebar-toggle:hover { background:#dcebe1; color:var(--green-dark); }
+    .sidebar-toggle { width:30px; height:30px; display:grid; place-items:center; flex:none; padding:0; border:1px solid #dfe7e1; border-radius:8px; background:#fff; color:var(--green-dark); transition:background .14s ease,border-color .14s ease,color .14s ease; }
+    .sidebar-toggle:hover { border-color:#c9d9cf; background:var(--green-soft); color:var(--green-dark); }
     .sidebar-toggle:focus-visible { outline:2px solid #4b8b74; outline-offset:2px; }
     .sidebar-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.8; }
     #task-sidebar-divider { position:absolute; inset:0 0 0 auto; width:8px; touch-action:none; cursor:col-resize; z-index:20; }
@@ -109,8 +111,8 @@
     .nav button.active { color: var(--green-dark); background: var(--green-soft); font-weight: 650; }
     .nav-icon { width: 17px; height: 17px; flex: none; display: grid; place-items: center; }
     .nav-icon svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-    .sidebar-foot { display:flex; align-items:center; gap:8px; margin-top:auto; padding:13px 9px 4px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
-    .local-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #5d9a6c; margin-right: 6px; }
+    .sidebar-foot { display:flex; align-items:center; gap:8px; margin-top:auto; padding:12px 9px 2px; border-top:1px solid var(--line); color:#68756d; font-size:12px; }
+    .local-dot { display: inline-block; width: 7px; height: 7px; flex:none; border-radius: 50%; background: #5d9a6c; }
     .main { min-width:0; min-height:100vh; display:flex; flex-direction:column; }
     .topbar { height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.64); }
     .breadcrumb { color: #52615e; font-size: 12px; }

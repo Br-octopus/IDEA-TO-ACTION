@@ -1885,10 +1885,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     };
     document.body.classList.add("workbench-resizing");
     event.currentTarget.setPointerCapture(event.pointerId);
+    scheduleWorkbenchHtmlPreviewSync();
     if (kind === "content") {
       const status = document.getElementById("workbench-snap-status");
       status.textContent = "";
-      scheduleWorkbenchHtmlPreviewSync();
     }
   }
   function moveWorkbenchResize(event) {
@@ -3178,7 +3178,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       }
       return;
     }
-    const hidden = !host || !host.isConnected || getWorkbenchLayoutMode(project) === "chat"
+    const hidden = Boolean(workbenchDrag) || !host || !host.isConnected || getWorkbenchLayoutMode(project) === "chat"
       || document.getElementById("workbench-surface")?.hidden || document.getElementById("project-details")?.open
       || document.getElementById("workbench-material-view")?.hidden || material.moreOpen
       || material.pendingDeleteAttachmentId === selected.id
@@ -5559,7 +5559,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function renderRecent() {
     const root = document.getElementById("recent-list");
     const recentProjects = (Array.isArray(state.projects) ? state.projects : []).filter(project => !project.archivedAt);
-    if (!recentProjects.length) { root.innerHTML = '<div class="empty-recent"><strong>还没有进行中的计划</strong><span>上面写下一个想法，就可以开始。</span></div>'; return; }
+    if (!recentProjects.length) { root.innerHTML = '<div class="empty-recent"><span class="empty-recent-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4.5h12A1.5 1.5 0 0 1 19.5 6v14h-15V6A1.5 1.5 0 0 1 6 4.5Z"/><path d="M8.5 9h7M8.5 12.5h7M8.5 16h4"/></svg></span><strong>还没有进行中的计划</strong><span>新建计划后，会显示在这里。</span></div>'; return; }
     root.innerHTML = recentProjects.slice(0, 3).map(project => `<button class="recent-item" data-open-project="${escapeHtml(project.id)}" ${project.id === activeProjectId ? 'aria-current="page"' : ""}><span><span class="recent-title">${escapeHtml((project.idea || project.goalSummary || "未命名计划").slice(0, 90))}</span><span class="recent-meta">${escapeHtml(project.domain || "通用计划")} · ${formatDate(project.createdAt)}</span></span></button>`).join("");
     root.querySelectorAll("[data-open-project]").forEach(button => button.addEventListener("click", () => { const p = state.projects.find(item => item.id === button.dataset.openProject); if (p) renderProject(p); }));
   }

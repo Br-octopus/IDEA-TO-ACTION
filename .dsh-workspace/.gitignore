@@ -1,0 +1,14 @@
+node_modules/
+dist/
+release/
+.cache/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+
+
+docs/acceptance/forward-step-dsh/local-profile-backups/
+
