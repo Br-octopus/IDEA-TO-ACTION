@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          ".dsh-workspace/docs/superpowers/specs/assets/2026-11-15-workbench-layout.html"
+        ],
+        "createdAt": "2026-11-15T03:01:07.328Z",
+        "reason": "Agent: inspected rendered six-state static desktop mockup; viewport/body are edge-to-edge panel frames; toolbar, tabs and filebar center text within fixed-height rows. Their child text is visibly inset; preserve panel boundaries."
+      },
+      {
+        "rule": "nested-cards",
+        "value": "*",
+        "files": [
+          ".dsh-workspace/docs/superpowers/specs/assets/2026-11-15-workbench-layout.html"
+        ],
+        "createdAt": "2026-11-15T03:01:07.443Z",
+        "reason": "Agent: static specification embeds desktop window specimens containing real composer and document boundaries; screenshot confirms these are window/content boundaries, not nested dashboard cards. Exception applies only to this archived design sheet."
+      }
+    ]
+  }
+}
