@@ -43,8 +43,53 @@
     body { margin: 0; background: var(--paper); color: var(--ink); font-size: 14px; line-height: 1.55; }
     button, input, textarea, select { font: inherit; }
     button { cursor: pointer; }
-    .shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
-    .sidebar { background: #fff; border-right: 1px solid var(--line); padding: 25px 17px 18px; display: flex; flex-direction: column; gap: 28px; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 56px var(--task-sidebar-width,260px) minmax(0, 1fr); }
+    .activity-rail { position: sticky; top: 0; display:flex; flex-direction:column; align-items:center; gap:9px; height:100vh; padding:10px 7px; border-right:1px solid var(--line); background:#f7f8f7; }
+    .activity-rail button { display:grid; place-items:center; width:38px; height:38px; flex:none; padding:0; border:0; border-radius:10px; background:transparent; color:#64716c; }
+    .activity-rail button:hover { background:#e9eeea; color:var(--ink); }
+    .activity-rail button.active { background:#e4ebe6; color:var(--green-dark); }
+    .activity-rail svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+    .activity-rail .rail-brand { margin-bottom:4px; background:var(--green); color:#fff; }
+    .activity-rail .rail-brand:hover { background:var(--green-dark); color:#fff; }
+    .activity-rail .rail-spacer { flex:1; }
+    .activity-rail .rail-separator { width:28px; height:1px; background:var(--line); margin:3px 0; }
+    .activity-rail [data-tooltip] { position:relative; }
+    .activity-rail [data-tooltip]::after { content:attr(data-tooltip); position:absolute; z-index:30; left:45px; top:50%; transform:translateY(-50%); padding:5px 8px; border-radius:6px; background:#24312b; color:#fff; font-size:11px; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .12s; }
+    .activity-rail [data-tooltip]:hover::after, .activity-rail [data-tooltip]:focus-visible::after { opacity:1; }
+    .task-sidebar { min-width:0; height:100vh; position:sticky; top:0; background:#f5f7f5; border-right:1px solid var(--line); padding:14px 12px 10px; display:flex; flex-direction:column; gap:8px; overflow:hidden; }
+    .sidebar-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:42px; padding:0 2px 11px; border-bottom:1px solid var(--line); }
+    .sidebar-header .brand { padding:0 6px; }
+    .sidebar-header .brand-mark { width:27px; height:27px; border-radius:9px; }
+    .sidebar-header .brand-name { font-size:14px; }
+    .sidebar-header .brand-sub { display:none; }
+    .sidebar-scroll { min-width:0; min-height:0; flex:1; overflow-x:hidden; overflow-y:auto; scrollbar-width:thin; }
+    .sidebar-scroll .nav { gap:2px; }
+    .sidebar-scroll .nav-group { display:flex; align-items:center; gap:10px; margin:0 2px; padding:14px 10px 8px; color:var(--muted); font-size:12px; font-weight:650; }
+    .sidebar-scroll .nav-group::after { display:none; }
+    .sidebar-scroll .nav button { gap:9px; min-height:34px; padding:7px 9px; font-size:12px; }
+    .sidebar-recent-list { display:grid; grid-template-columns:minmax(0,1fr); gap:3px; min-width:0; padding:0 2px; }
+    .sidebar-recent-list .empty-recent { display:grid; gap:5px; margin:0; padding:8px 10px; border:0; border-radius:6px; background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
+    .sidebar-recent-list .empty-recent strong { color:var(--ink); font-size:13px; font-weight:650; }
+    .sidebar-recent-list .empty-recent span { color:var(--muted); }
+    .sidebar-recent-list .recent-item { align-items:center; gap:8px; min-width:0; min-height:54px; padding:9px 10px; border:1px solid transparent; border-radius:8px; background:transparent; transition:background .14s ease,border-color .14s ease; }
+    .sidebar-recent-list .recent-item:hover { border-color:#e4eae5; background:#fff; }
+    .sidebar-recent-list .recent-item:active { background:#e7efea; }
+    .sidebar-recent-list .recent-item[aria-current="page"] { border-color:#d6e3d8; background:#edf4ef; }
+    .sidebar-recent-list .recent-item[aria-current="page"] .recent-title { color:var(--green-dark); }
+    .sidebar-recent-list .recent-item:focus-visible { outline:2px solid #4b8b74; outline-offset:2px; }
+    .sidebar-recent-list .recent-item > span:first-child { min-width:0; }
+    .sidebar-recent-list .recent-title { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; font-size:13px; font-weight:650; line-height:1.45; }
+    .sidebar-recent-list .recent-meta { display:block; overflow:hidden; margin-top:4px; color:var(--muted); font-size:12px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
+    .sidebar-toggle { width:30px; height:30px; display:grid; place-items:center; flex:none; padding:0; border:0; border-radius:8px; background:var(--green-soft); color:var(--green-dark); transition:background .14s ease,color .14s ease; }
+    .sidebar-toggle:hover { background:#dcebe1; color:var(--green-dark); }
+    .sidebar-toggle:focus-visible { outline:2px solid #4b8b74; outline-offset:2px; }
+    .sidebar-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.8; }
+    #task-sidebar-divider { position:absolute; inset:0 0 0 auto; width:8px; touch-action:none; cursor:col-resize; z-index:20; }
+    #task-sidebar-divider::before { content:""; position:absolute; inset:0 auto 0 3px; width:2px; background:transparent; }
+    #task-sidebar-divider:hover::before, #task-sidebar-divider:focus-visible::before { background:var(--green); }
+    .shell.sidebar-collapsed { grid-template-columns:56px 0 minmax(0,1fr); }
+    .shell.sidebar-collapsed .task-sidebar { visibility:hidden; padding:0; border:0; }
+    .shell.sidebar-collapsed #task-sidebar-divider { display:none; }
     .brand { display: flex; align-items: center; gap: 11px; padding: 0 10px; }
     .brand-mark { width: 32px; height: 32px; border-radius: 11px; background: var(--green); display: grid; place-items: center; position: relative; overflow: hidden; }
     .brand-mark:before, .brand-mark:after { content: ""; display: block; position: absolute; width: 4px; border-radius: 6px; background: var(--lime); bottom: 8px; }
@@ -64,9 +109,9 @@
     .nav button.active { color: var(--green-dark); background: var(--green-soft); font-weight: 650; }
     .nav-icon { width: 17px; height: 17px; flex: none; display: grid; place-items: center; }
     .nav-icon svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-    .sidebar-foot { margin-top: auto; padding: 15px 12px 4px; border-top: 1px solid var(--line); color: #52615e; font-size: 12px; }
+    .sidebar-foot { display:flex; align-items:center; gap:8px; margin-top:auto; padding:13px 9px 4px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
     .local-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #5d9a6c; margin-right: 6px; }
-    .main { min-width: 0; }
+    .main { min-width:0; min-height:100vh; display:flex; flex-direction:column; }
     .topbar { height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.64); }
     .breadcrumb { color: #52615e; font-size: 12px; }
     .top-right { display: flex; align-items: center; gap: 15px; color: #52615e; font-size: 12px; }
@@ -76,6 +121,11 @@
     .privacy { display: flex; align-items: center; gap: 7px; }
     .privacy svg { width: 15px; height: 15px; stroke: #6d897a; fill: none; stroke-width: 1.7; }
     .content { width: min(1160px, 100%); margin: 0 auto; padding: 42px 42px 70px; }
+    .main.workbench-active { height:100dvh; min-height:0; overflow:hidden; }
+    .main.workbench-active .content { flex:1; min-height:0; width:100%; max-width:none; margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; }
+    .main.workbench-active .topbar { flex:none; }
+    #workbench-surface { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
+    #workbench-surface[hidden], #workbench-task-chat[hidden] { display:none; }
     .view { display: none; animation: rise .22s ease-out; }
     .view.active { display: block; }
     #view-home { width: min(760px, 100%); margin: 10vh auto 0; }
@@ -85,6 +135,14 @@
     #view-home textarea { min-height: 142px; padding: 17px; border-color: #d5dfd8; background: var(--surface); }
     #view-home .form-footer { justify-content: flex-end; margin-top: 12px; }
     #view-home .privacy-note { margin-right: auto; }
+    .main.workbench-active #view-home { width:100%; height:100%; margin:0; padding:32px; display:flex; flex-direction:column; justify-content:center; }
+    .workbench-home-welcome { width:min(720px,100%); margin:auto; }
+    .main.workbench-active #view-home h1 { max-width:680px; font-size:28px; letter-spacing:0; }
+    .main.workbench-active #view-home .lede { max-width:680px; margin-bottom:20px; font-size:14px; }
+    .main.workbench-active #view-home .form-panel { width:100%; }
+    .main.workbench-active #view-home textarea { min-height:128px; max-height:220px; resize:vertical; }
+    #home-import-status { margin:10px 0 0; color:var(--muted); font-size:12px; }
+    #home-import-status[hidden] { display:none; }
     @keyframes rise { from { opacity: .35; transform: translateY(5px); } to { opacity: 1; transform: none; } }
     h1, h2, h3, p { margin-top: 0; }
     h1 { font-size: clamp(28px, 3.1vw, 40px); line-height: 1.2; letter-spacing: -.045em; font-weight: 680; margin-bottom: 10px; }
@@ -450,14 +508,14 @@
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
     .mobile-nav { display: none; }
     @media (max-width: 1000px) {
-      .shell { grid-template-columns: 215px minmax(0, 1fr); }
+      .shell { grid-template-columns: 52px 214px minmax(0, 1fr); }
       .content { padding: 34px 28px 55px; }
       .topbar { padding: 0 28px; }
       .plan-grid { grid-template-columns: minmax(0, 1fr) 260px; gap: 14px; }
     }
     @media (max-width: 760px) {
       .shell { display: block; padding-bottom: 67px; }
-      .sidebar { display: none; }
+      .task-sidebar, .activity-rail { display:none; }
       .topbar { height: 54px; padding: 0 18px; }
       .content { padding: 28px 18px 40px; }
       .privacy span { display: none; }
@@ -484,14 +542,20 @@
     }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
     /* 桌面端对话式工作台 */
-    .workbench-toolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; margin:10px 0 12px; }
-    .workbench-toolbar-label { display:grid; gap:3px; }
+    .workbench-toolbar { min-height:54px; display:flex; flex:none; align-items:center; justify-content:space-between; gap:14px; margin:0; padding:6px 16px; border-bottom:1px solid var(--line); background:#fff; }
+    .workbench-toolbar-actions { display:flex; align-items:center; gap:6px; margin-left:auto; }
     .workbench-layout-switch { display:flex; gap:3px; padding:3px; border:1px solid var(--line); border-radius:9px; background:#fff; }
-    .workbench-layout-switch button { border:0; border-radius:7px; padding:7px 10px; background:transparent; color:var(--muted); font-size:12px; }
+    .workbench-layout-switch button { display:grid; place-items:center; width:34px; height:34px; padding:0; border:0; border-radius:7px; background:transparent; color:var(--muted); }
+    .workbench-layout-switch svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
     .workbench-layout-switch button[aria-pressed=true] { background:var(--green-soft); color:var(--green-dark); font-weight:650; }
-    .workbench-shell { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); height:min(68vh,720px); min-height:480px; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
+    .workbench-layout-switch button[aria-disabled=true] { opacity:.45; cursor:not-allowed; }
+    .workbench-toolbar-actions [data-tooltip] { position:relative; }
+    .workbench-toolbar-actions [data-tooltip]::after { content:attr(data-tooltip); position:absolute; z-index:60; right:0; top:calc(100% + 6px); padding:5px 8px; border-radius:6px; background:#24312b; color:#fff; font-size:11px; white-space:nowrap; opacity:0; pointer-events:none; }
+    .workbench-toolbar-actions [data-tooltip]:hover::after, .workbench-toolbar-actions [data-tooltip]:focus-visible::after { opacity:1; }
+    .workbench-shell { position:relative; flex:1; min-height:0; height:auto; overflow:hidden; display:grid; grid-template-columns:minmax(0,var(--chat-width,50%)) 8px minmax(0,1fr); background:var(--surface); }
     .workbench-chat-pane, .workbench-preview-pane { min-width:0; min-height:0; display:flex; flex-direction:column; }
-    .workbench-chat-pane { border-right:1px solid var(--line); }
+    .workbench-chat-pane { overflow:hidden; }
+    #workbench-task-chat { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
     .workbench-pane-heading { min-height:64px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); }
     .workbench-pane-heading h2 { margin:0; font-size:15px; }
     .workbench-pane-heading p { margin:3px 0 0; color:var(--muted); font-size:12px; }
@@ -518,8 +582,16 @@
     .workbench-composer-footer { display:flex; align-items:center; gap:9px; padding-top:7px; border-top:1px solid #eef1ed; }
     .workbench-composer-footer span { flex:1; color:var(--muted); font-size:11px; }
     .workbench-composer-footer button { font-size:12px; }
-    .workbench-preview-pane { padding-bottom:10px; }
-    .workbench-preview-tabs { display:flex; gap:16px; padding:0 16px; border-bottom:1px solid var(--line); }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    .workbench-preview-pane { padding-bottom:0; }
+    .workbench-preview-bar { display:flex; flex:none; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:0 12px 0 16px; border-bottom:1px solid var(--line); background:var(--surface); }
+    .workbench-preview-tabs { display:flex; flex:1; min-width:0; gap:16px; align-self:stretch; padding:0; border:0; }
+    .workbench-preview-actions { display:flex; flex:none; align-items:center; gap:4px; }
+    .workbench-icon-button { display:grid; place-items:center; width:34px; height:34px; flex:none; padding:0; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--muted); }
+    .workbench-icon-button:hover { background:#edf4ef; color:var(--green-dark); }
+    .workbench-icon-button:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+    .workbench-icon-button[hidden] { display:none; }
+    .workbench-icon-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
     .workbench-preview-tabs button { padding:10px 2px; border:0; border-radius:0; border-bottom:2px solid transparent; background:transparent; color:var(--muted); font-size:12px; }
     .workbench-preview-tabs button[aria-selected=true] { border-color:var(--green); color:var(--green-dark); font-weight:650; }
     .workbench-prompt-preview { flex:1; min-height:0; margin:0; padding:16px; overflow:auto; color:#37433c; background:#fbfcfa; font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -591,14 +663,15 @@
     .workbench-material-toolbar select, .workbench-material-toolbar input { width:auto; min-width:0; min-height:34px; padding:5px 8px; font-size:12px; }
     .workbench-material-toolbar input { flex:1 1 150px; }
     .workbench-material-toolbar button { padding:7px 10px; font-size:12px; }
-    .workbench-annotation-editor { display:grid; flex:0 0 min(320px,34%); grid-template-columns:minmax(0,1fr); align-content:start; gap:8px; min-width:250px; min-height:0; max-height:100%; overflow:auto; margin:0; padding:12px; border-left:1px solid var(--line); background:#fff; }
-    .workbench-annotation-field { display:grid; gap:4px; min-width:0; color:var(--muted); font-size:11px; }
-    .workbench-annotation-field input, .workbench-annotation-field select { width:100%; min-width:0; min-height:34px; padding:6px 8px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); font-size:12px; }
+    .workbench-annotation-editor { display:grid; flex:0 0 min(320px,34%); grid-template-columns:minmax(0,1fr); align-content:start; gap:12px; min-width:250px; min-height:0; max-height:100%; overflow:auto; margin:0; padding:14px; border-left:1px solid var(--line); background:#fbfcfa; }
+    .workbench-annotation-editor-title { margin:0; padding-bottom:10px; border-bottom:1px solid var(--line); color:var(--ink); font-size:14px; font-weight:650; line-height:1.35; }
+    .workbench-annotation-field { display:grid; gap:5px; min-width:0; color:var(--muted); font-size:12px; }
+    .workbench-annotation-field input, .workbench-annotation-field select { width:100%; min-width:0; min-height:38px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); font-size:13px; }
     .workbench-annotation-options, .workbench-annotation-help { grid-column:1/-1; }
-    .workbench-annotation-options summary { width:max-content; max-width:100%; color:var(--muted); cursor:pointer; font-size:11px; }
+    .workbench-annotation-options summary { width:max-content; max-width:100%; color:var(--muted); cursor:pointer; font-size:12px; }
     .workbench-annotation-options[open] summary { margin-bottom:8px; color:var(--green-dark); }
     .workbench-annotation-option-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-    .workbench-annotation-help { margin:0; color:var(--muted); font-size:11px; }
+    .workbench-annotation-help { margin:0; color:var(--muted); font-size:12px; line-height:1.55; }
     .workbench-zoom-control { display:inline-flex; align-items:center; gap:4px; padding:2px 4px; border:1px solid var(--line); border-radius:8px; background:#fff; }
     .workbench-zoom-control button { min-width:30px; border:0; background:transparent; color:var(--green-dark); }
     .workbench-zoom-control output { min-width:42px; color:var(--muted); font-size:11px; text-align:center; }
@@ -637,89 +710,117 @@
     .workbench-task-preview dl div { padding-bottom:10px; border-bottom:1px solid #edf0ec; }
     .workbench-task-preview dt { color:var(--muted); font-size:11px; }
     .workbench-task-preview dd { margin:4px 0 0; overflow-wrap:anywhere; }
-    .workbench-preview-footer { display:flex; align-items:flex-start; gap:7px; padding:9px 15px 0; color:var(--muted); font-size:11px; }
-    .workbench-preview-footer .local-dot { flex:none; margin-top:5px; }
-    .workbench-details { margin-top:14px; }
-    .workbench-details > summary { width:max-content; max-width:100%; padding:8px 0; color:var(--muted); cursor:pointer; font-size:12px; }
-    .workbench-details[open] > summary { margin-bottom:10px; color:var(--green-dark); }
-    .workbench-shell[data-layout=chat] { grid-template-columns:minmax(0,1fr); }
-    .workbench-shell[data-layout=chat] .workbench-preview-pane { display:none; }
-    .workbench-shell[data-layout=preview] { grid-template-columns:minmax(0,1fr); }
-    .workbench-shell[data-layout=preview] .workbench-chat-pane { display:none; }
-    @media (max-width:900px) { .workbench-shell { grid-template-columns:minmax(0,1fr) minmax(280px,.85fr); } }
+    .workbench-preview-footer { display:flex; flex:none; align-items:center; gap:7px; min-height:40px; padding:7px 15px; border-top:1px solid var(--line); background:var(--surface); color:var(--muted); font-size:12px; line-height:1.4; }
+    .workbench-preview-footer .local-dot { flex:none; }
+    .workbench-details:not([open]) { display:none; }
+    .workbench-details[open] { position:absolute; inset:0; z-index:50; overflow:auto; padding:12px 24px 24px; border:1px solid var(--line); background:var(--paper); box-shadow:0 8px 30px rgba(24,43,44,.14); }
+    .workbench-details > summary { position:sticky; top:0; z-index:1; width:max-content; max-width:100%; margin:0 0 12px auto; padding:8px 12px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--green-dark); cursor:pointer; font-size:12px; list-style:none; }
+    .workbench-details > summary::-webkit-details-marker { display:none; }
+    .workbench-details #view-project { animation:none; }
+    .workbench-shell[data-layout="split"] { grid-template-columns:minmax(0,var(--chat-width,50%)) 8px minmax(0,1fr); }
+    .workbench-shell[data-layout="chat"], .workbench-shell[data-layout="preview"] { grid-template-columns:minmax(0,1fr); }
+    .workbench-shell[data-layout="chat"] .workbench-preview-pane, .workbench-shell[data-layout="preview"] .workbench-chat-pane { display:none; }
+    #workbench-divider, #task-sidebar-divider { touch-action:none; cursor:col-resize; }
+    #workbench-divider { position:relative; z-index:20; width:8px; background:transparent; }
+    #workbench-divider::before { content:""; position:absolute; inset:0 auto 0 3px; width:2px; background:var(--line); }
+    #workbench-divider:hover::before, #workbench-divider:focus-visible::before { background:var(--green); }
+    .workbench-shell[data-layout="chat"] #workbench-divider { position:absolute; inset:0 0 0 auto; }
+    .workbench-shell[data-layout="preview"] #workbench-divider { position:absolute; inset:0 auto 0 0; }
+    #workbench-divider:focus-visible, #task-sidebar-divider:focus-visible { outline:2px solid var(--green); outline-offset:-2px; }
+    .workbench-resizing, .workbench-resizing * { cursor:col-resize !important; user-select:none !important; }
+    .workbench-resizing iframe { pointer-events:none; }
+    .workbench-answer-options { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
+    .workbench-answer-options button { display:inline-flex; align-items:center; gap:6px; }
+    .workbench-answer-options strong { color:var(--green-dark); font-size:11px; }
+    .workbench-question-state { margin-top:8px !important; color:var(--muted); font-size:11px; }
+    .workbench-home-preview { flex:1; min-height:0; display:grid; place-items:center; padding:24px; background:#f8faf8; text-align:center; color:var(--muted); }
+    .workbench-home-preview[hidden] { display:none; }
+    .workbench-home-preview > div { display:grid; justify-items:center; gap:10px; width:min(340px,100%); }
+    .workbench-home-preview-icon { display:grid; place-items:center; width:44px; height:44px; margin-bottom:2px; border:1px solid #d9e5dd; border-radius:13px; background:#edf4ef; color:var(--green-dark); }
+    .workbench-home-preview-icon svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+    .workbench-home-preview h2 { margin:0; color:var(--ink); font-size:15px; font-weight:650; }
+    .workbench-home-preview p { max-width:34ch; margin:0; font-size:12px; line-height:1.65; }
+    .workbench-home-preview button { min-height:36px; margin-top:3px; }
+    .workbench-material-view[hidden] { display:none; }
+    .workbench-material-empty { display:grid; place-content:center; justify-items:center; gap:8px; flex:1; min-height:0; padding:24px; text-align:center; }
+    .workbench-material-empty p { margin:0; color:var(--muted); }
+    .workbench-material-empty [role="alert"] { max-width:520px; color:var(--orange); }
+    .workbench-pdf-viewer-host, .workbench-office-viewer-host { height:100%; min-height:0; }
     @container (max-width:760px) { .workbench-material-tabs { flex:1 1 100%; max-width:100%; } .workbench-annotation-editor { position:absolute; z-index:9; inset:8px 8px 8px auto; width:min(320px,calc(100% - 16px)); min-width:0; max-height:calc(100% - 16px); border:1px solid var(--line); border-radius:9px; box-shadow:0 8px 24px #24372b22; } }
     @media (max-width:680px) { .workbench-annotation-editor { grid-template-columns:minmax(0,1fr); } .workbench-annotation-options, .workbench-annotation-help { grid-column:1; } .workbench-annotation-option-grid { grid-template-columns:minmax(0,1fr); } }
-    @media (max-width:680px) { .workbench-toolbar { align-items:flex-start; flex-direction:column; } .workbench-layout-switch { max-width:100%; } .workbench-layout-switch button { padding:7px 8px; } .workbench-shell { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(300px,1fr) minmax(280px,.9fr); height:auto; min-height:680px; } .workbench-chat-pane { border-right:0; border-bottom:1px solid var(--line); } .workbench-message { max-width:94%; } .workbench-composer-footer span { display:none; } }
+    @media (max-width:680px) { .workbench-annotation-editor { grid-template-columns:minmax(0,1fr); } .workbench-annotation-options, .workbench-annotation-help { grid-column:1; } .workbench-annotation-option-grid { grid-template-columns:minmax(0,1fr); } .workbench-toolbar { padding:5px 8px; } .workbench-toolbar-actions { gap:3px; } .workbench-layout-switch button { width:31px; height:32px; } .main.workbench-active #view-home { padding:20px 16px; } }
+    @media (max-width:760px) { .main.workbench-active { height:calc(100dvh - 67px); } .workbench-details[open] { padding:10px 12px 18px; } }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true"></div>
-        <div><div class="brand-name">向前一步</div><div class="brand-sub">IDEA TO ACTION</div></div>
+  <div class="shell sidebar-collapsed" id="app-shell">
+    <aside class="activity-rail" aria-label="应用导航">
+      <button class="rail-brand" type="button" data-view="home" data-nav-key="workspace-new" data-tooltip="新任务" aria-label="新任务"><span class="brand-mark" aria-hidden="true"></span></button>
+      <button class="rail-toggle" type="button" id="sidebar-toggle" aria-label="展开任务列表" aria-expanded="false" data-tooltip="展开任务列表"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+      <nav class="nav" aria-label="主导航">
+        <button class="active" type="button" data-view="home" data-nav-key="workspace-new" data-tooltip="新任务" aria-label="新任务"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></button>
+        <button type="button" data-view="plans" data-nav-key="workspace-plans" data-tooltip="我的计划" aria-label="我的计划"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg></span></button>
+        <button type="button" data-view="prompt-agent" data-nav-key="workspace-prompts" data-tooltip="提示词工作台" aria-label="提示词工作台"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg></span></button>
+        <span class="rail-separator" aria-hidden="true"></span>
+        <button type="button" data-view="references" data-nav-key="library" data-tooltip="资料库" aria-label="资料库"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span></button>
+        <button type="button" data-view="library" data-nav-key="favorites" data-tooltip="提示词收藏" aria-label="提示词收藏"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17M10 7h6M10 11h6"/></svg></span></button>
+        <button type="button" data-view="article" data-nav-key="writing" data-tooltip="写作工作台" aria-label="写作工作台"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span></button>
+        <button type="button" data-view="academic-workbench" data-nav-key="research-academic" data-tooltip="学术研究" aria-label="学术研究"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16M6 5v14m12-14v14M4 19h16M9 9h6M9 13h6"/></svg></span></button>
+        <button type="button" data-view="social-research" data-nav-key="research-social" data-tooltip="社媒研究" aria-label="社媒研究"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg></span></button>
+        <button type="button" data-view="article" data-nav-key="memory" data-open-memory="true" data-tooltip="记忆与偏好" aria-label="记忆与偏好"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V19h8v-3.3A7 7 0 0 0 12 3Z"/><path d="M9 22h6M9 9h.01M15 9h.01M9 13h6"/></svg></span></button>
+      </nav>
+      <span class="rail-spacer"></span>
+      <button type="button" data-view="settings" data-nav-key="settings" data-tooltip="设置" aria-label="设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1-2.1M7.7 16.3l-2.1-2.1"/><circle cx="12" cy="12" r="3.5"/></svg></span></button>
+    </aside>
+    <aside class="task-sidebar" aria-label="最近任务">
+      <div class="sidebar-header">
+        <div class="brand"><div class="brand-mark" aria-hidden="true"></div><div class="brand-name">向前一步</div></div>
+        <button class="sidebar-toggle" type="button" data-view="home" data-nav-key="workspace-new" title="新建任务" aria-label="新建任务"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
       </div>
-      <div>
-        <nav class="nav" aria-label="主导航">
-          <div class="nav-group">工作台</div>
-          <button class="active" data-view="home" data-nav-key="workspace-new"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>新任务</button>
-          <button data-view="plans" data-nav-key="workspace-plans"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg></span>我的计划</button>
-          <button data-view="prompt-agent" data-nav-key="workspace-prompts"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg></span>提示词工作台</button>
-          <div class="nav-group">资料库</div>
-          <button data-view="references" data-nav-key="library"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span>资料库</button>
-          <div class="nav-group">提示词收藏</div>
-          <button data-view="library" data-nav-key="favorites"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17M10 7h6M10 11h6"/></svg></span>已收藏提示词</button>
-          <div class="nav-group">写作</div>
-          <button data-view="article" data-nav-key="writing"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span>写作工作台</button>
-          <div class="nav-group">研究</div>
-          <button data-view="academic-workbench" data-nav-key="research-academic"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16M6 5v14m12-14v14M4 19h16M9 9h6M9 13h6"/></svg></span>学术研究</button>
-          <button data-view="social-research" data-nav-key="research-social"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg></span>社媒研究</button>
-          <div class="nav-group">记忆与偏好</div>
-          <button data-view="article" data-nav-key="memory" data-open-memory="true"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V19h8v-3.3A7 7 0 0 0 12 3Z"/><path d="M9 22h6M9 9h.01M15 9h.01M9 13h6"/></svg></span>管理记忆</button>
-          <div class="nav-group">设置</div>
-          <button data-view="settings" data-nav-key="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1-2.1M7.7 16.3l-2.1-2.1"/><circle cx="12" cy="12" r="3.5"/></svg></span>设置</button>
-        </nav>
+      <div class="sidebar-scroll">
+        <div class="nav-group">最近任务</div>
+        <div class="sidebar-recent-list" id="recent-list"></div>
       </div>
       <div class="sidebar-foot"><span class="local-dot"></span>数据保存在本机</div>
+      <div id="task-sidebar-divider" role="separator" tabindex="0" aria-orientation="vertical" aria-label="调整任务列表宽度" title="拖动调节任务列表宽度"></div>
     </aside>
-    <main class="main">
+    <main class="main workbench-active">
       <header class="topbar">
         <div class="breadcrumb" id="breadcrumb">工作台　/　新建规划</div>
         <div class="top-right"><div class="privacy"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.7 2.9 8 7 10 4.1-2 7-5.3 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>本机保存 · 调用 Agent 时发送至已配置模型服务</span></div><span class="service-status" id="service-status">检查服务中…</span></div>
       </header>
       <div class="content">
-        <section class="view active" id="view-home">
-          <h1>现在，想先推进什么？</h1>
-          <p class="lede">先用自己的话说说目标或问题。不用选分类，也不用先填背景；Agent 只会在确实影响方案时，在对话里追问。</p>
-          <form class="form-panel" id="idea-form">
-            <label class="field-label" for="idea">从这里开始</label>
-            <textarea id="idea" required placeholder="例如：我想把现在的周报改得更清楚，也让团队少花时间整理……"></textarea>
-            <div class="form-footer">
-              <span class="privacy-note"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 5 6v5c0 4.7 2.9 8 7 10 4.1-2 7-5.3 7-10V6l-7-3Z"/></svg>本机保存；调用 Agent 时会发送至已配置模型服务</span>
-              <button class="button-secondary" type="submit" data-start-with-material="true">添加资料后开始</button>
-              <button class="button-primary" type="submit">开始对话<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
-            </div>
-          </form>
-          <div class="section-heading"><div><h2>最近的计划</h2><p>保存后可以回来继续，也可以复制新的 AI 指令</p></div></div>
-          <div class="recent-list" id="recent-list"></div>
-        </section>
-
-        <section class="view" id="view-project">
-          <div class="plan-header">
-            <div class="plan-title"><div class="eyebrow" id="project-domain">计划工作台</div><h1 id="project-title">你的计划</h1><p id="project-subtitle">从第一步开始，边做边调整。</p></div>
-            <div class="plan-actions"><button class="button-secondary" id="back-home"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>返回</button></div>
-          </div>
+        <div id="workbench-surface">
           <div class="workbench-toolbar">
-            <div class="workbench-toolbar-label"><span class="step-tag">当前任务工作台</span><span class="library-meta">对话和修改提示词保存在本机</span></div>
-            <div class="workbench-layout-switch" role="group" aria-label="工作区布局">
-              <button type="button" data-workbench-layout="split" aria-pressed="true">双栏</button>
-              <button type="button" data-workbench-layout="chat" aria-pressed="false">专注对话</button>
-              <button type="button" data-workbench-layout="preview" aria-pressed="false">专注查看</button>
+            <div class="workbench-toolbar-actions">
+              <button class="workbench-icon-button" type="button" id="back-home" title="返回新任务" aria-label="返回新任务" hidden><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m15 18-6-6 6-6"/></svg></button>
+              <div class="workbench-layout-switch" role="group" aria-label="工作区布局">
+                <button type="button" data-workbench-layout="split" aria-pressed="false" title="双栏" aria-label="双栏" data-tooltip="双栏"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></button>
+                <button type="button" data-workbench-layout="chat" aria-pressed="true" title="专注对话" aria-label="专注对话" data-tooltip="专注对话"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+                <button type="button" data-workbench-layout="preview" aria-pressed="false" title="专注查看" aria-label="专注查看" data-tooltip="专注查看"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h6"/></svg></button>
+              </div>
             </div>
+            <span class="sr-only" id="workbench-snap-status" role="status" aria-live="polite"></span>
           </div>
-          <section class="workbench-shell" id="workbench-shell" data-layout="split" aria-label="任务对话与提示词预览">
+          <section class="workbench-shell" id="workbench-shell" data-layout="chat" aria-label="任务对话与提示词预览">
             <section class="workbench-chat-pane" aria-label="任务对话">
-              <div class="workbench-pane-heading"><div><h2>任务对话</h2><p>直接说你的想法即可；Agent 会结合上下文给出一个建议，只有关键信息不足时才追问。</p></div><button type="button" class="button-quiet" id="workbench-open-details">任务详情</button></div>
+              <section class="view active" id="view-home">
+                <div class="workbench-home-welcome">
+                  <h1>现在，想先推进什么？</h1>
+                  <p class="lede" id="project-title">新任务</p>
+                  <form class="form-panel" id="idea-form">
+                    <label class="field-label" for="idea">从这里开始</label>
+                    <textarea id="idea" rows="4" placeholder="例如：我想把现在的周报改得更清楚，也让团队少花时间整理……"></textarea>
+                    <div class="form-footer">
+                      <span class="privacy-note">本机保存；调用 Agent 时会发送至已配置模型服务</span>
+                      <button class="button-secondary" type="button" data-start-with-material="true">添加资料</button>
+                      <button class="button-primary" type="submit">开始对话<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+                    </div>
+                    <p id="home-import-status" role="status" hidden></p>
+                  </form>
+                </div>
+              </section>
+              <div id="workbench-task-chat" hidden>
               <details class="workbench-chat-materials" id="workbench-chat-materials" hidden></details>
               <div class="workbench-messages" id="workbench-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
               <form class="workbench-composer" id="workbench-message-form">
@@ -727,12 +828,15 @@
                 <div class="workbench-agent-status" id="workbench-agent-status" aria-live="polite"></div>
                 <div class="workbench-composer-footer"><span>Enter 发送 · Shift+Enter 换行</span><button class="button-primary" type="submit">发送</button></div>
               </form>
+              </div>
             </section>
+            <div id="workbench-divider" role="separator" tabindex="0" aria-orientation="vertical" aria-label="调整对话与预览宽度" title="拖动调宽；向两端拖动切换专注模式"></div>
             <aside class="workbench-preview-pane" aria-label="当前任务内容预览">
-              <div class="workbench-pane-heading"><div><h2 id="workbench-preview-heading">资料</h2><p id="workbench-preview-description">查看图片、文档、PPT 与网页，在内容上标记修改意见。</p></div><div class="button-row"><button type="button" class="button-secondary" id="workbench-add-material">添加资料</button><button type="button" class="button-secondary" id="workbench-copy-prompt">复制提示词</button></div></div>
-              <div class="workbench-preview-tabs" role="tablist" aria-label="工作区预览内容"><button type="button" role="tab" data-workbench-preview="material" aria-selected="true">资料</button><button type="button" role="tab" data-workbench-preview="prompt" aria-selected="false">修改提示词</button><button type="button" role="tab" data-workbench-preview="task" aria-selected="false">任务摘要</button></div>
-              <div class="workbench-material-view" id="workbench-material-view" role="tabpanel" aria-label="资料查看与批注"></div>
-              <p class="workbench-prompt-status" id="workbench-prompt-status" role="status" hidden></p>
+              <div class="workbench-preview-bar"><div class="workbench-preview-tabs" role="tablist" aria-label="工作区预览内容"><button type="button" role="tab" data-workbench-preview="material" aria-selected="true">资料</button><button type="button" role="tab" data-workbench-preview="prompt" aria-selected="false">修改提示词</button><button type="button" role="tab" data-workbench-preview="task" aria-selected="false">任务摘要</button></div><div class="workbench-preview-actions"><span class="sr-only" id="workbench-preview-heading">资料</span><button type="button" class="workbench-icon-button" id="workbench-add-material" title="添加资料" aria-label="添加资料"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button type="button" class="workbench-icon-button" id="workbench-copy-prompt" title="复制提示词" aria-label="复制提示词"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></div></div>
+              <span class="sr-only" id="workbench-preview-description">查看图片、文档、PPT 与网页，在内容上标记修改意见。</span>
+              <div class="workbench-home-preview" id="workbench-home-preview" hidden></div>
+              <div class="workbench-material-view" id="workbench-material-view" role="tabpanel" aria-label="资料查看与批注" tabindex="-1"></div>
+              <div class="workbench-prompt-status" id="workbench-prompt-status" role="status" hidden></div>
               <textarea class="workbench-prompt-editor" id="workbench-prompt-preview" role="tabpanel" aria-label="可编辑的修改提示词" hidden></textarea>
               <div class="workbench-prompt-actions" id="workbench-prompt-actions" hidden><button type="button" class="button-secondary" id="workbench-regenerate-prompt">按当前来源更新</button><button type="button" class="button-secondary" data-workbench-next-prompt-batch hidden>下一批</button><button type="button" class="button-secondary" data-workbench-carry-writing>带入写作工作台</button><details class="workbench-prompt-sources" id="workbench-prompt-sources"><summary>查看引用来源</summary><div id="workbench-prompt-source-list"></div></details></div>
               <details class="workbench-prompt-history" id="workbench-prompt-history" hidden><summary>提示词历史版本（最近 10 版）</summary><div id="workbench-prompt-history-list"></div></details>
@@ -741,7 +845,8 @@
             </aside>
           </section>
           <details class="workbench-details" id="project-details">
-            <summary>查看完整计划、执行步骤和复盘工具</summary>
+            <summary aria-label="关闭任务详情">关闭任务详情</summary>
+            <section class="view" id="view-project">
           <div class="notice"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span><strong>这份指令已根据你的想法定制。</strong>你可以复制后交给任意 AI；如果本地服务已配置模型，也可以先预览发送内容，再让内置模型只负责分析与生成建议。本工具不会直接替你完成文章、PPT、代码或现实任务。</span></div>
           <div class="plan-grid">
             <div class="plan-main">
@@ -819,8 +924,9 @@
               <div class="aside-card"><h3>保存这条提示词</h3><p>实际使用后，可以保存多个版本，并手动标记哪些经过你的测试。</p><button class="button-secondary" id="save-master" style="width:100%">保存到提示词库</button></div>
             </aside>
           </div>
+            </section>
           </details>
-        </section>
+        </div>
 
         <section class="view" id="view-plans">
           <div class="eyebrow">继续你已经开始的事</div><h1>我的计划</h1><p class="lede">搜索并继续原计划。归档只会收起记录，不会删除对话、资料、批注或提示词版本；恢复后继续使用同一条计划。</p>
@@ -1173,6 +1279,7 @@
   <script src="/prototype/academic-publishing-ui.js"></script>
   <script src="/prototype/ppt-feedback-ui.js"></script>
   <script src="/prototype/workbench-dialogue.js"></script>
+  <script src="/prototype/workbench-layout.js"></script>
   <script src="/prototype/pdfjs-loader.js"></script>
   <script src="/prototype/pdf-text-anchor.js"></script>
   <script src="/prototype/app.js"></script>

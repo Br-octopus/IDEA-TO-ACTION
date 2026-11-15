@@ -9,10 +9,12 @@ const saveView = app.match(/  function saveWorkbenchViewState\(\) \{[\s\S]*?\n  
 
 function fixture() {
   const listeners = new Map();
+  const workbenchSessionLayouts = new Map([['task', { mode: 'split', ratio: 0.5, lastSide: 'chat' }]]);
   const scroll = { scrollLeft: 0, scrollTop: 125 };
   const root = {
     querySelector: selector => selector === '.workbench-material-scroll' ? scroll : null,
-    addEventListener: (event, listener) => listeners.set(event, listener)
+    addEventListener: (event, listener) => listeners.set(event, listener),
+    focus() { this.focused = true; }
   };
   const material = {
     attachments: [{ id: 'old', kind: 'docx' }, { id: 'new', kind: 'html' }],
@@ -23,7 +25,14 @@ function fixture() {
     state: { projects: [{ id: 'task', workbenchAttachmentId: 'old', workbenchLayout: 'split', workbenchViewerState: { old: { pageIndex: 0, zoom: 1, scrollLeft: 0, scrollTop: 0 } } }] },
     activeProjectId: 'task', workbenchViewerSaveTimer: null, clearTimeout, setTimeout,
     document: { getElementById: () => root, querySelectorAll: () => [], querySelector: () => null },
+    activeView: 'project', workbenchSessionLayouts,
     desktopApi: { pptFeedback: {} },
+    getWorkbenchLayoutMode(project) { return workbenchSessionLayouts.get(project.id)?.mode || 'chat'; },
+    getWorkbenchSessionLayout(project) {
+      if (!workbenchSessionLayouts.has(project.id)) workbenchSessionLayouts.set(project.id, { mode: 'chat', ratio: 0.5, lastSide: 'chat' });
+      return workbenchSessionLayouts.get(project.id);
+    },
+    applyWorkbenchLayout() {}, scheduleWorkbenchHtmlPreviewSync() {},
     getWorkbenchViewerState(project, id) { return project.workbenchViewerState[id]; },
     getWorkbenchMaterialState: () => material,
     renderWorkbenchMaterial() {}, renderWorkbench() {}, refreshWorkbenchMaterials: async () => {},
@@ -89,7 +98,7 @@ test('PDF 查看器重建时保留页内滚动，不被页码复位事件覆盖'
 
 test('专注对话隐藏资料时不把 PDF 阅读位置覆盖为零', () => {
   const { context } = fixture();
-  context.state.projects[0].workbenchLayout = 'chat';
+  context.workbenchSessionLayouts.get('task').mode = 'chat';
   context.state.projects[0].workbenchViewerState.old.pdfScrollTop = 1518;
   context.document.getElementById().querySelector = selector => selector === '.workbench-material-scroll'
     ? { scrollLeft: 0, scrollTop: 0 } : selector === '.workbench-pdf-scroll'
@@ -119,7 +128,7 @@ for (const kind of ['image', 'pdf', 'docx', 'pptx']) {
         ? { dataset: { workbenchLocateAnnotation: 'drawing' } } : null } });
       const project = context.state.projects[0];
       assert.equal(project.workbenchPreviewMode, 'material');
-      assert.equal(project.workbenchLayout, 'preview');
+      assert.equal(context.getWorkbenchLayoutMode(project), 'split');
       assert.equal(project.workbenchViewerState.old.pageIndex, pageIndex);
       if (['docx', 'pptx'].includes(kind)) assert.equal(navigated, pageIndex);
     });
@@ -143,24 +152,29 @@ for (const kind of ['pdf', 'docx', 'pptx']) {
     assert.equal(project.workbenchViewerState.old.pageIndex, 1);
     assert.equal(project.workbenchViewerState.old.scrollTop, 125);
     assert.equal(project.workbenchPreviewMode, 'material');
-    assert.equal(project.workbenchLayout, 'preview');
-    assert.equal(material.annotationListOpen, true);
+    assert.equal(context.getWorkbenchLayoutMode(project), 'split');
     assert.deepEqual(Array.from(project.workbenchClosedAttachmentIds), ['new']);
     assert.equal(locatedAnnotationId, 'note');
   });
 }
 
 for (const [attribute, field, value, next] of [
-  ['layout', 'workbenchLayout', 'preview', '  document.querySelectorAll("[data-workbench-preview]")'],
+  ['layout', 'mode', 'preview', '  document.querySelectorAll("[data-workbench-preview]")'],
   ['preview', 'workbenchPreviewMode', 'prompt', '  document.getElementById("workbench-copy-prompt")']
 ]) {
   test('保存滚动后切换 ' + attribute + ' 写入当前任务并可重载', () => {
     const { context } = fixture();
-    const button = { dataset: { [attribute === 'layout' ? 'workbenchLayout' : 'workbenchPreview']: value }, addEventListener(event, handler) { this.click = handler; } };
+    context.getActiveProject = () => context.state.projects[0];
+    context.persist = () => {};
+    const button = {
+      dataset: { [attribute === 'layout' ? 'workbenchLayout' : 'workbenchPreview']: value },
+      getAttribute: name => name === 'aria-disabled' ? 'false' : null,
+      addEventListener(event, handler) { this.click = handler; }
+    };
     context.document.querySelectorAll = () => [button];
     vm.runInContext(section('  document.querySelectorAll("[data-workbench-' + attribute + ']").forEach(button => button.addEventListener', next), context);
     button.click();
-    assert.equal(context.state.projects[0][field], value);
+    assert.equal(attribute === 'layout' ? context.workbenchSessionLayouts.get('task')[field] : context.state.projects[0][field], value);
     assert.equal(context.state.projects[0].workbenchViewerState.old.scrollTop, 125);
   });
 }
@@ -224,7 +238,7 @@ test('保存滚动后跳转 PDF 批注保留页码和专注模式', async () => 
   await listeners.get('click')({ target: { closest: selector => selector === '[data-workbench-locate-annotation]' ? { dataset: { workbenchLocateAnnotation: 'note' } } : null } });
   const project = context.state.projects[0];
   assert.equal(project.workbenchAttachmentId, 'pdf');
-  assert.equal(project.workbenchLayout, 'preview');
+  assert.equal(context.getWorkbenchLayoutMode(project), 'split');
   assert.equal(project.workbenchPreviewMode, 'material');
   assert.equal(project.workbenchViewerState.pdf.pageIndex, 1);
 });
@@ -254,7 +268,7 @@ test('网页读取等待期间保存任务后，新快照关联原任务并清�
 });
 
 test('仅资料库来源也能查看引用和按来源更新提示词', () => {
-  const assignments = app.match(/document\.getElementById\("workbench-prompt-actions"\)\.hidden = [^;]+;/g);
+  const assignments = app.match(/document\.getElementById\("workbench-prompt-actions"\)\.hidden = [^;]*(?:previewMode|promptUnavailable)[^;]*;/g);
   assert.ok(assignments?.length);
   for (const [previewMode, annotated, knowledgeCount, expectedHidden] of [
     ['prompt', false, 1, false],
@@ -265,6 +279,7 @@ test('仅资料库来源也能查看引用和按来源更新提示词', () => {
     const actions = { hidden: null };
     vm.runInNewContext(assignments.at(-1), {
       document: { getElementById: () => actions }, previewMode,
+      promptUnavailable: false,
       material: { annotations: [], attachments: [] },
       knowledgeSources: Array(knowledgeCount),
       hasSelectedWorkbenchAnnotations: () => annotated
@@ -272,4 +287,48 @@ test('仅资料库来源也能查看引用和按来源更新提示词', () => {
     assert.equal(actions.hidden, expectedHidden, `${previewMode} / 批注 ${annotated} / 资料 ${knowledgeCount}`);
   }
   assert.equal(assignments.length, 1, '仅保留一次可见性赋值，避免覆盖资料来源判断');
+});
+
+test('HTML 原生预览随工作台三态拖动隐藏、恢复，详情覆盖层关闭后重新显示', () => {
+  const bounds = [];
+  const project = { id: 'task', workbenchAttachmentId: 'html', workbenchPreviewMode: 'material' };
+  const material = { attachments: [{ id: 'html', kind: 'html', sha256: 'v1' }] };
+  const host = { isConnected: true, getBoundingClientRect: () => ({ left: 10, top: 20, width: 800, height: 600, right: 810, bottom: 620 }) };
+  const elements = {
+    'workbench-html-viewer': host,
+    'workbench-surface': { hidden: false },
+    'project-details': { open: false },
+    'workbench-material-view': { hidden: false }
+  };
+  const context = {
+    activeView: 'project',
+    currentLayoutMode: 'split',
+    desktopApi: { pptFeedback: {
+      setPreviewBounds: (_id, value) => bounds.push(value),
+      openPreview: async () => ({ status: 'opened' }),
+      closePreview: async () => {}
+    } },
+    document: { getElementById: id => elements[id] || null },
+    window: { getComputedStyle: () => ({ position: 'static' }) },
+    getActiveProject: () => project,
+    getWorkbenchMaterialState: () => material,
+    getWorkbenchLayoutMode: () => context.currentLayoutMode
+  };
+  vm.createContext(context);
+  vm.runInContext('let activeWorkbenchHtmlPreview = { taskId: "task", attachmentId: "html", opened: true };', context);
+  vm.runInContext(section('  function syncWorkbenchHtmlPreview()', '  window.addEventListener?.("resize"'), context);
+
+  context.syncWorkbenchHtmlPreview();
+  context.currentLayoutMode = 'chat';
+  context.syncWorkbenchHtmlPreview();
+  context.currentLayoutMode = 'preview';
+  context.syncWorkbenchHtmlPreview();
+  elements['project-details'].open = true;
+  context.syncWorkbenchHtmlPreview();
+  elements['project-details'].open = false;
+  context.currentLayoutMode = 'split';
+  context.syncWorkbenchHtmlPreview();
+
+  assert.deepEqual(bounds.map(value => value.visible), [true, false, true, false, true]);
+  assert.ok(bounds.filter(value => value.visible).every(value => value.width === 800 && value.height === 600));
 });

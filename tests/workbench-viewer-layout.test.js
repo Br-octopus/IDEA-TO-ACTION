@@ -27,6 +27,7 @@ function projectSwitchFixture(activeView) {
     document: { getElementById: () => ({ hidden: false }) }
   };
   vm.createContext(context);
+  vm.runInContext('let workbenchDrag = null; let workbenchDetailsTrigger = null;', context);
   const start = app.indexOf('  function renderProject(project) {');
   const end = app.indexOf('    const method = getMethodCard(project.domain);', start);
   assert.notEqual(start, -1);
