@@ -2,64 +2,44 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { parseAgentResponse, confirmsRecommendation, promptReplacementNeedsConfirmation, buildPromptTransferDraft, captureKnowledgeSource, appendKnowledgeSource, buildModificationPrompt, appendPromptVersion } = require("../prototype/workbench-dialogue.js");
 
-test("Agent 输出单一情境建议与自然语言追问，不渲染选项菜单", () => {
+test("解析当前问题的情境选项和推荐索引，同时保留自由追问", () => {
   const result = parseAgentResponse(JSON.stringify({
-    reply: "你想减少团队周报的整理时间。",
-    recommendation: { text: "先统一周报结构并自动汇总进展。", reason: "这最直接减少重复整理。" },
-    question: "你们目前主要用哪种工具提交周报？"
+    reply: "我理解你要压缩周报整理时间。",
+    question: "先统一哪个团队的周报？",
+    options: ["产品团队", "研发团队"],
+    recommendedOption: 1,
+    recommendation: { text: "先从研发团队开始", reason: "你提到这部分重复工作最多。" },
+    optional: false
   }));
-  assert.equal(result.reply, "你想减少团队周报的整理时间。");
-  assert.equal(result.text, "你想减少团队周报的整理时间。\n\n你们目前主要用哪种工具提交周报？");
-  assert.deepEqual(result.recommendation, { text: "先统一周报结构并自动汇总进展。", reason: "这最直接减少重复整理。" });
-  assert.equal(result.question, "你们目前主要用哪种工具提交周报？");
-  const legacy = parseAgentResponse(JSON.stringify({ reply: "建议优先节省时间。", question: { text: "这次最想改善什么？", options: ["节省时间", "提高可读性"] } }));
-  assert.equal(legacy.question, "这次最想改善什么？");
-  assert.equal(legacy.recommendation, null);
-  const menu = parseAgentResponse(JSON.stringify({
-    reply: "可以选方案一或方案二：\n方案一：优先省时间。\n方案二：优先提高可读性。",
-    recommendation: { text: "先统一周报结构。", reason: "它最贴近你减少整理时间的目标。" }
-  }));
-  assert.equal(menu.reply, "我已结合你的描述收敛成一个建议。");
-  assert.doesNotMatch(menu.text, /方案一|方案二|优先省时间|优先提高可读性/);
-  assert.equal(menu.recommendation.text, "先统一周报结构。");
-  const proseMenu = parseAgentResponse(JSON.stringify({
-    reply: "你可以先缩短周报，也可以先提升可读性。",
-    recommendation: { text: "先统一周报结构。", reason: "它最贴近你的目标。" }
-  }));
-  assert.equal(proseMenu.reply, "我已结合你的描述收敛成一个建议。");
-  assert.doesNotMatch(proseMenu.text, /也可以|提升可读性/);
-  const reasonMenu = parseAgentResponse(JSON.stringify({
-    reply: "我理解你希望改善周报。",
-    recommendation: { text: "先统一周报结构。", reason: "可以先缩短整理时间，也可以先提升可读性。" }
-  }));
-  assert.deepEqual(reasonMenu.recommendation, { text: "先统一周报结构。" });
-  assert.doesNotMatch(JSON.stringify(reasonMenu.recommendation), /也可以|提升可读性/);
-  const questionMenu = parseAgentResponse(JSON.stringify({
+  assert.equal(result.reply, "我理解你要压缩周报整理时间。");
+  assert.equal(result.text, "我理解你要压缩周报整理时间。\n\n先统一哪个团队的周报？");
+  assert.deepEqual(result.options, ["产品团队", "研发团队"]);
+  assert.equal(result.recommendedOption, 1);
+  assert.equal(result.optional, false);
+  assert.deepEqual(result.recommendation, { text: "先从研发团队开始", reason: "你提到这部分重复工作最多。" });
+  const nested = parseAgentResponse(JSON.stringify({
     reply: "我理解你想让周报更高效。",
-    question: "你更想先缩短时间，还是提高可读性？"
+    question: { text: "你先看哪一项？", options: ["整理时间", "可读性"] },
+    recommendedOption: 0,
+    optional: true
   }));
-  assert.equal(questionMenu.question, null);
-  assert.doesNotMatch(questionMenu.text, /还是/);
-  const alternateRecommendation = parseAgentResponse(JSON.stringify({
-    reply: "我理解你希望改善周报。",
-    recommendation: { text: "先缩短整理时间或提升可读性。", reason: "示例" }
-  }));
-  assert.equal(alternateRecommendation.recommendation, null);
-  const multipleRecommendations = parseAgentResponse(JSON.stringify({
-    reply: "根据你的描述，我先给出方向。",
-    recommendation: { text: "方案一：选 A。\n方案二：选 B。", reason: "示例" }
-  }));
-  assert.equal(multipleRecommendations.recommendation, null);
-  const malformedMenu = parseAgentResponse("无法输出 JSON：\n方案一：优先省时间。\n方案二：优先提高可读性。");
-  assert.equal(malformedMenu.reply, "我会结合你的目标收敛出一个建议，不把多个选项推给你；你可以继续补充最重要的要求。");
-  assert.equal(malformedMenu.text, malformedMenu.reply);
-  assert.equal(malformedMenu.recommendation, null);
-  assert.doesNotMatch(malformedMenu.text, /方案一|方案二|省时间|提高可读性/);
-  const malformedReply = parseAgentResponse("我理解你希望缩短整理周报的时间。");
-  assert.equal(malformedReply.reply, "我理解你希望缩短整理周报的时间。");
-  assert.equal(malformedReply.text, malformedReply.reply);
-  assert.equal(malformedReply.question, null);
-  assert.equal(malformedReply.recommendation, null);
+  assert.deepEqual(nested.options, ["整理时间", "可读性"]);
+  assert.equal(nested.recommendedOption, 0);
+  assert.equal(nested.optional, true);
+});
+
+test("非法、重复或超量选项不生成按钮，普通文本不猜测菜单", () => {
+  for (const options of [["甲", "乙", "丙", "丁"], ["甲", "甲"], ["甲", ""]]) {
+    const result = parseAgentResponse(JSON.stringify({ question: "选择方向？", options, recommendedOption: 1 }));
+    assert.deepEqual(result.options, []);
+    assert.equal(result.recommendedOption, null);
+    assert.equal(result.question, "选择方向？");
+  }
+  assert.equal(parseAgentResponse('{"question":"选择一个","options":["甲"],"recommendedOption":9}').recommendedOption, null);
+  const plain = parseAgentResponse("我理解你希望缩短整理时间，也提高可读性。");
+  assert.equal(plain.reply, "我理解你希望缩短整理时间，也提高可读性。");
+  assert.deepEqual(plain.options, []);
+  assert.deepEqual(parseAgentResponse("null").options, []);
 });
 
 test("用户在对话中简短确认建议时识别为确认，修正意见不误判", () => {
@@ -97,12 +77,14 @@ test("修改提示词只汇总原始目标和用户补充，不混入 Agent 追�
       { role: "assistant", text: "这次更重视什么？", options: ["省时间", "更易读"] },
       { role: "user", text: "省时间" },
       { role: "assistant", text: "还可以继续补充。" },
+      { role: "user", text: "本轮先跳过这个问题", skipped: true, replyToMessageId: "old-question" },
       { role: "user", text: "每周最多花半小时", confirmedRecommendation: "统一周报结构并自动汇总进展" }
     ]
   });
   assert.match(prompt, /改进团队周报/);
   assert.match(prompt, /省时间/);
   assert.match(prompt, /每周最多花半小时/);
+  assert.doesNotMatch(prompt, /本轮先跳过这个问题/);
   assert.match(prompt, /用户已在对话中明确确认的方向：[\s\S]*统一周报结构并自动汇总进展/);
   assert.equal(prompt.endsWith("\n"), false);
   assert.doesNotMatch(prompt, /这次更重视什么/);

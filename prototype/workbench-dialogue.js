@@ -3,43 +3,30 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.ForwardStepWorkbenchDialogue = api;
 })(typeof globalThis === "undefined" ? this : globalThis, function () {
-  function hasChoiceMenu(text) {
-    return /(?:^|\n)\s*(?:(?:\d+|[a-c]|[一二三四五六七八九])\s*[.、:：)）]|(?:方案|选项)\s*(?:\d+|[a-c]|[一二三四五六七八九])\s*[.、:：)）])/im.test(text)
-      || /还是/.test(text)
-      || /(?:选择|选用|考虑|采用|使用|建议|推荐|优先|先)[^。！？\n]{0,30}(?:或|或者)[^。！？\n]{0,30}/.test(text)
-      || /(?:可以|可|建议|推荐)[^。！？\n]{0,50}(?:或者|也可以)[^。！？\n]{0,50}(?:可以|考虑|优先|采用|选择|做|改|先|用)/.test(text)
-      || /(?:一个是|一种是)[^。！？\n]{0,60}(?:另一个|另一种)是?/.test(text);
-  }
-
   function parseAgentResponse(raw) {
     const text = String(raw || "").trim();
-    const jsonText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     let value;
-    try { value = JSON.parse(jsonText); }
-    catch {
-      const reply = hasChoiceMenu(text)
-        ? "我会结合你的目标收敛出一个建议，不把多个选项推给你；你可以继续补充最重要的要求。"
-        : text.slice(0, 2000);
-      return { reply, question: null, recommendation: null, text: reply };
-    }
-
-    const rawReply = typeof value.reply === "string" ? value.reply.trim().slice(0, 2000) : "";
-    const rawQuestion = typeof value.question === "string"
-      ? value.question.trim().slice(0, 300)
-      : typeof value.question?.text === "string" ? value.question.text.trim().slice(0, 300) : "";
-    const question = hasChoiceMenu(rawQuestion) ? "" : rawQuestion;
-    const rawRecommendationText = typeof value.recommendation?.text === "string" ? value.recommendation.text.trim().slice(0, 500) : "";
-    const recommendationText = hasChoiceMenu(rawRecommendationText) ? "" : rawRecommendationText;
-    const rawRecommendationReason = typeof value.recommendation?.reason === "string" ? value.recommendation.reason.trim().slice(0, 500) : "";
-    const recommendationReason = hasChoiceMenu(rawRecommendationReason) ? "" : rawRecommendationReason;
-    const recommendation = recommendationText ? { text: recommendationText, ...(recommendationReason ? { reason: recommendationReason } : {}) } : null;
-    const reply = hasChoiceMenu(rawReply)
-      ? recommendation ? "我已结合你的描述收敛成一个建议。" : "我会按你的目标收敛出一个建议，不把多个选项推给你；你可以继续补充最重要的要求。"
-      : rawReply;
+    try { value = JSON.parse(text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); }
+    catch { value = { reply: text }; }
+    if (!value || typeof value !== "object" || Array.isArray(value)) value = {};
+    const read = (input, limit) => typeof input === "string" ? input.trim().slice(0, limit) : "";
+    const reply = read(value.reply, 2000);
+    const question = read(typeof value.question === "object" ? value.question?.text : value.question, 300) || null;
+    const supplied = Array.isArray(value.options) ? value.options : value.question?.options;
+    const normalized = Array.isArray(supplied) ? supplied.map(item => read(item, 180)) : [];
+    const validOptions = question && normalized.length >= 1 && normalized.length <= 3
+      && normalized.every(Boolean) && new Set(normalized).size === normalized.length;
+    const options = validOptions ? normalized : [];
+    const sourceIndex = value.recommendedOption;
+    const selected = Number.isInteger(sourceIndex) && sourceIndex >= 0 && Array.isArray(supplied)
+      ? read(supplied[sourceIndex], 180) : "";
+    const recommendedOption = selected && options.includes(selected) ? options.indexOf(selected) : null;
+    const recommendationText = read(value.recommendation?.text, 500);
+    const recommendation = recommendationText
+      ? { text: recommendationText, reason: read(value.recommendation?.reason, 500) } : null;
     return {
-      reply,
-      question: question || null,
-      recommendation,
+      reply, question, recommendation, options, recommendedOption,
+      optional: value.optional === true,
       text: [reply, question].filter(Boolean).join("\n\n")
     };
   }
@@ -113,11 +100,12 @@
     const idea = String(project.idea || "").trim();
     const conversation = Array.isArray(project.conversation) ? project.conversation : [];
     const additions = conversation
-      .filter((message, index) => index > 0 && message?.role === "user")
+      .filter((message, index) => message?.role === "user" && !message.skipped
+        && !(index === 0 && String(message.text || "").trim() === idea))
       .map(message => String(message.text || "").trim())
       .filter(Boolean);
     const confirmedRecommendations = conversation
-      .filter(message => message?.role === "user" && typeof message.confirmedRecommendation === "string")
+      .filter(message => message?.role === "user" && !message.skipped && typeof message.confirmedRecommendation === "string")
       .map(message => message.confirmedRecommendation.trim())
       .filter(Boolean);
     const knowledgeSources = (Array.isArray(project.workbenchKnowledgeSources) ? project.workbenchKnowledgeSources : [])
