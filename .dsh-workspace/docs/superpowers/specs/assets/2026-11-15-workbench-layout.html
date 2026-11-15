@@ -1,0 +1,68 @@
+<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工作台布局 · 已确认视觉参考</title><style>body{margin:0;padding:28px;font-family:system-ui,sans-serif;background:#f4f5f4;color:#293832}body>main{max-width:1400px;margin:auto}.subtitle{color:#657268;line-height:1.7}.card-image{padding:10px;background:#eef1ee}.notice{padding:12px;background:white;border:1px solid #ddd;border-radius:8px;margin-bottom:20px}</style><main><p class="notice">2026-11-15 已确认的静态视觉参考。按钮与拖动尚未实现；正式交互规则以工作台设计文档第 3.5 节为准。此图展示展开状态，首次打开默认为左右面板收起。原 A/B 指左侧任务栏收放，不与工作区三种模式混用。</p><style>
+.modes-intro{margin-bottom:14px}.modes-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.mode-card{min-width:0}.mode-card .card-image{padding:9px;background:#eef1ee}
+.mode-window{height:290px;display:flex;overflow:hidden;border:1px solid #dce2de;border-radius:9px;background:#fff;color:#304038;font:10px/1.35 Inter,"Segoe UI",sans-serif;box-shadow:0 7px 18px #182b2c12}
+.mode-rail{width:30px;flex:none;background:#f5f7f5;border-right:1px solid #e5e9e6;display:flex;align-items:center;flex-direction:column;gap:7px;padding:7px 3px}
+.mode-logo{width:22px;height:22px;border-radius:7px;background:#195b48;color:#fff;display:grid;place-items:center;font-weight:700}
+.rail-icon{width:21px;height:21px;border-radius:6px;display:grid;place-items:center;color:#67746d}
+.rail-icon.on{background:#e5eee8;color:#18543c}
+.rail-icon svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.mode-tasks{width:68px;flex:none;background:#fafbfa;border-right:1px solid #e5e9e6;padding:7px 4px}
+.task-label{color:#89938d;font-size:8px;margin:4px 3px 5px}
+.task-row{padding:4px 3px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#536158}
+.task-row.on{background:#e6efe9;color:#19563e}
+.split-handle{width:7px;flex:none;position:relative;cursor:col-resize;display:flex;align-items:center;justify-content:center;margin-right:-3px;margin-left:-3px;z-index:2}
+.split-handle:before{content:"";position:absolute;top:0;bottom:0;left:3px;width:1px;background:#c5d0c8}
+.grip{width:6px;height:34px;border-radius:7px;background:#fff;border:1px solid #c9d4cb;box-shadow:0 2px 4px #1b382512;position:relative}
+.grip:after{content:"";position:absolute;left:1px;top:10px;height:12px;border-left:1px solid #89978d;border-right:1px solid #89978d;width:2px}
+.mode-main{min-width:0;flex:1;display:flex;flex-direction:column}
+.mode-bar{height:32px;flex:none;border-bottom:1px solid #e9eeea;display:flex;align-items:center;justify-content:space-between;padding:0 5px}
+.mode-title{font-weight:650;white-space:nowrap}
+.mode-actions{display:flex;gap:1px;padding:2px;border:1px solid #e1e7e2;border-radius:6px;background:#fafbfa}
+.mode-action{width:21px;height:21px;display:grid;place-items:center;border-radius:4px;color:#68756d}
+.mode-action.selected{background:#e4eee7;color:#17543c}
+.mode-action svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.mode-body{flex:1;min-height:0;display:flex}
+.mode-chat{min-width:0;flex:1;display:flex;flex-direction:column;justify-content:center;gap:9px;padding:8px}
+.mode-greet{font-size:12px;font-weight:650;color:#20392e}
+.mode-copy{font-size:8px;color:#7a857d}
+.mode-bubble{align-self:flex-end;max-width:85%;padding:5px 6px;background:#eaf2ed;border-radius:6px}
+.mode-reply{font-size:8px;color:#4d5a52}
+.mode-input{border:1px solid #dfe5e0;border-radius:6px;padding:6px;color:#89938d;font-size:8px;margin-top:2px}
+.mode-preview{min-width:0;flex:1;background:#fbfcfb;border-left:1px solid #e5e9e6;display:flex;flex-direction:column}
+.preview-tabs{height:32px;flex:none;border-bottom:1px solid #e7ece8;display:flex;align-items:center;gap:9px;padding:0 6px;font-size:8px;color:#66736b;white-space:nowrap}
+.preview-tabs span:first-child{color:#195b48;font-weight:650}
+.preview-paper{margin:8px;flex:1;padding:8px;background:white;border:1px solid #e7ece8;border-radius:5px;font-size:8px;color:#78827b}
+.paper-heading{font-size:9px;font-weight:650;color:#3d4c43;margin-bottom:9px}
+.paper-line{height:3px;background:#e8ede8;border-radius:3px;margin:5px 0}
+.focus-preview .mode-chat{display:none}
+.focus-preview .mode-preview{border-left:0}
+.focus-chat .mode-preview{display:none}
+.card-caption{padding:4px 4px 0;color:#6e7b73;font-size:10px;min-height:38px}
+.mode-name{font-size:13px;font-weight:650;color:#304438;margin:8px 4px 0}
+.mode-note{margin-top:14px;padding:10px 12px;background:#f6f8f6;border-radius:8px;font-size:11px;color:#58675e}
+@media(max-width:850px){.modes-grid{grid-template-columns:1fr}.mode-window{height:250px}}
+</style>
+<h2 class="modes-intro">三种工作区状态：图标切换，拖动边缘调整</h2>
+<p class="subtitle">模式切换按钮内部不放文字。分隔边缘可拖动：中间区域调宽度，两端吸附到专注模式。</p>
+<div class="modes-grid">
+ <div class="mode-card"><div class="card-image"><div class="mode-window">
+  <div class="mode-rail"><div class="mode-logo">向</div><div class="rail-icon on">＋</div><div class="rail-icon">▤</div><div class="rail-icon">⌕</div></div>
+  <aside class="mode-tasks"><div class="task-label">最近</div><div class="task-row on">新任务</div><div class="task-row">修改介绍</div><div class="task-row">研究方案</div></aside>
+  <div class="split-handle" title="拖动调整左侧栏宽度"><span class="grip"></span></div>
+  <main class="mode-main"><div class="mode-bar"><span class="mode-title">新任务</span><div class="mode-actions"><span class="mode-action selected" title="双栏"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/></svg></span><span class="mode-action" title="专注对话"><svg viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.5 8.5 0 0 1-4-.9L4 20l1.5-3.5A7.4 7.4 0 0 1 4 12c0-4.2 3.6-7.5 8-7.5s8 2.8 8 7Z"/></svg></span><span class="mode-action" title="专注查看"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/></svg></span></div></div><div class="mode-body"><section class="mode-chat"><div><div class="mode-greet">你想完成什么？</div><div class="mode-copy">Agent 会先理解你的目标</div></div><div class="mode-bubble">帮我修改这份材料。</div><div class="mode-reply">我会结合材料和你的要求整理提示词。</div><div class="mode-input">描述想法，或添加资料…</div></section><div class="split-handle" title="拖到两端切换专注模式"><span class="grip"></span></div><aside class="mode-preview"><div class="preview-tabs"><span>资料</span><span>批注</span><span>提示词</span></div><div class="preview-paper"><div class="paper-heading">预览内容</div><div class="paper-line"></div><div class="paper-line" style="width:78%"></div><div class="paper-line" style="width:90%"></div></div></aside></div></main>
+ </div></div><div class="mode-name">▣ 双栏</div><div class="card-caption">左右边缘分别调整任务栏与预览宽度；中央分隔线调整对话 / 预览比例。</div></div>
+ <div class="mode-card"><div class="card-image"><div class="mode-window">
+  <div class="mode-rail"><div class="mode-logo">向</div><div class="rail-icon on">＋</div><div class="rail-icon">▤</div><div class="rail-icon">⌕</div></div>
+  <aside class="mode-tasks"><div class="task-label">最近</div><div class="task-row on">新任务</div><div class="task-row">修改介绍</div><div class="task-row">研究方案</div></aside>
+  <div class="split-handle" title="拖动调整左侧栏宽度"><span class="grip"></span></div>
+  <main class="mode-main focus-chat"><div class="mode-bar"><span class="mode-title">新任务</span><div class="mode-actions"><span class="mode-action" title="双栏"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/></svg></span><span class="mode-action selected" title="专注对话"><svg viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.5 8.5 0 0 1-4-.9L4 20l1.5-3.5A7.4 7.4 0 0 1 4 12c0-4.2 3.6-7.5 8-7.5s8 2.8 8 7Z"/></svg></span><span class="mode-action" title="专注查看"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/></svg></span></div></div><div class="mode-body"><section class="mode-chat"><div><div class="mode-greet">你想完成什么？</div><div class="mode-copy">对话占满主工作区</div></div><div class="mode-bubble">帮我修改这份材料。</div><div class="mode-reply">我会结合材料和你的要求整理提示词。</div><div class="mode-input">描述想法，或添加资料…</div></section></div></main>
+ </div></div><div class="mode-name">▤ 专注对话</div><div class="card-caption">拖动中央分隔线到最右端，预览收起；点击对应图标可立即切换回来。</div></div>
+ <div class="mode-card"><div class="card-image"><div class="mode-window">
+  <div class="mode-rail"><div class="mode-logo">向</div><div class="rail-icon on">＋</div><div class="rail-icon">▤</div><div class="rail-icon">⌕</div></div>
+  <aside class="mode-tasks"><div class="task-label">最近</div><div class="task-row on">新任务</div><div class="task-row">修改介绍</div><div class="task-row">研究方案</div></aside>
+  <div class="split-handle" title="拖动调整左侧栏宽度"><span class="grip"></span></div>
+  <main class="mode-main focus-preview"><div class="mode-bar"><span class="mode-title">新任务</span><div class="mode-actions"><span class="mode-action" title="双栏"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/></svg></span><span class="mode-action" title="专注对话"><svg viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.5 8.5 0 0 1-4-.9L4 20l1.5-3.5A7.4 7.4 0 0 1 4 12c0-4.2 3.6-7.5 8-7.5s8 2.8 8 7Z"/></svg></span><span class="mode-action selected" title="专注查看"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/></svg></span></div></div><div class="mode-body"><aside class="mode-preview"><div class="preview-tabs"><span>资料</span><span>批注</span><span>提示词</span></div><div class="preview-paper"><div class="paper-heading">预览内容</div><div class="paper-line"></div><div class="paper-line" style="width:78%"></div><div class="paper-line" style="width:90%"></div><div style="margin-top:18px">选中文本或画出区域后添加批注</div></div></aside></div></main>
+ </div></div><div class="mode-name">▧ 专注查看</div><div class="card-caption">拖动中央分隔线到最左端，对话收起，预览扩展；关闭后恢复原宽度。</div></div>
+</div>
+<div class="mode-note"><b>交互规则：</b>左侧任务栏可单独收起 / 展开并记住宽度；右侧预览默认隐藏，图标按钮可切换三态。中央分隔线在中间范围连续调比例，到两端吸附为专注对话 / 专注查看。图标按钮无文字，悬停提示名称。</div></main></html>
