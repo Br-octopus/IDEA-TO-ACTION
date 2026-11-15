@@ -20,6 +20,15 @@
         ],
         "createdAt": "2026-11-15T03:01:07.443Z",
         "reason": "Agent: static specification embeds desktop window specimens containing real composer and document boundaries; screenshot confirms these are window/content boundaries, not nested dashboard cards. Exception applies only to this archived design sheet."
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          ".superpowers/brainstorm/1844-1794758883/content/import-and-pasted-document-v4.html"
+        ],
+        "createdAt": "2026-11-15T17:53:03.201Z",
+        "reason": "Agent verified in browser: dialog padding is zero intentionally; editor header, tools, body and footer supply padding of 15px 19px, 10px 18px, 24px max(22px,7vw), and 12px 18px. No text touches the dialog boundary and no horizontal overflow occurs."
       }
     ]
   }

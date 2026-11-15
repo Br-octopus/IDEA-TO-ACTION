@@ -11,6 +11,37 @@ function section(start, end) {
   assert.notEqual(index, -1);
   return app.slice(index, app.indexOf(end, index));
 }
+test('原生 HTML 预览在双侧拖动期间隐藏，结束后按容器恢复', () => {
+  const calls = [];
+  const project = { id: 'task', workbenchAttachmentId: 'html' };
+  const rect = { left: 600, top: 200, width: 400, height: 500 };
+  const host = { isConnected: true, getBoundingClientRect: () => rect };
+  const context = {
+    desktopApi: { pptFeedback: {
+      openPreview() { assert.fail('不应重建已打开的预览'); },
+      setPreviewBounds: (id, bounds) => calls.push({ id, ...bounds })
+    } },
+    activeView: 'project',
+    activeWorkbenchHtmlPreview: { taskId: 'task', attachmentId: 'html', opened: true },
+    getActiveProject: () => project,
+    getWorkbenchMaterialState: () => ({ attachments: [{ id: 'html', kind: 'html', sha256: 'hash' }] }),
+    getWorkbenchLayoutMode: () => 'split',
+    document: { getElementById: id => id === 'workbench-html-viewer' ? host : null },
+    workbenchDrag: null
+  };
+  vm.createContext(context);
+  vm.runInContext(section('  function syncWorkbenchHtmlPreview() {', '  window.addEventListener?.("resize", scheduleWorkbenchHtmlPreviewSync);'), context);
+  for (const kind of ['content', 'sidebar']) {
+    context.workbenchDrag = { kind };
+    context.syncWorkbenchHtmlPreview();
+    assert.equal(calls.at(-1).visible, false, `${kind} 拖动期间应隐藏原生视图`);
+    context.workbenchDrag = null;
+    context.syncWorkbenchHtmlPreview();
+    assert.equal(calls.at(-1).visible, true);
+    assert.equal(calls.at(-1).width, rect.width);
+    assert.equal(calls.at(-1).height, rect.height);
+  }
+});
 function projectSwitchFixture(activeView) {
   const calls = [];
   const previousMaterial = {};
@@ -24,6 +55,7 @@ function projectSwitchFixture(activeView) {
     disposeWorkbenchPdfViewer: material => { assert.equal(material, previousMaterial); calls.push('dispose-pdf'); },
     disposeWorkbenchOfficeViewer: material => { assert.equal(material, previousMaterial); calls.push('dispose-office'); },
     persist: () => calls.push('persist'), renderSearchResults: () => calls.push('render-search'),
+    renderRecent() {},
     document: { getElementById: () => ({ hidden: false }) }
   };
   vm.createContext(context);
