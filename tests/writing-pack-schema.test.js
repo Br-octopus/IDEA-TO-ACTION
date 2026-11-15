@@ -28,7 +28,7 @@ const packInput = {
 
 test('写作包规范化保留完整契约并过滤所有嵌套未知字段和凭证', () => {
   const pack = schema.normalizeWritingPack(packInput);
-  assert.deepEqual(Object.keys(pack), ['id', 'name', 'layer', 'genre', 'taskType', 'version', 'builtin', 'basePackId', 'enabled', 'applicability', 'targetFields', 'memoryNamespace', 'checkDimensions', 'outputRequirements', 'riskReminders', 'styleBaseline', 'clarifications', 'materials', 'requirements', 'methods', 'prompts', 'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs', 'nextSteps', 'examples', 'sources', 'createdAt', 'updatedAt']);
+  assert.deepEqual(Object.keys(pack), ['id', 'name', 'layer', 'genre', 'taskType', 'version', 'builtin', 'basePackId', 'enabled', 'applicability', 'targetFields', 'memoryNamespace', 'checkDimensions', 'outputRequirements', 'riskReminders', 'styleBaseline', 'clarifications', 'materials', 'requirements', 'methods', 'prompts', 'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs', 'nextSteps', 'examples', 'resources', 'sources', 'createdAt', 'updatedAt']);
   assert.equal(pack.builtin, false);
   assert.equal(pack.applicability.tasks[0], 'review');
   assert.equal(pack.clarifications[0].required, true);
@@ -57,6 +57,18 @@ test('拒绝无效层级、验证状态和非正整数版本', () => {
   for (const status of ['unverified', 'source-reviewed', 'case-validated']) assert.equal(schema.normalizeWritingPack({ ...packInput, requirements: [{ id: 'r', statement: '规则', verificationStatus: status }] }).requirements[0].verificationStatus, status);
   for (const status of ['verified', 'user-confirmed']) assert.throws(() => schema.normalizeWritingPack({ ...packInput, requirements: [{ id: 'r', statement: '规则', verificationStatus: status }] }), /verificationStatus|验证状态/);
   for (const version of [0, -1, 1.5, true, Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => schema.normalizeWritingPack({ ...packInput, version }), /version|正安全整数/);
+});
+
+test('资源只允许安全相对路径并过滤凭证字段', () => {
+  const pack = schema.normalizeWritingPack({
+    id: 'resource-pack', resources: [{ id: 'safe', kind: 'script', title: '参考', purpose: '参考', relativePath: 'references/a.md', actionId: 'scan',
+      inputSchema: { apiKey: 'drop', properties: { path: { type: 'string' } } } }]
+  });
+  assert.equal(pack.resources[0].relativePath, 'references/a.md');
+  assert.equal('apiKey' in pack.resources[0].inputSchema, false);
+  for (const relativePath of ['../a.md', '/a.md', 'C:/a.md', 'https://example.test/a.md']) {
+    assert.throws(() => schema.normalizeWritingPack({ id: 'bad-resource', resources: [{ id: 'r', kind: 'reference', title: '参考', purpose: '参考', relativePath }] }), /安全相对路径/);
+  }
 });
 
 test('包内各条目与来源 ID 唯一，且文本、数组和集合数量受限', () => {

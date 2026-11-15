@@ -6,7 +6,7 @@ const schema = require('../prototype/writing-workbench-schema.js');
 test('任务分析只返回经过校验的文体建议，不创建文章', async () => {
   const coordinator = createWritingWorkbenchCoordinator({ getState: () => ({}), requestModel: async payload => {
     assert.equal(payload.stage, 'writing-task-analysis');
-    assert.match(payload.messages[0].content, /已确认的参考材料摘录/);
+    assert.match(payload.messages[0].content, /用户未手动选择参考材料|用户手动选择的参考材料/);
     return { text: JSON.stringify({ genre: 'technical-document', taskType: 'technical-procedure', reason: '目标是说明操作步骤', confidence: 'high', suggestedFields: { productVersion: '2.0' }, missingInfo: ['运行环境'] }) };
   } });
   const suggestion = await coordinator.analyzeTask({ goal: '写操作手册', draft: '已有稿', materials: [{ title: '界面说明', excerpt: '点击保存' }] });
@@ -14,6 +14,37 @@ test('任务分析只返回经过校验的文体建议，不创建文章', async
   assert.equal(suggestion.taskType, 'technical-procedure');
   assert.equal(suggestion.suggestedFields.productVersion, '2.0');
   assert.equal(coordinator.listArticles().length, 0);
+});
+
+test('任务分析兼容前置说明和 Markdown JSON，并优先接受同一响应中的最终判断', async () => {
+  const coordinator = createWritingWorkbenchCoordinator({ requestModel: async () => ({
+    text: '分析完成，最终结果如下：\n```json\n' + JSON.stringify({
+      genre: 'technical-document', taskType: 'technical-procedure', reason: '目标是说明操作步骤',
+      confidence: 'high', suggestedFields: {}, missingInfo: [], actions: [{ type: 'search', queries: ['无需执行'] }]
+    }) + '\n```'
+  }) });
+  const result = await coordinator.analyzeTask({ goal: '写操作手册' });
+  assert.equal(result.genre, 'technical-document');
+  assert.equal(result.taskType, 'technical-procedure');
+});
+
+test('材料推荐只允许模型引用实际发送的候选，并展示预算裁剪后的真实证据', async () => {
+  const longExcerpt = `命中证据开始。${'预算裁剪内容。'.repeat(1200)}命中证据结束。`;
+  let sentPrompt = '';
+  const coordinator = createWritingWorkbenchCoordinator({ requestModel: async payload => {
+    sentPrompt = payload.messages[0].content;
+    return { text: JSON.stringify({ genre: 'article', taskType: 'revision', reason: '有任务相关证据',
+      selectedUploadMaterialIds: ['candidate-a', 'not-sent'] }) };
+  } });
+  const result = await coordinator.analyzeTask({ goal: '根据安装指南改写操作手册', uploadCandidates: [
+    { id: 'candidate-a', materialId: 'project:docs/guide.md', title: '安装指南', relativePath: 'docs/guide.md', locator: '第 2 行', excerpt: longExcerpt }
+  ] }, { inputTokenBudget: 2500 });
+
+  assert.deepEqual(result.selectedUploadMaterialIds, ['candidate-a']);
+  assert.equal(result.selectedUploadCandidates.length, 1);
+  assert.ok(result.selectedUploadCandidates[0].excerpt.length < longExcerpt.length, '推荐证据采用实际发送的预算裁剪摘录');
+  assert.ok(sentPrompt.includes(result.selectedUploadCandidates[0].excerpt), '推荐证据确实出现在主模型请求中');
+  assert.ok(!sentPrompt.includes(longExcerpt), '未发送的完整摘录不得作为推荐依据展示');
 });
 
 test('任务分析拒绝无效文体/任务及非 JSON，模型不可用可手动降级', async () => {
@@ -177,7 +208,7 @@ test('写作搜索预览零调用，批准真实 bridge 后只发固定方法和
   assert.ok(calls.every(c => c.maximum <= 5));
   const round = c.getRounds(a.id).at(-1);
   assert.equal(round.materials[0].title, '用户样本');
-  assert.equal(round.materials.length + round.sources.length, 3);
+  assert.equal(round.materials.length + round.sources.length, 4);
   assert.match(round.prompt, /必须保留用户要求/);
   assert.match(round.prompt, /未核验|未验证/);
   assert.match(round.prompt, /普通文章|适用/);
@@ -256,7 +287,7 @@ test('搜索关键词超长或含路径时拒绝而非静默截断，正文反�
   assert.doesNotMatch(JSON.stringify(preview), /哨兵/);
 });
 
-test('本地自动来源占满三份时公开摘要至少纳入一份，手工材料与style/both来源保留', async () => {
+test('自动来源与公开摘要可以共同保留，手工材料与style/both来源也不丢失', async () => {
   const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
     searchWeb: async () => [{ title: '公开新摘要', url: 'https://public.test/guide', summary: '公开案例的可评估内容', applicability: '普通文章', limitations: '尚待验证' }]
   });
@@ -267,7 +298,7 @@ test('本地自动来源占满三份时公开摘要至少纳入一份，手工�
   assert.equal(c.getRounds(a.id)[0].sources.length, 3);
   c.previewResearch(a.id);
   const result = await c.approveResearch(a.id, { confirmed: true });
-  assert.equal(result.sources.length, 3);
+  assert.equal(result.sources.length, 4);
   assert.ok(result.sources.some(s => s.url === 'https://public.test/guide'));
   assert.match(c.getRounds(a.id)[0].prompt, /公开新摘要/);
   const b = await c.createArticle({ draft: '初稿', materials: [{ title: '手工', purpose: 'content', excerpt: '必须保留手工' }], sources: [
@@ -278,9 +309,10 @@ test('本地自动来源占满三份时公开摘要至少纳入一份，手工�
   const blocked = await c.approveResearch(b.id, { confirmed: true });
   const after = c.getRounds(b.id)[0];
   assert.deepEqual(after.materials, before.materials);
-  assert.deepEqual(after.sources, before.sources);
-  assert.equal(blocked.includedSources, 0);
-  assert.match(c.getResearchState(b.id).contextNote, /未纳入.*提示词/);
+  assert.equal(after.sources.length, before.sources.length + 1);
+  assert.ok(after.sources.some(source => source.title === '公开新摘要'));
+  assert.equal(blocked.includedSources, 1);
+  assert.doesNotMatch(c.getResearchState(b.id).contextNote, /未纳入.*提示词/);
 });
 
 test('真实storage搜索写失败只尝试一次，结果和来源可读取且磁盘保持旧快照', async () => {
@@ -362,6 +394,64 @@ test('新篇隔离、轮次关联、开关保存冻结、切篇不丢稿和显�
   assert.throws(() => c.openArticle(a.id), { code: 'ARTICLE_NOT_FOUND' });
 });
 
+test('外部新稿待用户决定；采用和撤销只切换目标稿件且保留来源及其他记录', async () => {
+  const { c, state } = realStorageSetup();
+  const article = await c.createArticle({ title: '稿件决定', goal: '保留原始事实', draft: '原稿', saveEnabled: true });
+  const original = c.getRounds(article.id)[0];
+  const promptVersion = original.promptVersions.at(-1);
+  const issue = await c.addIssue(article.id, { roundId: original.id, excerpt: '事实摘录', observation: '需要验证' });
+  const received = await c.appendRound(article.id, {
+    draft: '外部修改稿', draftDecision: { status: 'pending' }, feedback: '保留原始事实',
+    sourcePromptVersionId: promptVersion.id,
+    materials: [{ id: 'source-a', title: '来源资料', excerpt: '原始证据', sourceType: 'pasted-text' }]
+  });
+  let workspace = c.getWorkspace(article.id);
+  assert.equal(workspace.article.draft, '原稿');
+  assert.equal(workspace.article.draftRoundId, original.id);
+  assert.equal(received.round.draftDecision.status, 'pending');
+  assert.equal(received.round.sourcePromptVersionId, promptVersion.id);
+
+  await c.decideRoundDraft(article.id, received.round.id, 'keep');
+  workspace = c.getWorkspace(article.id);
+  assert.equal(workspace.article.draft, '原稿');
+  assert.equal(workspace.rounds[1].draftDecision.status, 'kept');
+
+  await c.decideRoundDraft(article.id, received.round.id, 'adopt');
+  workspace = c.getWorkspace(article.id);
+  assert.equal(workspace.article.draft, '外部修改稿');
+  assert.equal(workspace.article.draftRoundId, received.round.id);
+  assert.equal(workspace.rounds[1].draftDecision.previousDraft, '原稿');
+  assert.equal(workspace.rounds[1].materials[0].excerpt, '原始证据');
+  assert.equal(workspace.rounds[1].sourcePromptVersionId, promptVersion.id);
+
+  await c.decideRoundDraft(article.id, received.round.id, 'undo');
+  workspace = c.getWorkspace(article.id);
+  assert.equal(workspace.article.draft, '原稿');
+  assert.equal(workspace.article.draftRoundId, original.id);
+  assert.equal(workspace.rounds[1].draftDecision.status, 'undone');
+  assert.equal(workspace.rounds.length, 2, '采用与撤销不重写或删除历史轮次');
+  assert.equal(workspace.issues[0].id, issue.id, '撤销不回滚无关问题记录');
+  assert.equal(state().writingArticles[0].article.draft, '原稿', '撤销结果已持久化');
+});
+
+test('保存采用决定失败时回滚当前稿件和决定状态，较新稿件后拒绝旧撤销', async () => {
+  const failed = setup();
+  const first = await failed.c.createArticle({ draft: '原稿', saveEnabled: true });
+  const candidate = await failed.c.appendRound(first.id, { draft: '候选稿', draftDecision: { status: 'pending' } });
+  failed.fail(true);
+  await assert.rejects(failed.c.decideRoundDraft(first.id, candidate.round.id, 'adopt'), { code: 'PERSIST_FAILED' });
+  assert.equal(failed.c.getWorkspace(first.id).article.draft, '原稿');
+  assert.equal(failed.c.getRounds(first.id)[1].draftDecision.status, 'pending');
+
+  const fresh = setup();
+  const article = await fresh.c.createArticle({ draft: '原稿' });
+  const pending = await fresh.c.appendRound(article.id, { draft: '采用稿', draftDecision: { status: 'pending' } });
+  await fresh.c.decideRoundDraft(article.id, pending.round.id, 'adopt');
+  await fresh.c.appendRound(article.id, { draft: '后续新稿' });
+  await assert.rejects(fresh.c.decideRoundDraft(article.id, pending.round.id, 'undo'), { code: 'DRAFT_DECISION_STALE' });
+  assert.equal(fresh.c.getWorkspace(article.id).article.draft, '后续新稿');
+});
+
 test('保存失败可见且保留当前稿，删除失败也保留会话', async () => {
   const { c, fail } = setup();
   const a = await c.createArticle({ draft: '旧稿' });
@@ -373,7 +463,7 @@ test('保存失败可见且保留当前稿，删除失败也保留会话', async
   assert.equal(c.getRounds(a.id).length, 2);
 });
 
-test('记忆跨不同文章晋升、保存证据重启恢复和撤销不重建', async () => {
+test('跨文章重复偏好先待确认，确认后才进入提示词，停用后不再应用', async () => {
   const env = setup();
   const { c } = env;
   const preference = { preference: '减少空泛总结', example: '用实际结果收尾' };
@@ -387,10 +477,15 @@ test('记忆跨不同文章晋升、保存证据重启恢复和撤销不重建',
   await restarted.setSaveEnabled(b.id, true);
   const result = await restarted.appendRound(b.id, { preferences: [preference] });
   assert.equal(result.notifications.length, 1);
-  const memory = restarted.getRelevantMemories('article')[0];
+  const memory = restarted.listMemories()[0];
+  assert.equal(memory.status, 'pending');
+  assert.equal(memory.enabled, false);
+  assert.equal(restarted.getRelevantMemories('article').length, 0);
   assert.deepEqual(new Set(memory.evidenceArticleIds), new Set([a.id, b.id]));
   assert.equal(env.state().writingMemories.length, 1);
-  await restarted.undoMemory(result.notifications[0].undoId);
+  await restarted.confirmMemory(result.notifications[0].memoryId, { scope: 'general' });
+  assert.equal(restarted.getRelevantMemories('article')[0].id, memory.id);
+  await restarted.setMemoryEnabled(memory.id, false);
   await restarted.appendRound(b.id, { preferences: [preference] });
   assert.equal(restarted.getRelevantMemories('article').length, 0);
 });
@@ -404,9 +499,12 @@ test('未保存反馈不落盘、普通反馈不泛化、显式记忆立即保�
   const promoted = await c.appendRound(b.id, { preferences: [{ preference: ' 少用套话。 ' }] });
   assert.equal(state().writingMemories.length, 1);
   assert.equal(promoted.notifications.length, 1);
+  assert.equal(promoted.notifications[0].type, 'memory-candidate');
+  assert.equal(c.listMemories()[0].status, 'pending');
+  assert.equal(c.getRelevantMemories('article').length, 0);
   assert.equal(JSON.stringify(state()).includes('秘密正文'), false);
   assert.equal(JSON.stringify(state()).includes('这句有AI味'), false);
-  await c.undoMemory(promoted.notifications[0].undoId);
+  await c.ignoreMemory(promoted.notifications[0].memoryId);
   assert.equal(state().writingArticles.length, 0);
   assert.equal(state().writingMemories.length, 1);
   const general = await c.rememberPreference(a.id, { scope: 'general', preference: '保留事实' });
@@ -420,7 +518,51 @@ test('未保存反馈不落盘、普通反馈不泛化、显式记忆立即保�
   assert.equal(c.getRelevantMemories('novel')[0].preference, '保留事实');
 });
 
-test('类型确认、风格用途、更正优先、维度和本地资料复用', async () => {
+test('提示词冻结实际采用的偏好，单篇跳过只影响后续轮次，历史版本可回退', async () => {
+  const env = setup();
+  const { c } = env;
+  const repeated = { preference: '结尾写具体结果', example: '说明可观察变化' };
+  const a = await c.createArticle({ preferences: [repeated], saveEnabled: true });
+  const b = await c.createArticle({ preferences: [repeated], saveEnabled: true });
+  const candidate = c.listMemories()[0];
+  assert.equal(candidate.status, 'pending');
+
+  const task = await c.createArticle({ draft: '第三篇原稿', saveEnabled: true });
+  assert.doesNotMatch(task.rounds.at(-1).prompt, /结尾写具体结果/);
+  await c.confirmMemory(candidate.id, { scope: 'general' });
+  let generated = await c.build(task.id);
+  assert.match(generated.prompt, /结尾写具体结果/);
+  assert.equal(c.readRound(task.id, generated.roundId).memorySnapshot[0].id, candidate.id);
+
+  const edited = await c.editMemory(candidate.id, { preference: '结尾交代可验证结果' });
+  assert.equal(edited.history.length, 1);
+  await assert.rejects(c.restoreMemoryVersion(candidate.id, edited.history[0].id, '旧版本时间'), { code: 'MEMORY_VERSION_STALE' });
+  const restored = await c.restoreMemoryVersion(candidate.id, edited.history[0].id, edited.updatedAt);
+  assert.equal(restored.preference, '结尾写具体结果');
+  assert.equal(restored.history.length, 2);
+
+  await c.setMemorySkipped(task.id, candidate.id, true);
+  generated = await c.build(task.id);
+  assert.doesNotMatch(generated.prompt, /结尾写具体结果/);
+  assert.deepEqual(c.readRound(task.id, generated.roundId).memorySnapshot, []);
+  assert.equal(c.getRelevantMemories('article', task.id).length, 0);
+  assert.equal(c.getRelevantMemories('article', task.id, { includeSkipped: true })[0].id, candidate.id);
+  assert.ok(c.getWorkspace(task.id).article.skippedMemoryIds.includes(candidate.id));
+});
+
+test('旧自动晋升按待确认建议迁移，旧显式记忆保持确认状态', async () => {
+  const memories = [
+    { id: 'legacy-candidate', scope: 'genre', genre: 'article', preference: '旧自动建议', undo: { action: 'auto-promote' } },
+    { id: 'legacy-explicit', scope: 'general', preference: '用户明确保存的旧偏好' }
+  ];
+  const c = createWritingWorkbenchCoordinator({ getState: () => ({ writingMemories: memories }) });
+  assert.deepEqual(c.listMemories().map(item => [item.id, item.status, item.origin]), [
+    ['legacy-candidate', 'pending', 'repeated-round'], ['legacy-explicit', 'confirmed', 'user-confirmed']
+  ]);
+  assert.deepEqual(c.getRelevantMemories('article').map(item => item.id), ['legacy-explicit']);
+});
+
+test('类型确认、风格用途、更正优先、维度和多份本地资料复用', async () => {
   let task;
   const { c, state } = setup({ promptAgentCoordinator: { selectMaterials: async input => {
     task = input;
@@ -438,8 +580,8 @@ test('类型确认、风格用途、更正优先、维度和本地资料复用',
   assert.ok(JSON.stringify(task).includes('新人'));
   assert.ok(!JSON.stringify(task).includes('原文'));
   const round = c.getRounds(a.id).at(-1);
-  assert.equal(round.materials.length + round.sources.length, 3);
-  assert.match(round.prompt, /S3/);
+  assert.equal(round.materials.length + round.sources.length, 6);
+  assert.match(round.prompt, /S6/);
   assert.equal(state().promptAgentTasks.length, 0);
   assert.equal(c.getWorkspace(a.id).article.draft, '原文');
 });
@@ -564,14 +706,15 @@ test('导入后显式刷新和迟到模型结果不会复活旧会话', async ()
 test('规范化允许范围内的强约束总预算溢出也保留完整输入', async () => {
   const { c } = setup();
   const a = await c.createArticle({ constraints: '约束'.repeat(250), draft: '正文' });
-  await assert.rejects(c.appendRound(a.id, { feedback: '反馈'.repeat(1000), userFeedback: '用户'.repeat(1000),
+  const result = await c.appendRound(a.id, { feedback: '反馈'.repeat(1000), userFeedback: '用户'.repeat(1000),
     userCorrections: '更正'.repeat(1000), sources: Array.from({ length: 3 }, () => ({
       title: '标题'.repeat(80), url: 'https://example.org/' + 'path'.repeat(100), purpose: 'content', excerpt: '证据'
-    })) }), error => error instanceof RangeError && /8000/.test(error.message));
+    })) });
   const w = c.getWorkspace(a.id);
   assert.equal(w.styleProfile.userCorrections, '更正'.repeat(1000));
   assert.equal(w.rounds.at(-1).feedback, '反馈'.repeat(1000));
-  assert.equal(w.rounds.at(-1).prompt, '');
+  assert.ok(result.round.prompt.length <= 8000);
+  assert.ok(result.round.prompt.includes('更正'.repeat(1000)));
 });
 
 test('UMD 浏览器导出可离线创建文章，读取副本不会污染会话', async () => {
@@ -589,7 +732,7 @@ test('UMD 浏览器导出可离线创建文章，读取副本不会污染会话'
   await assert.rejects(c.runModelDiagnosis(a.id), { code: 'MODEL_UNAVAILABLE' });
 });
 
-test('选择资料保留手工内容和风格样本，合并来源共三条且重复选择不堆叠', async () => {
+test('选择资料保留手工内容和风格样本，所有相关来源均可进入提示词且重复选择不堆叠', async () => {
   const { c } = setup({ promptAgentCoordinator: { selectMaterials: async () => [
     { id: 'auto-1', title: '检索资料一', excerpt: '检索内容一' },
     { id: 'auto-2', title: '检索资料二', excerpt: '检索内容二' }
@@ -602,16 +745,17 @@ test('选择资料保留手工内容和风格样本，合并来源共三条且�
   await c.selectMaterials(a.id);
   const round = c.getRounds(a.id)[0];
   assert.deepEqual(round.materials, a.rounds[0].materials);
-  assert.equal(round.sources.length, 1);
+  assert.equal(round.sources.length, 2);
   assert.match(round.prompt, /保留的手工事实/);
   assert.match(round.prompt, /手工样本/);
   assert.match(round.prompt, /检索资料一/);
-  assert.doesNotMatch(round.prompt, /检索资料二/);
+  assert.match(round.prompt, /检索资料二/);
   assert.equal(c.getWorkspace(a.id).styleProfile.source, 'sample');
   const b = await c.createArticle({ materials: a.rounds[0].materials,
     sources: [{ title: '手工来源', excerpt: '用户指定来源', purpose: 'content' }] });
   await c.selectMaterials(b.id);
-  assert.deepEqual(c.getRounds(b.id)[0].sources, b.rounds[0].sources);
+  assert.equal(c.getRounds(b.id)[0].sources.length, 3);
+  assert.ok(c.getRounds(b.id)[0].sources.some(source => source.title === '检索资料一'));
 });
 
 test('写作选材保留授权目录相对位置、指纹版本、摘录行和选用理由', async () => {
@@ -665,20 +809,24 @@ test('改变目标和维度刷新已保存初检，显式初检替换模型结�
   assert.doesNotMatch(c.getRounds(a.id)[0].prompt, /旧目标下的模型诊断/);
 });
 
-test('编辑自动记忆替代原候选，重启或删除后不从旧候选复活', async () => {
+test('编辑重复偏好建议后仍待确认，重启后不从旧内容复活', async () => {
   const { c, state } = setup();
   const preference = { preference: '减少总结' };
   const a = await c.createArticle({ preferences: [preference], saveEnabled: true });
   const b = await c.createArticle({ preferences: [preference], saveEnabled: true });
-  const original = c.getRelevantMemories('article')[0];
+  const original = c.listMemories()[0];
+  assert.equal(original.status, 'pending');
   await c.editMemory(original.id, { preference: '保留必要总结' });
   let result = await c.appendRound(a.id, {});
   assert.equal(result.notifications.length, 0);
-  assert.deepEqual(c.getRelevantMemories('article').map(m => m.preference), ['保留必要总结']);
+  assert.equal(c.getRelevantMemories('article').length, 0);
   const restarted = createWritingWorkbenchCoordinator({ getState: state, persistState: next => Object.assign(state(), next) });
   result = await restarted.appendRound(b.id, {});
   assert.equal(result.notifications.length, 0);
   assert.equal(state().writingMemories.length, 1);
+  assert.equal(restarted.listMemories()[0].preference, '保留必要总结');
+  assert.equal(restarted.listMemories()[0].status, 'pending');
+  await restarted.confirmMemory(original.id, { scope: 'general' });
   assert.equal(restarted.getRelevantMemories('article')[0].id, original.id);
   await restarted.deleteMemory(original.id);
   await restarted.refreshFromStorage();
@@ -923,7 +1071,8 @@ test('单篇记忆的编辑删除不扩大为跨文章候选抑制', async () =>
   const b = await restarted.createArticle({});
   const result = await restarted.appendRound(b.id, { preferences: [{ preference: '使用短段落' }] });
   assert.equal(result.notifications.length, 1);
-  assert.equal(restarted.getRelevantMemories('article', b.id)[0].preference, '使用短段落');
+  assert.equal(restarted.listMemories()[0].status, 'pending');
+  assert.equal(restarted.getRelevantMemories('article', b.id).length, 0);
 });
 
 for (const change of ['新轮', '更正']) {
@@ -982,6 +1131,20 @@ test('文章轮次记录所选基础包快照，基础包更新后历史提示�
   const rebuilt = await c.build(article.id, { roundId: first.id });
   assert.match(rebuilt.prompt, /旧规则哨兵/);
   assert.doesNotMatch(rebuilt.prompt, /新规则哨兵/);
+});
+
+test('写作轮次记录资源执行状态并可在历史中复盘', async () => {
+  const pack = {
+    id: 'resource-coordinator-pack', name: '资源协调器包', layer: 'task', genre: 'article', taskType: 'revision', version: 1, enabled: true,
+    resources: [{ id: 'resource-action', kind: 'script', title: '扫描动作', purpose: '扫描项目', relativePath: 'scripts/scan.py', archive: 'skill', actionId: 'softcopyright.project-scan', taskTypes: ['revision'] }]
+  };
+  let state = { writingArticles: [], writingMemories: [], writingPacks: [pack], writingPackSettings: [] };
+  const c = createWritingWorkbenchCoordinator({ getState: () => state, persistState(next) { state = structuredClone(next); return state; } });
+  const article = await c.createArticle({ packSelections: [pack.id], saveEnabled: true });
+  await c.recordResourceUsage(article.id, 'resource-action', { status: 'executed', outputSummary: '扫描完成' });
+  const round = c.getRounds(article.id)[0];
+  assert.equal(round.resourceUsage.find(item => item.id === 'resource-action')?.status, 'executed');
+  assert.equal(round.resourceUsage.find(item => item.id === 'resource-action')?.outputSummary, '扫描完成');
 });
 
 test('多个基础包引用同名来源时，历史提示词保留每个包的来源元数据', async () => {

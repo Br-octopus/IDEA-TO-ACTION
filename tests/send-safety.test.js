@@ -13,12 +13,15 @@ function createSendPanelVm({
 } = {}) {
   const listeners = new Map();
   const elements = new Map();
+  const materialScroll = { scrollLeft: 0, scrollTop: 0 };
+  let projectSequence = 0;
   const checkbox = {
     checked: false,
     disabled: false
   };
   const makeElement = id => ({
     id,
+    isConnected: true,
     value: id === 'idea' ? '测试发送安全' : '',
     checked: false,
     hidden: false,
@@ -27,12 +30,18 @@ function createSendPanelVm({
     style: {},
     classList: { add() {}, remove() {}, toggle() {} },
     addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
-    querySelector(selector) { return id === 'send-preview-confirmation' && selector === 'input' ? checkbox : null; },
+    setAttribute(name, value) { this[name] = String(value); },
+    querySelector(selector) {
+      if (id === 'send-preview-confirmation' && selector === 'input') return checkbox;
+      if (id === 'workbench-material-view' && selector === '.workbench-material-scroll') return materialScroll;
+      return null;
+    },
     querySelectorAll() { return []; },
+    getClientRects() { return [1]; },
     append() {},
     remove() {},
     reset() {},
-    focus() {},
+    focus() { document.activeElement = this; },
     scrollIntoView() {},
     click() {},
     select() {}
@@ -41,6 +50,9 @@ function createSendPanelVm({
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, makeElement(id));
       return elements.get(id);
+    },
+    querySelector(selector) {
+      return selector === "#workbench-message-form button[type=submit]" ? makeElement("workbench-submit") : null;
     },
     querySelectorAll() { return []; },
     createElement() { return makeElement('created'); },
@@ -80,6 +92,13 @@ function createSendPanelVm({
     ForwardStepPromptEngine: promptEngine,
     ForwardStepResearchCatalog: require('../prototype/research-catalog'),
     ForwardStepMethodCards: require('../prototype/method-cards'),
+    ForwardStepWorkbenchDialogue: require('../prototype/workbench-dialogue'),
+    ForwardStepPptFeedback: {
+      createAnnotationHistory: require('../prototype/ppt-feedback').createAnnotationHistory,
+      buildSelectedAnnotationPrompt() { return ''; },
+      buildSelectedAnnotationPrompts() { return ''; },
+      findSelectedAnnotationConflicts() { return []; }
+    },
     ForwardStepKnowledgeSearch: {
       collectKnowledgeEntries() { return knowledgeEntries; },
       searchKnowledge() { return []; }
@@ -103,6 +122,7 @@ function createSendPanelVm({
     desktopApi: {
       async getConfig() { configCalls += 1; return { model: { configured: true, name: '测试模型' }, search: { configured: false } }; },
       async requestModel({ messages }) {
+        if (messages[0]?.role === 'system') return { text: JSON.stringify({ reply: '已理解任务', question: null }) };
         requestModelCalls += 1;
         requestModelPrompts.push(messages[0].content);
         if (deferModel) return new Promise(resolve => pendingModelResolvers.push(resolve));
@@ -116,7 +136,7 @@ function createSendPanelVm({
     window,
     document,
     navigator: { clipboard: { writeText: async () => {} } },
-    crypto: { randomUUID: () => 'vm-project' },
+    crypto: { randomUUID: () => `vm-project-${++projectSequence}` },
     fetch,
     setTimeout: () => 1,
     clearTimeout() {},
@@ -140,10 +160,14 @@ function createSendPanelVm({
   return {
     listeners,
     state,
+    idea: document.getElementById('idea'),
+    workbenchInput: document.getElementById('workbench-message-input'),
     checkbox,
     confirmButton: document.getElementById('send-preview-confirm'),
     panel: document.getElementById('send-preview'),
     text: document.getElementById('send-preview-text'),
+    previewButton: document.getElementById('preview-master'),
+    get activeElement() { return document.activeElement; },
     findings: document.getElementById('send-preview-findings'),
     model: document.getElementById('send-preview-model'),
     reports,
@@ -297,6 +321,47 @@ test('编辑文本作为单一用户来源分段，风险归因不回指基础�
   assert.deepEqual(report.segments.map(item => item.source), ['用户原文/当前编辑文本']);
   assert.equal(report.segments[0].text, text);
   assert.equal(report.findings[0].source, '用户原文/当前编辑文本');
+});
+
+test('切换任务会保存各自未发送的工作台草稿', async () => {
+  const vmApp = createSendPanelVm();
+  await vmApp.waitForConfig();
+  vmApp.idea.value = '第一个任务';
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  const firstTask = vmApp.state.projects[0];
+  vmApp.workbenchInput.value = '第一个任务的未发送草稿';
+  vmApp.listeners.get('workbench-message-input:input')({ target: vmApp.workbenchInput });
+
+  vmApp.idea.value = '第二个任务';
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+
+  assert.equal(vmApp.state.projects.find(project => project.id === firstTask.id).conversationDraft, '第一个任务的未发送草稿');
+  assert.equal(vmApp.workbenchInput.value, '', '新任务不继承上一个任务的草稿');
+});
+
+test('发送预览接管键盘焦点，Escape 关闭并将焦点还给原按钮', async () => {
+  const vmApp = createSendPanelVm();
+  await vmApp.waitForConfig();
+  vmApp.listeners.get('idea-form:submit')({ preventDefault() {} });
+  vmApp.previewButton.focus();
+  vmApp.listeners.get('preview-master:click')();
+  assert.equal(vmApp.activeElement, vmApp.text);
+  assert.equal(vmApp.panel.hidden, false);
+
+  vmApp.panel.querySelectorAll = () => [vmApp.text, vmApp.previewButton];
+  let prevented = false;
+  vmApp.listeners.get('send-preview:keydown')({
+    key: 'Tab', shiftKey: true, currentTarget: vmApp.panel,
+    preventDefault() { prevented = true; }
+  });
+  assert.equal(prevented, true);
+  assert.equal(vmApp.activeElement, vmApp.previewButton);
+
+  vmApp.listeners.get('send-preview:keydown')({
+    key: 'Escape', currentTarget: vmApp.panel, preventDefault() {}
+  });
+  assert.equal(vmApp.panel.hidden, true);
+  assert.equal(vmApp.activeElement, vmApp.previewButton);
 });
 
 test('发送首尾空白高风险文本时保留原文且仍执行确认门禁', async () => {

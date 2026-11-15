@@ -11,6 +11,11 @@ const {
   loadState,
   saveState,
   addPromptVersion,
+  listPromptGroups,
+  togglePromptFavorite,
+  getPromptVariables,
+  fillPromptTemplate,
+  comparePromptTexts,
   confirmCase
 } = require('../prototype/storage.js');
 const { catalog } = require('../prototype/research-catalog.js');
@@ -70,6 +75,60 @@ test('将 v1 项目和提示词迁移到 v3，补齐字段并保留资料', () =
   assert.deepEqual(state.references, oldData.references);
   assert.deepEqual(state.cases, []);
   assert.deepEqual(JSON.parse(storage.getItem(STORAGE_KEY)), state);
+});
+
+test('工作台对话、未发送草稿和布局在项目状态往返后按任务保留', () => {
+  const storage = memoryStorage();
+  const state = createEmptyState();
+  state.projects = [
+    { id: 'task-a', idea: '任务 A', conversation: [{ role: 'user', text: '任务 A' }], conversationDraft: '任务 A 的未发送内容', workbenchLayout: 'preview', workbenchPreviewMode: 'task', workbenchAttachmentId: 'attachment-a', workbenchViewerState: { 'attachment-a': { zoom: 1.5, pageIndex: 2, scrollLeft: 20, scrollTop: 140 }, 'attachment-b': { zoom: 0.9, pageIndex: 0, scrollLeft: 0, scrollTop: 44 } }, workbenchGeneratedPrompt: '生成稿', workbenchPromptDraft: '手改稿', workbenchPromptVersions: [{ id: 'version-a1', version: 1, prompt: '第一版', citations: [{ annotationId: 'note-a', contentHash: 'sha256:a' }] }] },
+    { id: 'task-b', idea: '任务 B', conversation: [{ role: 'user', text: '任务 B' }], conversationDraft: '任务 B 的未发送内容', workbenchLayout: 'chat', workbenchPreviewMode: 'prompt' }
+  ];
+
+  saveState(storage, state);
+  const restored = loadState(storage).state.projects;
+
+  assert.equal(restored.find(project => project.id === 'task-a').conversationDraft, '任务 A 的未发送内容');
+  assert.equal(restored.find(project => project.id === 'task-a').workbenchLayout, 'preview');
+  assert.equal(restored.find(project => project.id === 'task-a').workbenchGeneratedPrompt, '生成稿');
+  assert.equal(restored.find(project => project.id === 'task-a').workbenchPromptDraft, '手改稿');
+  assert.deepEqual(restored.find(project => project.id === 'task-a').workbenchPromptVersions, [{ id: 'version-a1', version: 1, prompt: '第一版', citations: [{ annotationId: 'note-a', contentHash: 'sha256:a' }] }]);
+  assert.deepEqual(restored.find(project => project.id === 'task-a').conversation, [{ role: 'user', text: '任务 A' }]);
+  assert.equal(restored.find(project => project.id === 'task-b').conversationDraft, '任务 B 的未发送内容');
+  assert.equal(restored.find(project => project.id === 'task-b').workbenchLayout, 'chat');
+  assert.equal(restored.find(project => project.id === 'task-a').workbenchPreviewMode, 'task');
+  assert.equal(restored.find(project => project.id === 'task-a').workbenchAttachmentId, 'attachment-a');
+  assert.deepEqual(restored.find(project => project.id === 'task-a').workbenchViewerState, {
+    'attachment-a': { zoom: 1.5, pageIndex: 2, scrollLeft: 20, scrollTop: 140 },
+    'attachment-b': { zoom: 0.9, pageIndex: 0, scrollLeft: 0, scrollTop: 44 }
+  });
+  assert.equal(restored.find(project => project.id === 'task-b').workbenchPreviewMode, 'prompt');
+});
+
+test('归档计划往返保留原 ID、批注资料定位和提示词版本，且不截断长历史', () => {
+  const storage = memoryStorage();
+  const state = createEmptyState();
+  state.projects = Array.from({ length: 45 }, (_, index) => ({
+    id: `task-${index}`,
+    idea: `计划 ${index}`,
+    archivedAt: index === 0 ? '2026-11-12T00:00:00.000Z' : '',
+    conversationDraft: `草稿 ${index}`,
+    workbenchAttachmentIds: [`attachment-${index}`],
+    workbenchAttachmentId: `attachment-${index}`,
+    workbenchViewerState: { [`attachment-${index}`]: { pageIndex: index % 3, scrollTop: index * 10 } },
+    workbenchPromptVersions: [{ id: `version-${index}`, prompt: `提示词 ${index}` }]
+  }));
+
+  saveState(storage, state);
+  const restored = loadState(storage).state.projects;
+
+  assert.equal(restored.length, 45);
+  assert.equal(restored[0].id, 'task-0');
+  assert.equal(restored[0].archivedAt, '2026-11-12T00:00:00.000Z');
+  assert.equal(restored[0].conversationDraft, '草稿 0');
+  assert.deepEqual(restored[0].workbenchAttachmentIds, ['attachment-0']);
+  assert.deepEqual(restored[0].workbenchViewerState, { 'attachment-0': { pageIndex: 0, scrollTop: 0 } });
+  assert.deepEqual(restored[0].workbenchPromptVersions, [{ id: 'version-0', prompt: '提示词 0' }]);
 });
 
 test('根路径和嵌套页面路径按顺序加载知识脚本并暴露统一搜索全局', async t => {
@@ -686,6 +745,39 @@ test('提示词版本按同组最大版本递增', () => {
   assert.equal(second.prompt.verified, false);
 });
 
+test('提示词收藏按组更新并保留不同手动提示词的历史分组', () => {
+  const initial = { ...createEmptyState(), prompts: [
+    { id: 'manual-a-v1', groupId: 'manual', title: '周报', version: 1 },
+    { id: 'manual-a-v2', groupId: 'manual', title: '周报', version: 2 },
+    { id: 'manual-b-v1', groupId: 'manual', title: '邮件', version: 1 }
+  ] };
+  const groups = listPromptGroups(initial.prompts);
+  assert.equal(groups.length, 2);
+  const changed = togglePromptFavorite(initial, groups.find(item => item.latest.title === '周报').groupKey);
+  assert.deepEqual(changed.state.prompts.filter(item => item.title === '周报').map(item => item.favorite), [true, true]);
+  assert.equal(changed.state.prompts.find(item => item.title === '邮件').favorite, undefined);
+  assert.equal(listPromptGroups(changed.state.prompts).find(item => item.latest.title === '周报').favorite, true);
+});
+
+test('提示词变量要求填写后替换，版本对比标出新增和删除行', () => {
+  const template = '面向{{读者}}\n围绕{{主题}}\n再次检查{{主题}}';
+  assert.deepEqual(getPromptVariables(template), ['读者', '主题']);
+  assert.deepEqual(fillPromptTemplate(template, { 读者: '新员工' }), {
+    text: '面向新员工\n围绕{{主题}}\n再次检查{{主题}}',
+    missing: ['主题']
+  });
+  assert.deepEqual(fillPromptTemplate(template, { 读者: '新员工', 主题: '交接' }), {
+    text: '面向新员工\n围绕交接\n再次检查交接',
+    missing: []
+  });
+  const diff = comparePromptTexts('目标\n旧要求\n结尾', '目标\n新要求\n结尾');
+  assert.equal(diff.supported, true);
+  assert.deepEqual(diff.changes.filter(item => item.kind !== 'same'), [
+    { kind: 'remove', text: '旧要求' }, { kind: 'add', text: '新要求' }
+  ]);
+  assert.equal(comparePromptTexts('a', 'b', 1).supported, false);
+});
+
 test('模型密钥不会被迁移或保存到本地状态', () => {
   const storage = memoryStorage();
   const source = {
@@ -779,13 +871,20 @@ test('本地存储 getter、getItem 和 JSON 解析异常均抛出可识别错�
 test('应用读取异常后仍可继续使用，但提交计划不会调用保存接口', () => {
   const listeners = new Map();
   const elements = new Map();
+  const materialScroll = { scrollLeft: 0, scrollTop: 0 };
   const makeElement = id => ({
     id,
     value: id === 'idea' ? '保留原数据' : '',
     checked: false,
+    dataset: {},
     classList: { add() {}, remove() {}, toggle() {} },
     style: {},
     addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
+    append() {},
+    setAttribute(name, value) { this[name] = String(value); },
+    querySelector(selector) {
+      return id === 'workbench-material-view' && selector === '.workbench-material-scroll' ? materialScroll : null;
+    },
     querySelectorAll() { return []; },
     scrollIntoView() {}
   });
@@ -794,13 +893,22 @@ test('应用读取异常后仍可继续使用，但提交计划不会调用保�
       if (!elements.has(id)) elements.set(id, makeElement(id));
       return elements.get(id);
     },
-    querySelectorAll() { return []; }
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement() { return makeElement('created'); }
   };
   let saveCalls = 0;
   const memoryState = createEmptyState();
   const window = {
     ForwardStepPromptEngine: require('../prototype/prompt-engine.js'),
     ForwardStepResearchCatalog: require('../prototype/research-catalog.js'),
+    ForwardStepWorkbenchDialogue: require('../prototype/workbench-dialogue.js'),
+    ForwardStepPptFeedback: {
+      createAnnotationHistory() { return require('../prototype/ppt-feedback.js').createAnnotationHistory(); },
+      buildSelectedAnnotationPrompt() { return ''; },
+      buildSelectedAnnotationPrompts() { return ''; },
+      findSelectedAnnotationConflicts() { return []; }
+    },
     ForwardStepStorage: {
       STORAGE_KEY,
       createEmptyState() { return memoryState; },

@@ -33,6 +33,10 @@ test('新写作与文章改写共用引导步骤，只有改写要求原文；�
   await f.click('wizard-stage', { stage: '2' });
   await f.input('writing-goal', '补充目标细节');
   await f.click('wizard-confirm');
+  await f.click('open-article-center');
+  assert.match(f.mount.innerHTML, /class="writing-article-center"/, '已有稿件可从对话引导切换到稿件中心');
+  await f.click('continue-writing-flow');
+  assert.match(f.mount.innerHTML, /生成提示词/, '返回时保留原引导阶段');
   const firstWorkspace = f.coordinator.getWorkspace(firstArticleId);
   assert.equal(firstWorkspace.rounds.length, 2, '任务目标变化后生成新轮次');
   assert.equal(f.node('writing-prompt').value, '用户手工调整后的提示词', '回退确认后保留手工编辑的提示词');
@@ -70,6 +74,32 @@ test('新写作与文章改写共用引导步骤，只有改写要求原文；�
   await f.click('wizard-next');
   assert.match(f.node('writing-prompt').value, /结果没有说明适用范围/);
   assert.match(f.coordinator.getWorkspace(articleId).rounds.at(-1).promptVersions.at(-1).content, /结果没有说明适用范围/);
+});
+
+test('重新分析失败后清除上次模型推荐，保留用户手动材料选择', async () => {
+  const f = fixture();
+  const fileBytes = Uint8Array.from(Buffer.from('# install guide\n运行 install 命令完成安装。'));
+  await f.change('writing-material-folder', [{ name: 'guide.md', webkitRelativePath: 'repo/docs/guide.md', size: fileBytes.length,
+    arrayBuffer: async () => fileBytes.buffer }]);
+  await f.input('writing-goal', '运行 install');
+  let run = 0;
+  f.coordinator.analyzeTask = async input => {
+    run++;
+    if (run > 1) throw new Error('第二次分析失败');
+    const candidate = input.uploadCandidates[0];
+    assert.ok(candidate, '任务词应命中已导入文件的全文');
+    return { genre: 'article', taskType: 'revision', reason: '找到安装步骤',
+      selectedUploadMaterialIds: [candidate.id], selectedUploadCandidates: [candidate] };
+  };
+  await f.click('wizard-analyze');
+  assert.match(f.mount.innerHTML, /确认使用：guide\.md/);
+  await f.click('wizard-stage', { stage: '1' });
+  await f.changeData('wizardMaterial', '0', true);
+  await f.click('wizard-analyze');
+  assert.match(f.mount.innerHTML, /第二次分析失败/);
+  assert.doesNotMatch(f.mount.innerHTML, /确认使用：guide\.md/);
+  assert.doesNotMatch(f.mount.innerHTML, /模型关联理由：找到安装步骤/);
+  assert.match(f.mount.innerHTML, /手动参考：1份 guide\.md/);
 });
 
 test('引导材料候选可即时搜索并清除筛选，未匹配时仍保留完整候选', async () => {
@@ -208,7 +238,7 @@ test('材料卡显示自动选材理由并允许用户排除本轮不采用的�
   await app.input('writing-material-0-title', '预算记录');
   await app.input('writing-material-0-excerpt', '项目预算依据为公开报价。');
   app.ui.render();
-  assert.match(app.mount.innerHTML, /系统按当前任务文本匹配|材料数量未超过上限|没有找到明确关键词匹配/);
+  assert.match(app.mount.innerHTML, /系统按当前任务文本匹配|当前任务没有足够关键词|没有找到明确关键词匹配/);
   await app.change('writing-material-0-selection', false);
   await app.input('writing-goal', '核对预算依据');
   await app.click('create');
@@ -240,9 +270,117 @@ function fixture(options = {}) {
   } : undefined;
   const ui = createWritingWorkbenchUI({ document: dom.document, coordinator, packUI, getState: () => state, desktopApi: options.desktopApi,
     fetch: options.fetch, copyText: async text => copied.push(text), downloadText: options.downloadText,
-    confirm: options.confirm || (() => true), saveMaterialToLibrary: options.saveMaterialToLibrary });
+    confirm: options.confirm || (() => true), navigate: options.navigate, saveMaterialToLibrary: options.saveMaterialToLibrary });
   return { ...dom, ui, coordinator, copied, get state() { return state; }, get requests() { return requests; }, set failSave(value) { failSave = value; } };
 }
+
+test('批注交接取消时完整保留新写作输入，确认后预填向导并生成可追溯提示词', async () => {
+  const source = {
+    id: 'writing-attachment-1', title: '需求截图.png', sourceId: 'attachment-1',
+    sourceVersion: 'sha256:annotation-version', sourceType: 'image', origin: 'manual',
+    purpose: 'content', contentStatus: 'reference-only', attachmentRequired: true, selectedForPrompt: true,
+    annotationSnapshot: [{
+      id: 'note-1', attachmentId: 'attachment-1', contentHash: 'sha256:annotation-version', pageIndex: 1,
+      target: { kind: 'region', x: 0.1, y: 0.2, width: 0.3, height: 0.2 },
+      comment: '保留数据并调整图注', category: 'style', intent: 'modify', selected: true, status: 'active'
+    }]
+  };
+  const cancelled = fixture({ confirm: () => false });
+  await cancelled.input('writing-goal', '先前目标');
+  await cancelled.input('writing-draft', '先前原稿');
+  const beforeCancel = cancelled.mount.innerHTML;
+  assert.equal(cancelled.ui.prepareAnnotationDraft({ goal: '批注改写目标', sources: [source] }), false);
+  assert.equal(cancelled.mount.innerHTML, beforeCancel);
+  assert.equal(cancelled.coordinator.listArticles().length, 0);
+
+  let navigation = null;
+  const f = fixture({ navigate: (...args) => { navigation = args; } });
+  assert.equal(f.ui.prepareAnnotationDraft({ goal: '批注改写目标', sources: [source] }), true);
+  assert.deepEqual(navigation, ['article', 'writing']);
+  assert.equal(f.coordinator.listArticles().length, 0, '交接只准备向导，不提前创建稿件');
+  assert.equal(f.node('writing-goal').value, '批注改写目标');
+  assert.equal(f.node('writing-wizard-mode-rewrite').checked, true);
+  assert.match(f.mount.innerHTML, /1 条批注快照/);
+  let analyzedInput;
+  f.coordinator.analyzeTask = async input => {
+    analyzedInput = input;
+    return { genre: 'article', taskType: 'revision', reason: '按已选批注修改原文', missingInfo: [], suggestedFields: {} };
+  };
+  await f.click('wizard-analyze');
+  assert.equal(analyzedInput.materials[0].annotationSnapshot[0].comment, '保留数据并调整图注');
+  await f.change('writing-wizard-genre', 'article');
+  await f.change('writing-wizard-task-type', 'revision');
+  await f.click('wizard-confirm');
+  const workspace = f.coordinator.getWorkspace(f.coordinator.listArticles()[0].id);
+  assert.equal(workspace.rounds[0].sources[0].annotationSnapshot[0].id, 'note-1');
+  assert.match(workspace.rounds[0].prompt, /保留数据并调整图注/);
+  assert.match(workspace.rounds[0].prompt, /原文件需由用户另行附加/);
+});
+
+test('资料库快照经用户勾选后完整带入写作，并保留资料 ID、版本和来源', async () => {
+  const f = fixture({ navigate() {} });
+  const excerpt = `已保存资料摘录：${'资料内容'.repeat(500)}`;
+  assert.equal(f.ui.prepareLibraryDraft({ source: { id: 'knowledge-17', title: '资料卡', version: 4,
+    url: 'https://example.test/reference', excerpt, verificationStatus: 'source-reviewed' } }), true);
+  assert.equal(f.node('writing-goal').value.includes('V4'), true);
+  assert.match(f.mount.innerHTML, /来源快照：knowledge-17 · V4/);
+  assert.match(f.mount.innerHTML, /https:\/\/example\.test\/reference/);
+  assert.match(f.mount.innerHTML, /最多8000字/);
+  const selection = f.mount.querySelector('[data-wizard-material="0"]');
+  assert.ok(selection, '资料快照显示为待确认材料');
+  assert.equal(selection.checked, false, '资料库材料须由用户确认采用范围');
+  await f.changeData('wizardMaterial', '0', true);
+  let analyzedInput;
+  f.coordinator.analyzeTask = async input => {
+    analyzedInput = input;
+    return { genre: 'article', taskType: 'revision', reason: '根据当前目标', missingInfo: [], suggestedFields: {} };
+  };
+  await f.click('wizard-analyze');
+  assert.equal(analyzedInput.materials[0].excerpt, excerpt);
+  await f.change('writing-wizard-genre', 'article');
+  await f.change('writing-wizard-task-type', 'revision');
+  await f.click('wizard-confirm');
+  const articleId = f.coordinator.listArticles()[0].id;
+  const material = f.coordinator.getWorkspace(articleId).rounds[0].materials[0];
+  assert.equal(material.sourceId, 'knowledge-17');
+  assert.equal(material.sourceVersion, 'V4');
+  assert.equal(material.url, 'https://example.test/reference');
+  assert.equal(material.excerpt, excerpt);
+});
+
+test('提示词收藏交接保留变量替换后的完整正文和来源版本，超限时拒绝', async () => {
+  const text = `已填充提示词正文：${'完整提示词'.repeat(500)}`;
+  const cancelled = fixture({ navigate() {}, confirm: () => false });
+  await cancelled.input('writing-goal', '原有写作目标');
+  assert.equal(cancelled.ui.preparePromptDraft({ promptId: 'prompt-9', title: '长提示词', version: 7, text }), false);
+  assert.equal(cancelled.node('writing-goal').value, '原有写作目标', '取消时保留原草稿');
+
+  const f = fixture({ navigate() {} });
+  assert.equal(f.ui.preparePromptDraft({ promptId: 'prompt-9', title: '长提示词', version: 7, text }), true);
+  const selection = f.mount.querySelector('[data-wizard-material="0"]');
+  assert.ok(selection);
+  assert.equal(selection.checked, false, '收藏提示词正文须由用户确认采用范围');
+  await f.changeData('wizardMaterial', '0', true);
+  let analyzedInput;
+  f.coordinator.analyzeTask = async input => {
+    analyzedInput = input;
+    return { genre: 'article', taskType: 'revision', reason: '按收藏提示词执行', missingInfo: [], suggestedFields: {} };
+  };
+  await f.click('wizard-analyze');
+  assert.equal(analyzedInput.materials[0].excerpt, text);
+  await f.change('writing-wizard-genre', 'article');
+  await f.change('writing-wizard-task-type', 'revision');
+  await f.click('wizard-confirm');
+  const articleId = f.coordinator.listArticles()[0].id;
+  const material = f.coordinator.getWorkspace(articleId).rounds[0].materials[0];
+  assert.equal(material.sourceId, 'prompt-9');
+  assert.equal(material.sourceVersion, 'V7');
+  assert.equal(material.excerpt, text);
+  assert.match(f.mount.innerHTML, /来源记录 ID：prompt-9/);
+  assert.match(f.mount.innerHTML, /最多8000字/);
+  assert.match(f.mount.innerHTML, /已填充提示词正文：/);
+  assert.throws(() => f.ui.preparePromptDraft({ promptId: 'prompt-10', text: '字'.repeat(8001) }), /超过 8000 字/);
+});
 
 test('软著内容包在普通文章中可选，且不会自动用于无关文章', () => {
   const packs = writingPackCatalog.getBuiltinWritingPacks();
@@ -251,6 +389,17 @@ test('软著内容包在普通文章中可选，且不会自动用于无关文�
   assert.ok(checkbox, '软著内容包显示在专业基础包选择区');
   assert.equal(checkbox.checked, false, '普通文章默认不自动套用软著规则');
   assert.match(f.mount.innerHTML, /软著内容/);
+});
+test('桌面写作工作台使用安全配置状态，不被未同步的本地服务状态覆盖', async () => {
+  const f = fixture({ desktopApi: {
+    getConfig: async () => ({
+      writingAssistant: { configured: true, mode: 'system-one', modelId: 'jev-1.14.0' },
+      service: { available: true, writingAssistant: { configured: false } }
+    })
+  } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.match(f.mount.innerHTML, /已配置：system-one · jev-1\.14\.0/);
+  assert.doesNotMatch(f.mount.innerHTML, /未配置辅助模型/);
 });
 test('通用核心包可在普通文章任务中选择并进入实际提示词', async () => {
   const app = createWritingApp();
@@ -501,7 +650,7 @@ test('部分、空结果、成功均明确显示，已有模型诊断保留且�
   }
 });
 
-test('三份受保护上下文占满时UI明确外部摘要未纳入提示词，手工与style/both不丢失', async () => {
+test('多份受保护上下文仍保留外部摘要，手工与style/both不丢失', async () => {
   const agent = require('../prototype/prompt-agent-coordinator.js').createPromptAgentCoordinator({
     searchWeb: async () => [{ title: '未纳入的公开摘要', url: 'https://public.test/unused', summary: '公开线索' }]
   });
@@ -512,8 +661,8 @@ test('三份受保护上下文占满时UI明确外部摘要未纳入提示词，
   f.ui.openArticle(w.id);
   await f.click('preview-research');
   await f.click('approve-research');
-  assert.match(f.mount.innerHTML, /公开摘要未纳入提示词/);
-  assert.doesNotMatch(f.node('writing-prompt').value, /未纳入的公开摘要/);
+  assert.match(f.mount.innerHTML, /公开摘要/);
+  assert.match(f.node('writing-prompt').value, /未纳入的公开摘要/);
   assert.equal(f.node('writing-material-0-title').value, '手工材料');
   assert.equal(f.node('writing-material-1-purpose').value, 'style');
   assert.equal(f.node('writing-material-2-purpose').value, 'both');
@@ -552,6 +701,37 @@ test('写作记忆可限定到当前项目并在界面明确显示范围', async
   assert.equal(memory.scope, 'project');
   assert.equal(memory.projectId, id);
   assert.ok(f.coordinator.getRelevantMemories('article', id).some(item => item.id === memory.id));
+});
+
+test('任务页展示实际采用偏好，并可只为本篇跳过后续应用', async () => {
+  const f = fixture();
+  const id = await create(f, '偏好适用说明');
+  await f.change('writing-save', true);
+  await f.input('writing-preference', '保留具体结果');
+  await f.click('remember');
+  const memory = f.state.writingMemories[0];
+  const used = await f.coordinator.build(id);
+  assert.match(used.prompt, /保留具体结果/);
+  assert.match(f.mount.innerHTML, /本篇适用的偏好/);
+  assert.match(f.mount.innerHTML, /上次生成时实际采用/);
+
+  await f.click('skip-memory', { memoryId: memory.id, skipped: 'true' });
+  assert.deepEqual(f.coordinator.getWorkspace(id).article.skippedMemoryIds, [memory.id]);
+  assert.match(f.mount.innerHTML, /恢复本篇使用/);
+  const next = await f.coordinator.build(id);
+  assert.doesNotMatch(next.prompt, /保留具体结果/);
+  assert.deepEqual(f.coordinator.getWorkspace(id).rounds.at(-1).memorySnapshot, []);
+});
+
+test('记忆入口可进入独立管理视图，返回后保留未提交写作草稿', async () => {
+  const f = fixture();
+  await f.input('writing-goal', '留在写作草稿中的目标');
+  f.ui.openMemoryManager();
+  assert.match(f.mount.innerHTML, /class="writing-memory-focus"/);
+  assert.doesNotMatch(f.mount.innerHTML, /id="writing-goal"/);
+  assert.match(f.mount.innerHTML, /已确认偏好/);
+  f.ui.showWritingWorkbench();
+  assert.equal(f.node('writing-goal').value, '留在写作草稿中的目标');
 });
 
 test('切篇、回看只读轮次及重复渲染保留各篇未提交输入', async () => {
@@ -614,6 +794,45 @@ test('真实工作台可保存和复制提示词版本、关联带回稿、比�
   assert.equal(rounds[3].draft, '第一轮稿');
   assert.equal(rounds[3].parentRoundId, first.id);
   assert.equal(rounds[3].restoredFromRoundId, first.id);
+});
+
+test('新回带稿件默认待比较，明确采用后可撤销且保留来源和当前稿', async () => {
+  const f = fixture();
+  const id = await create(f, '稿件采用闭环', '用户原稿');
+  await f.change('writing-save', true);
+  const sourceVersion = f.coordinator.getRounds(id)[0].promptVersions.at(-1);
+  await f.input('writing-new-draft', '外部新稿');
+  await f.change('writing-source-prompt-version', sourceVersion.id);
+  await f.click('append');
+  let workspace = f.coordinator.getWorkspace(id);
+  const candidate = workspace.rounds.at(-1);
+  assert.equal(workspace.article.draft, '用户原稿', '回带仅新增待比较版本，不替换当前稿');
+  assert.equal(candidate.draftDecision.status, 'pending');
+  assert.equal(candidate.sourcePromptVersionId, sourceVersion.id);
+  assert.match(f.mount.innerHTML, /待比较的新稿/);
+
+  assert.match(f.mount.innerHTML, /class="writing-article-center"/);
+  assert.match(f.mount.innerHTML, /稿件中心/);
+  assert.match(f.mount.innerHTML, /用户原稿/);
+  assert.match(f.mount.innerHTML, /外部新稿/);
+  assert.match(f.mount.innerHTML, /展开写作、资料与诊断工具/);
+  assert.doesNotMatch(f.mount.innerHTML, /<div hidden>/, '稿件中心不再把可见功能藏在引导页后');
+  assert.equal((f.mount.innerHTML.match(/id="writing-article-list"/g) || []).length, 1, '任务切换器只保留一个可访问控件');
+
+  await f.click('draft-decision', { decision: 'adopt', roundId: candidate.id });
+  workspace = f.coordinator.getWorkspace(id);
+  assert.equal(workspace.article.draft, '外部新稿');
+  assert.equal(workspace.article.draftRoundId, candidate.id);
+  assert.equal(workspace.rounds.length, 2);
+  assert.ok(f.state.writingArticles[0].rounds.find(round => round.id === candidate.id), '采用结果已持久化');
+
+  await f.click('draft-decision', { decision: 'undo', roundId: candidate.id });
+  workspace = f.coordinator.getWorkspace(id);
+  assert.equal(workspace.article.draft, '用户原稿');
+  assert.equal(workspace.article.draftRoundId, workspace.rounds[0].id);
+  assert.equal(workspace.rounds[1].sourcePromptVersionId, sourceVersion.id);
+  assert.equal(workspace.rounds[1].draftDecision.status, 'undone');
+  assert.match(f.mount.innerHTML, /这次采用已撤销/);
 });
 
 test('接近历史提醒阈值时提示导出且导出完整本轮提示词版本', async () => {
@@ -894,7 +1113,16 @@ test('应用真实接线：写作入口独立呈现且保留任务草稿', async
   await f.event('nav-article');
   assert.notEqual(f.mount.hidden, true);
   assert.match(f.element('breadcrumb').textContent, /写作工作台/);
+  assert.equal(f.element('article-page-title').textContent, '写作工作台');
   await f.input('writing-goal', '切场景不丢失');
+  await f.event('nav-memory');
+  assert.equal(f.element('article-page-title').textContent, '记忆与偏好');
+  assert.equal(f.element('article-page-description').hidden, true);
+  assert.match(f.mount.innerHTML, /<h2>写作偏好<\/h2>/);
+  await f.event('nav-article');
+  assert.equal(f.element('article-page-title').textContent, '写作工作台');
+  assert.equal(f.element('article-page-description').hidden, false);
+  assert.equal(f.node('writing-goal').value, '切场景不丢失');
   await f.event('scene-ppt');
   assert.equal(f.element('ppt-scene-root').hidden, false);
   await f.event('scene-task');
@@ -951,7 +1179,7 @@ test('失败创建和失败回带可通过精简新稿恢复，完整失败原�
   assert.match(f.mount.innerHTML, /2\/4/);
 });
 
-test('显式记忆管理覆盖全部而非相关三条，编辑例句反例、删除和自动晋升撤销', async () => {
+test('显式记忆管理覆盖全部偏好，候选待确认，确认后可停用和恢复', async () => {
   const f = fixture();
   await create(f);
   for (let i = 0; i < 5; i++) {
@@ -977,11 +1205,20 @@ test('显式记忆管理覆盖全部而非相关三条，编辑例句反例、�
   await create(f, '第二篇');
   await f.input('writing-preference', '跨篇相同候选');
   await f.click('append');
-  const promoted = f.state.writingMemories.find(x => x.preference === '跨篇相同候选');
-  assert.ok(promoted);
-  assert.match(f.mount.innerHTML, /跨文章重复偏好/);
-  await f.click('undo-memory', { memoryId: promoted.id });
-  assert.ok(f.state.writingMemories.find(x => x.id === promoted.id).undo.undoneAt);
+  const candidate = f.state.writingMemories.find(x => x.preference === '跨篇相同候选');
+  assert.equal(candidate.status, 'pending');
+  assert.equal(f.coordinator.getRelevantMemories('article').some(x => x.id === candidate.id), false);
+  assert.match(f.mount.innerHTML, /跨文章重复的偏好建议/);
+  await f.click('open-memory-manager');
+  await f.input(`writing-memory-${candidate.id}-preference`, '用户编辑后的建议');
+  await f.change(`writing-memory-${candidate.id}-scope`, 'general');
+  await f.click('confirm-memory', { memoryId: candidate.id });
+  assert.equal(f.state.writingMemories.find(x => x.id === candidate.id).status, 'confirmed');
+  assert.ok(f.coordinator.getRelevantMemories('article').some(item => item.preference === '用户编辑后的建议'));
+  await f.click('set-memory-enabled', { memoryId: candidate.id, enabled: 'false' });
+  assert.equal(f.coordinator.getRelevantMemories('article').some(item => item.id === candidate.id), false);
+  await f.click('set-memory-enabled', { memoryId: candidate.id, enabled: 'true' });
+  assert.ok(f.coordinator.getRelevantMemories('article').some(item => item.id === candidate.id));
 });
 
 test('未知文体明确确认，动态内容转义，危险URL不生成链接', async () => {
@@ -1108,7 +1345,7 @@ test('同ID备份替换后显示恢复轮次和保存开关，仍保留未提交
   assert.equal(f.node('writing-feedback').value, '未提交反馈');
 });
 
-test('第二篇新建首轮触发候选晋升也显示通知，并可立即撤销', async () => {
+test('第二篇新建首轮触发待确认建议通知，不直接启用', async () => {
   const f = fixture();
   await f.input('writing-preference', '结尾写具体结果');
   const a = await create(f);
@@ -1117,16 +1354,15 @@ test('第二篇新建首轮触发候选晋升也显示通知，并可立即撤�
   const b = await create(f, '第二篇');
   const memory = f.state.writingMemories.find(m => m.preference === '结尾写具体结果');
   assert.deepEqual(new Set(memory.evidenceArticleIds), new Set([a, b]));
-  assert.match(f.mount.innerHTML, /跨文章重复偏好/);
-  await f.click('undo-memory', { memoryId: memory.id });
-  assert.ok(f.state.writingMemories.find(m => m.id === memory.id).undo.undoneAt);
+  assert.equal(memory.status, 'pending');
+  assert.match(f.mount.innerHTML, /跨文章重复的偏好建议/);
+  assert.equal(f.coordinator.getRelevantMemories('article').length, 0);
 });
 
 test('导入预览显示真实文章记忆数量，写失败和校验失败均保留原state及会话', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const backupAPI = require('../prototype/workspace-backup.js');
-  const previews = [];
-  const f = createWritingApp({ confirm(message) { previews.push(message); return true; } });
+  const f = createWritingApp({ backupImportChoice: 'replace' });
   const id = await create(f);
   await f.change('writing-save', true);
   await f.input('writing-preference', '保存偏好');
@@ -1139,7 +1375,7 @@ test('导入预览显示真实文章记忆数量，写失败和校验失败均�
   assert.equal(f.state, before);
   assert.equal(f.coordinator.getWorkspace(id).article.title, '文章甲');
   assert.equal(f.node('writing-new-draft').value, '导入失败不丢稿');
-  assert.match(previews.at(-1), /1 篇文章、1 条写作记忆/);
+  assert.match(f.element('settings-backup-import-preview').textContent, /备份内容：.*稿件 1.*偏好 1/);
   f.failSave = false;
   const writes = f.writes;
   await f.import({ ...backup, counts: { ...backup.counts, writingArticles: 50 } });
@@ -1223,7 +1459,7 @@ test('浏览器安全备份确认后可导入一次，令牌不得重复消费�
   assert.equal(f.state.writingArticles[0].article.saveEnabled, false);
   assert.equal(input.value, '');
   assert.equal(reads, 1);
-  assert.match(f.element('toast').textContent, /导入成功/);
+  assert.match(f.element('toast').textContent, /导入(?:新增|已替换)/);
   const writes = f.writes;
   await f.event('knowledge-import-file', 'change', { target: input });
   assert.equal(f.writes, writes);
@@ -1243,6 +1479,22 @@ test('浏览器未确认安全备份时不能打开选择器或读取导入文�
   assert.match(f.element('toast').textContent, /未确认已保存安全备份/);
 });
 
+test('备份导入先展示实际范围和冲突，再允许明确取消且保持原数据', async () => {
+  const { createWritingApp } = require('./helpers/writing-app.js');
+  const backupAPI = require('../prototype/workspace-backup.js');
+  const source = fixture();
+  await create(source, '待取消恢复的文章');
+  const backup = backupAPI.createBackup(source.state, { scope: 'workspace' });
+  const f = createWritingApp({ backupImportChoice: 'cancel' });
+  const before = JSON.stringify(f.state);
+  await f.import(backup);
+  assert.match(f.element('settings-backup-import-preview').textContent, /完整工作区/);
+  assert.match(f.element('settings-backup-import-preview').textContent, /合并预览：新增/);
+  assert.equal(JSON.stringify(f.state), before);
+  assert.equal(f.writes, 0, '取消不能写入替换或合并结果');
+  assert.match(f.element('knowledge-backup-result').textContent, /已取消导入/);
+});
+
 test('真实页面资料表单和字段ID唯一，资料类型具有可选默认值', () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp();
@@ -1256,14 +1508,14 @@ test('真实页面资料表单和字段ID唯一，资料类型具有可选默认
 test('两种资料打开取消入口共用表单，保存手工资料后写作可选入本篇', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const f = createWritingApp({ realMaterials: true });
-  for (const [open, cancel] of [['open-knowledge-entry', 'cancel-knowledge-entry'], ['knowledge-add-open', 'knowledge-entry-cancel']]) {
-    await f.event(open);
-    assert.equal(f.element('knowledge-entry-form').hidden, false);
-    await f.event(cancel);
-    assert.equal(f.element('knowledge-entry-form').hidden, true);
-  }
+  await f.event('knowledge-add-open');
+  assert.equal(f.element('knowledge-entry-form').hidden, false);
+  f.element('knowledge-entry-title').value = '未保存的草稿';
+  await f.event('knowledge-entry-cancel');
+  assert.equal(f.element('knowledge-entry-form').hidden, true);
   await f.event('knowledge-add-open');
   assert.equal(f.element('knowledge-entry-type').value, 'manual-note', '应沿用真实HTML中的默认类型');
+  assert.equal(f.element('knowledge-entry-title').value, '', '重新打开表单不能遗留已取消的草稿');
   f.element('knowledge-entry-title').value = '产品交付事实';
   f.element('knowledge-entry-summary').value = '产品交付事实：三个客户已完成试用';
   f.element('knowledge-entry-domains').value = '普通文章';
@@ -1285,7 +1537,7 @@ test('两种资料打开取消入口共用表单，保存手工资料后写作�
 test('完整工作区合并空备份及新增文章保留未保存会话和未提交输入', async () => {
   const { createWritingApp } = require('./helpers/writing-app.js');
   const backupAPI = require('../prototype/workspace-backup.js');
-  const f = createWritingApp({ confirm: () => false });
+  const f = createWritingApp({ backupImportChoice: 'merge' });
   const id = await create(f, '只有会话的文章');
   await f.input('writing-new-draft', '未提交新稿');
   await f.input('writing-feedback', '未提交反馈');
@@ -1295,7 +1547,7 @@ test('完整工作区合并空备份及新增文章保留未保存会话和未�
   await source.change('writing-save', true);
   for (const state of [storage.createEmptyState(), source.state]) {
     await f.import(backupAPI.createBackup(state, { scope: 'workspace' }));
-    assert.match(f.element('toast').textContent, /导入成功/);
+    assert.match(f.element('toast').textContent, /导入(?:已替换|新增)/);
     assert.ok(f.coordinator.listArticles().some(a => a.id === id), '合并不得丢弃仅存在会话的文章');
     assert.equal(f.node('writing-article-list').value, id);
     assert.equal(f.node('writing-new-draft').value, '未提交新稿');
@@ -1448,6 +1700,7 @@ test('材料卡片展示来源位置版本和选用理由，仅有摘录的卡�
   assert.equal(saved.length, 1);
   assert.equal(saved[0].excerpt, '可用来源摘录');
   assert.equal(saved[0].sourceLocator, 'guides/writing.md');
+  assert.equal(saved[0].sourceVersion, `sha256:${'a'.repeat(64)}`);
   assert.match(f.mount.innerHTML, /已保存到资料库/);
   assert.equal((f.mount.innerHTML.match(/data-writing-action="save-material-to-library"/g) || []).length, 0);
 });
@@ -1737,12 +1990,13 @@ test('追加第二次真实写入失败仍展示现存新轮，保留回带输�
 
 test('公开网页读取只暂存正文，用户选摘后才进入下一轮提示词', async () => {
   let requestedUrl = '';
-  const pageText = '已选网页摘录的事实范围。'.repeat(55);
+  let pageText = '已选网页摘录的事实范围。'.repeat(55);
+  let contentHash = `sha256:${'a'.repeat(64)}`;
   const f = fixture({ fetch: async (url, options) => {
     requestedUrl = url;
     assert.equal(options.method, 'POST');
     assert.ok(options.signal);
-    return { ok: true, json: async () => ({ title: '公开页面', finalUrl: 'https://example.test/final', text: pageText,
+    return { ok: true, json: async () => ({ title: '公开页面', finalUrl: 'https://example.test/final', mimeType: 'text/html', fetchedAt: '2026-11-12T01:02:03.000Z', contentHash, renderMode: 'static-html', html: `<main>${pageText}</main>`, text: pageText,
       characterCount: pageText.length, truncated: false, incomplete: false }) };
   } });
   await f.input('writing-material-link-title', '公开来源');
@@ -1752,6 +2006,7 @@ test('公开网页读取只暂存正文，用户选摘后才进入下一轮提�
   await f.click('read-web-material', { index: '0' });
   assert.equal(requestedUrl, '/api/writing-materials/read-webpage');
   assert.match(f.mount.innerHTML, /网页正文（仅当前页面暂存）/);
+  assert.match(f.mount.innerHTML, /不运行网页脚本/);
   assert.equal(f.node('writing-material-0-excerpt').value, '');
   assert.equal(f.coordinator.getRounds(id).at(-1).prompt.includes('已选网页摘录的事实范围'), false);
   await f.click('use-web-segment', { index: '0' });
@@ -1761,8 +2016,19 @@ test('公开网页读取只暂存正文，用户选摘后才进入下一轮提�
   await f.click('append');
   const round = f.coordinator.getRounds(id).at(-1);
   assert.equal(round.sources[0].sourceType, 'web-text');
+  assert.equal(round.sources[0].accessedAt, '2026-11-12T01:02:03.000Z');
+  assert.equal(round.sources[0].sourceVersion, contentHash);
   assert.equal(round.sources[0].verificationStatus, 'unverified');
   assert.match(round.prompt, /已选网页摘录的事实范围/);
+
+  pageText = '已更新网页摘录的事实范围。'.repeat(55);
+  contentHash = `sha256:${'b'.repeat(64)}`;
+  await f.click('read-web-material', { index: '0' });
+  assert.match(f.mount.innerHTML, /本次读取版本与已选摘录不同/);
+  assert.equal(f.node('writing-material-0-excerpt').value, '已选网页摘录的事实范围。'.repeat(55).slice(0, 1200), '读取新版本不能自动覆盖已选摘录');
+  await f.click('use-web-segment', { index: '0' });
+  assert.match(f.node('writing-material-0-excerpt').value, /^已更新网页摘录/);
+  assert.match(f.mount.innerHTML, new RegExp(contentHash));
 });
 
 test('公开网页读取失败和取消都保留链接且忽略迟到正文', async () => {

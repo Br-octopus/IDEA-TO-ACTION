@@ -5,6 +5,7 @@
 })(typeof globalThis === 'undefined' ? this : globalThis, function () {
   const LAYERS = Object.freeze(['core', 'genre', 'task']);
   const VERIFICATION_STATUSES = Object.freeze(['unverified', 'source-reviewed', 'case-validated']);
+  const RESOURCE_KINDS = Object.freeze(['script', 'template', 'example', 'reference']);
   const WRITING_PACK_LIMITS = Object.freeze({
     text: 500,
     id: 120,
@@ -12,6 +13,7 @@
     itemsPerCollection: 50,
     packs: 100,
     sources: 50,
+    resources: 100,
     stagesPerRoute: 20
   });
 
@@ -20,7 +22,7 @@
     'applicability', 'targetFields', 'memoryNamespace', 'checkDimensions', 'outputRequirements',
     'riskReminders', 'styleBaseline', 'clarifications', 'materials', 'requirements', 'methods', 'prompts',
     'structures', 'style', 'terminology', 'evidenceRules', 'routes', 'checks', 'repairs',
-    'nextSteps', 'examples', 'sources', 'createdAt', 'updatedAt'
+    'nextSteps', 'examples', 'resources', 'sources', 'createdAt', 'updatedAt'
   ]);
   const ITEM_FIELDS = {
     clarifications: new Set(['id', 'question', 'required', 'when']),
@@ -36,6 +38,9 @@
     repairs: new Set(['id', 'enabled', 'issue', 'action', 'sourceIds', 'verificationStatus']),
     nextSteps: new Set(['id', 'enabled', 'when', 'action', 'sourceIds', 'verificationStatus']),
     examples: new Set(['id', 'enabled', 'kind', 'taskType', 'input', 'prompt', 'result', 'notes', 'verificationStatus']),
+    resources: new Set(['id', 'packId', 'packVersion', 'packName', 'kind', 'title', 'relativePath', 'archive', 'purpose', 'applicability', 'taskTypes', 'genre',
+      'sourceIds', 'verificationStatus', 'enabled', 'version', 'summary', 'format', 'sectionIds', 'inputSummary',
+      'expectedShape', 'notes', 'actionId', 'inputSchema', 'allowedRoots', 'timeoutMs', 'maxOutputBytes', 'maxFiles']),
     sources: new Set(['id', 'title', 'url', 'locator', 'version', 'versionHash', 'readAt', 'license', 'adoptionReason', 'reviewRecord', 'checkedAt', 'applicability', 'limitations', 'verificationStatus'])
   };
   const ROUTE_STAGE_FIELDS = new Set([
@@ -116,6 +121,70 @@
     return /(?:api.?key|private.?key|auth(?:entication|orization)?.?header|access.?token|refresh.?token|token|password|secret|credential|authorization|bearer|jwt)/i.test(key);
   }
 
+  function normalizeResourceSchema(input) {
+    if (!isObject(input)) return {};
+    const output = {};
+    for (const [key, value] of Object.entries(input).slice(0, 40)) {
+      if (isCredentialKey(key)) continue;
+      if (isObject(value) && isCredentialKey(key)) continue;
+      if (isObject(value)) {
+        output[key] = Object.fromEntries(Object.entries(value).slice(0, 20)
+          .filter(([childKey]) => !isCredentialKey(childKey))
+          .map(([childKey, childValue]) => [text(childKey, 80), typeof childValue === 'boolean' || typeof childValue === 'number'
+            ? childValue : text(childValue, 300)]).filter(([childKey]) => childKey));
+      } else if (Array.isArray(value)) {
+        output[key] = list(value, 20);
+      } else if (typeof value === 'boolean' || typeof value === 'number') output[key] = value;
+      else output[key] = text(value, 300);
+    }
+    return output;
+  }
+
+  function normalizeResource(input) {
+    const source = isObject(input) ? input : {};
+    const kind = RESOURCE_KINDS.includes(source.kind) ? source.kind : '';
+    const output = {
+      id: requiredId(source.id, 'resources.id'),
+      packId: text(source.packId, WRITING_PACK_LIMITS.id),
+      packVersion: Number.isSafeInteger(source.packVersion) && source.packVersion > 0 ? source.packVersion : 1,
+      packName: text(source.packName),
+      kind,
+      title: text(source.title),
+      relativePath: text(source.relativePath, 500).replace(/\\/g, '/'),
+      archive: text(source.archive, 180),
+      purpose: text(source.purpose),
+      applicability: text(source.applicability),
+      taskTypes: list(source.taskTypes),
+      genre: text(source.genre, WRITING_PACK_LIMITS.id),
+      sourceIds: sourceIds(source.sourceIds),
+      verificationStatus: verificationStatus(source.verificationStatus),
+      enabled: source.enabled !== false,
+      version: text(source.version, 160),
+      summary: text(source.summary, 1200),
+      format: text(source.format, 80),
+      sectionIds: list(source.sectionIds),
+      inputSummary: text(source.inputSummary, 800),
+      expectedShape: text(source.expectedShape, 800),
+      notes: text(source.notes, 1200)
+    };
+    if (kind === 'script') Object.assign(output, {
+      actionId: text(source.actionId, 160),
+      inputSchema: normalizeResourceSchema(source.inputSchema),
+      allowedRoots: list(source.allowedRoots, 10),
+      timeoutMs: Number.isSafeInteger(source.timeoutMs) ? Math.min(Math.max(source.timeoutMs, 100), 120_000) : 30_000,
+      maxOutputBytes: Number.isSafeInteger(source.maxOutputBytes) ? Math.min(Math.max(source.maxOutputBytes, 1024), 2_000_000) : 256_000,
+      maxFiles: Number.isSafeInteger(source.maxFiles) ? Math.min(Math.max(source.maxFiles, 1), 10_000) : 10_000
+    });
+    if (!kind) throw new TypeError(`resources.kind无效：${source.kind}`);
+    if (!output.title || !output.purpose || !output.relativePath) throw new TypeError('资源必须包含 title、purpose 和 relativePath');
+    if (output.relativePath.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(output.relativePath)
+      || output.relativePath.split('/').some(part => !part || part === '..' || part === '.')) {
+      throw new TypeError('资源 relativePath 必须是安全相对路径');
+    }
+    if (kind === 'script' && !output.actionId) throw new TypeError('脚本资源必须包含 actionId');
+    return Object.fromEntries(Object.entries(output).filter(([key]) => ITEM_FIELDS.resources.has(key)));
+  }
+
   function normalizeItem(input, kind) {
     const source = isObject(input) ? input : {};
     const output = { id: requiredId(source.id, `${kind}.id`) };
@@ -181,7 +250,7 @@
   function normalizePackItems(source, kind) {
     if (!Array.isArray(source)) return [];
     const limit = kind === 'sources' ? WRITING_PACK_LIMITS.sources : WRITING_PACK_LIMITS.itemsPerCollection;
-    return uniqueIds(source.slice(0, limit).map(item => normalizeItem(item, kind)), kind);
+    return uniqueIds(source.slice(0, limit).map(item => kind === 'resources' ? normalizeResource(item) : normalizeItem(item, kind)), kind);
   }
 
   function normalizeWritingPack(input) {
@@ -218,6 +287,7 @@
       repairs: normalizePackItems(source.repairs, 'repairs'),
       nextSteps: normalizePackItems(source.nextSteps, 'nextSteps'),
       examples: normalizePackItems(source.examples, 'examples'),
+      resources: normalizePackItems(source.resources, 'resources'),
       sources: normalizePackItems(source.sources, 'sources'),
       createdAt: text(source.createdAt, 80),
       updatedAt: text(source.updatedAt, 80)
@@ -250,6 +320,7 @@
   return {
     LAYERS,
     VERIFICATION_STATUSES,
+    RESOURCE_KINDS,
     WRITING_PACK_LIMITS,
     normalizeWritingPack,
     normalizeWritingPackSettings,

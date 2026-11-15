@@ -33,7 +33,8 @@ test('安全存储保存配置但公开状态不包含凭证', () => {
   assert.doesNotMatch(fs.readFileSync(store.filePath(), 'utf8'), /model-secret|search-secret/);
   assert.deepEqual(store.getServiceConfig(), {
     model: { baseUrl: 'https://model.example/v1', name: 'demo-model', apiKey: 'model-secret' },
-    search: { baseUrl: 'https://search.example/query', apiKey: 'search-secret' }
+    search: { baseUrl: 'https://search.example/query', apiKey: 'search-secret' },
+    writingAssistant: { mode: '', baseUrl: '', modelId: '', apiKey: '', reuseModelConnection: false }
   });
   fs.rmSync(userData, { recursive: true, force: true });
 });
@@ -94,5 +95,37 @@ test('credential 顶层别名也能兼容旧式配置提交', () => {
 
   assert.equal(store.getServiceConfig().model.apiKey, 'model-credential');
   assert.equal(store.getServiceConfig().search.apiKey, 'search-credential');
+  fs.rmSync(userData, { recursive: true, force: true });
+});
+
+test('辅助判断配置独立加密保存，公开配置不包含 API Key', () => {
+  const userData = tempUserData();
+  const store = createSettingsStore({ safeStorage: fakeSafeStorage(), getUserDataPath: () => userData });
+  const saved = store.save({ writingAssistant: {
+    mode: 'openai-chat-completions', baseUrl: 'https://relay.example/v1', modelId: 'jev-alias', credential: 'assistant-secret'
+  } });
+  assert.equal(saved.writingAssistant.configured, true);
+  assert.equal(saved.writingAssistant.mode, 'openai-chat-completions');
+  assert.equal(saved.writingAssistant.modelId, 'jev-alias');
+  assert.doesNotMatch(JSON.stringify(saved), /assistant-secret/);
+  assert.doesNotMatch(fs.readFileSync(store.filePath(), 'utf8'), /assistant-secret/);
+  assert.deepEqual(store.getServiceConfig().writingAssistant, {
+    mode: 'openai-chat-completions', baseUrl: 'https://relay.example/v1', modelId: 'jev-alias', apiKey: 'assistant-secret', reuseModelConnection: false
+  });
+  fs.rmSync(userData, { recursive: true, force: true });
+});
+
+test('辅助判断可显式复用主模型连接，模型 ID 保持独立', () => {
+  const userData = tempUserData();
+  const store = createSettingsStore({ safeStorage: fakeSafeStorage(), getUserDataPath: () => userData });
+  const saved = store.save({
+    model: { baseUrl: 'https://model.example/v1', name: 'main-model', credential: 'main-secret' },
+    writingAssistant: { mode: 'decisions', modelId: 'jev-model', reuseModelConnection: true }
+  });
+  assert.equal(saved.writingAssistant.configured, true);
+  assert.equal(saved.writingAssistant.baseUrl, 'https://model.example/v1');
+  assert.equal(saved.writingAssistant.modelId, 'jev-model');
+  assert.equal(store.getServiceConfig().writingAssistant.apiKey, '');
+  assert.equal(store.getServiceConfig().writingAssistant.reuseModelConnection, true);
   fs.rmSync(userData, { recursive: true, force: true });
 });

@@ -3,12 +3,17 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
   getConfig: () => ipcRenderer.invoke('config:get'),
   saveConfig: config => ipcRenderer.invoke('config:save', config),
+  testWritingAssistant: config => ipcRenderer.invoke('writing-assistant:test', config),
+  evaluateWritingAssistant: candidates => ipcRenderer.invoke('writing-assistant:evaluate', candidates),
+  executeWritingResource: payload => ipcRenderer.invoke('writing-resource:execute', payload),
+  readWritingResource: payload => ipcRenderer.invoke('writing-resource:read', payload),
   requestModel: payload => ipcRenderer.invoke('model:request', payload),
   requestSearch: payload => ipcRenderer.invoke('search:request', payload),
   exportBackup: content => ipcRenderer.invoke('backup:export', content),
   importBackup: () => ipcRenderer.invoke('backup:import'),
-  commitBackupImport: (stageId, attachmentIds, targetAttachmentIds) => ipcRenderer.invoke('backup:commit-import', {
-    stageId, attachmentIds, ...(Array.isArray(targetAttachmentIds) ? { targetAttachmentIds } : {})
+  commitBackupImport: (stageId, attachmentIds, targetAttachmentIds, workbenchAssets) => ipcRenderer.invoke('backup:commit-import', {
+    stageId, attachmentIds, ...(Array.isArray(targetAttachmentIds) ? { targetAttachmentIds } : {}),
+    ...(workbenchAssets ? { workbenchAssets } : {})
   }),
   discardBackupImport: stageId => ipcRenderer.invoke('backup:discard-import', stageId),
   finalizeBackupImport: transactionId => ipcRenderer.invoke('backup:finalize-import', transactionId),
@@ -66,10 +71,27 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
   }),
   pptFeedback: Object.freeze({
     chooseFile: taskId => ipcRenderer.invoke('ppt-feedback:choose-file', { taskId }),
+    saveWebSnapshot: (taskId, snapshot) => ipcRenderer.invoke('ppt-feedback:save-web-snapshot', { taskId, snapshot }),
     listAttachments: taskId => ipcRenderer.invoke('ppt-feedback:list-attachments', { taskId }),
-    openPreview: attachmentId => ipcRenderer.invoke('ppt-feedback:open-preview', { attachmentId }),
+    listDeletedAttachments: taskId => ipcRenderer.invoke('ppt-feedback:list-deleted-attachments', { taskId }),
+    listBackupAttachments: taskId => ipcRenderer.invoke('ppt-feedback:list-backup-attachments', { taskId }),
+    listAnnotations: taskId => ipcRenderer.invoke('ppt-feedback:list-annotations', { taskId }),
+    readImage: attachmentId => ipcRenderer.invoke('ppt-feedback:read-image', { attachmentId }),
+    readPdf: attachmentId => ipcRenderer.invoke('ppt-feedback:read-pdf', { attachmentId }),
+    readOffice: (attachmentId, expectedHash) => ipcRenderer.invoke('ppt-feedback:read-office', { attachmentId, expectedHash }),
+    openPreview: (attachmentId, target, expectedHash, embedded = false) => ipcRenderer.invoke('ppt-feedback:open-preview', {
+      attachmentId, ...(target ? { target } : {}), ...(expectedHash ? { expectedHash } : {}), ...(embedded ? { embedded: true } : {})
+    }),
+    setPreviewBounds: (attachmentId, bounds) => ipcRenderer.send('ppt-feedback:set-preview-bounds', { attachmentId, bounds }),
     closePreview: attachmentId => ipcRenderer.invoke('ppt-feedback:close-preview', { attachmentId }),
-    deleteAttachment: attachmentId => ipcRenderer.invoke('ppt-feedback:delete-attachment', { attachmentId }),
+    onPreviewTarget: listener => {
+      if (typeof listener !== 'function') return () => {};
+      const handler = (_event, value) => listener(value);
+      ipcRenderer.on('ppt-feedback:preview-target', handler);
+      return () => ipcRenderer.removeListener('ppt-feedback:preview-target', handler);
+    },
+    deleteAttachment: (taskId, attachmentId) => ipcRenderer.invoke('ppt-feedback:delete-attachment', { taskId, attachmentId }),
+    restoreAttachment: (taskId, attachmentId) => ipcRenderer.invoke('ppt-feedback:restore-attachment', { taskId, attachmentId }),
     saveAnnotation: payload => ipcRenderer.invoke('ppt-feedback:save-annotation', payload)
   }),
   pptSourceReader: Object.freeze({

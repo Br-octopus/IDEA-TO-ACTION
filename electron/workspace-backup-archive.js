@@ -9,14 +9,27 @@ const yazl = require('yazl');
 const yauzl = require('yauzl');
 
 const FORMAT = 'forward-step-workspace-archive';
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10_000;
-const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_RESEARCH_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_WORKBENCH_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const MAX_TASK_ATTACHMENT_BYTES = 512 * 1024 * 1024;
 const TASK_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
-const ATTACHMENT_ID = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32})\.(txt|pdf|png|jpg|webp)$/;
+const ATTACHMENT_ID = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(txt|pdf|png|jpg|webp|html|pptx|docx)$/;
+const WORKBENCH_ATTACHMENT_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MIME_EXTENSIONS = Object.freeze({
+  'text/plain': 'txt',
+  'application/pdf': 'pdf',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'text/html': 'html',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx'
+});
+const LEGACY_MIME_EXTENSIONS = Object.freeze({
   'text/plain': 'txt',
   'application/pdf': 'pdf',
   'image/png': 'png',
@@ -42,13 +55,22 @@ function zipReadError(error) {
   return fail('INVALID_ARCHIVE', 'ZIP 目录读取失败', error);
 }
 
-function verifyingStream(expectedSize, expectedHash) {
+function attachmentLimits(id, formatVersion) {
+  const match = ATTACHMENT_ID.exec(id || '');
+  const workbench = formatVersion >= 2 && match && WORKBENCH_ATTACHMENT_TOKEN.test(match[2]);
+  return {
+    attachmentBytes: workbench ? MAX_WORKBENCH_ATTACHMENT_BYTES : MAX_RESEARCH_ATTACHMENT_BYTES,
+    taskBytes: formatVersion >= 2 ? MAX_TASK_ATTACHMENT_BYTES : MAX_RESEARCH_ATTACHMENT_BYTES
+  };
+}
+
+function verifyingStream(expectedSize, expectedHash, maximumBytes) {
   const hash = createHash('sha256');
   let bytes = 0;
   return new Transform({
     transform(chunk, encoding, callback) {
       bytes += chunk.length;
-      if (bytes > expectedSize || bytes > MAX_ATTACHMENT_BYTES) {
+      if (bytes > expectedSize || bytes > maximumBytes) {
         callback(fail('SIZE_MISMATCH', '附件实际大小超过清单声明'));
         return;
       }
@@ -69,30 +91,33 @@ function exactKeys(value, keys) {
     && keys.every(key => Object.hasOwn(value, key));
 }
 
-function validateAttachment(item, seenIds, seenPaths, taskBytes) {
+function validateAttachment(item, seenIds, seenPaths, taskBytes, formatVersion) {
   const keys = ['id', 'taskId', 'type', 'size', 'sha256', 'path'];
+  const limits = attachmentLimits(item?.id, formatVersion);
+  const mimeExtensions = formatVersion === 1 ? LEGACY_MIME_EXTENSIONS : MIME_EXTENSIONS;
   if (!exactKeys(item, keys) || typeof item.id !== 'string' || typeof item.taskId !== 'string'
     || !TASK_ID.test(item.taskId) || !Number.isSafeInteger(item.size) || item.size <= 0
-    || item.size > MAX_ATTACHMENT_BYTES || typeof item.sha256 !== 'string'
-    || !/^[a-f0-9]{64}$/.test(item.sha256) || MIME_EXTENSIONS[item.type] === undefined) {
+    || item.size > limits.attachmentBytes || typeof item.sha256 !== 'string'
+    || !/^[a-f0-9]{64}$/.test(item.sha256) || mimeExtensions[item.type] === undefined) {
     throw fail('INVALID_MANIFEST', '附件清单字段无效');
   }
   const match = ATTACHMENT_ID.exec(item.id);
   const expectedPath = `attachments/${item.taskId}/${item.id}`;
-  if (!match || match[1] !== item.taskId || match[3] !== MIME_EXTENSIONS[item.type]
+  if (!match || formatVersion === 1 && WORKBENCH_ATTACHMENT_TOKEN.test(match[2])
+    || match[1] !== item.taskId || match[3] !== mimeExtensions[item.type]
     || item.path !== expectedPath || seenIds.has(item.id) || seenPaths.has(item.path)) {
     throw fail('INVALID_ATTACHMENT', '附件 ID、类型或归档路径无效');
   }
   seenIds.add(item.id);
   seenPaths.add(item.path);
   const sum = (taskBytes.get(item.taskId) || 0) + item.size;
-  if (sum > MAX_ATTACHMENT_BYTES) throw fail('TASK_ATTACHMENT_LIMIT', '单个任务的附件总量超过 25 MiB');
+  if (sum > limits.taskBytes) throw fail('TASK_ATTACHMENT_LIMIT', `单个任务的附件总量超过 ${limits.taskBytes / 1024 / 1024} MiB`);
   taskBytes.set(item.taskId, sum);
 }
 
 function validateManifest(manifest) {
   if (!exactKeys(manifest, MANIFEST_KEYS) || manifest.format !== FORMAT
-    || manifest.formatVersion !== FORMAT_VERSION || !manifest.workspace
+    || ![1, FORMAT_VERSION].includes(manifest.formatVersion) || !manifest.workspace
     || typeof manifest.workspace !== 'object' || Array.isArray(manifest.workspace)
     || !Array.isArray(manifest.attachments) || manifest.attachments.length > MAX_ATTACHMENTS) {
     throw fail('INVALID_MANIFEST', '归档清单格式或版本无效');
@@ -102,7 +127,7 @@ function validateManifest(manifest) {
   const taskBytes = new Map();
   let total = 0;
   for (const item of manifest.attachments) {
-    validateAttachment(item, ids, paths, taskBytes);
+    validateAttachment(item, ids, paths, taskBytes, manifest.formatVersion);
     total += item.size;
     if (total > MAX_TOTAL_BYTES) {
       throw fail('TOTAL_SIZE_LIMIT', '归档声明的解压总量超过 2 GiB');
@@ -118,7 +143,7 @@ function normalizeExportAttachment(item) {
   const streamFactory = item.openStream;
   const size = item.size;
   if (typeof id !== 'string' || typeof taskId !== 'string' || typeof type !== 'string'
-    || !Number.isSafeInteger(size) || size <= 0 || size > MAX_ATTACHMENT_BYTES
+    || !Number.isSafeInteger(size) || size <= 0 || size > attachmentLimits(id, FORMAT_VERSION).attachmentBytes
     || (typeof filePath !== 'string' && typeof streamFactory !== 'function')
     || (filePath !== undefined && streamFactory !== undefined)) {
     throw fail('INVALID_ATTACHMENT', '导出附件必须提供安全路径或流工厂及其大小');
@@ -170,7 +195,7 @@ async function exportWorkspaceArchive({ output, workspace, attachments = [] } = 
     const meter = new Transform({
       transform(chunk, encoding, callback) {
         bytes += chunk.length;
-        if (bytes > attachment.size || bytes > MAX_ATTACHMENT_BYTES) {
+        if (bytes > attachment.size || bytes > attachmentLimits(attachment.id, FORMAT_VERSION).attachmentBytes) {
           callback(fail('SIZE_MISMATCH', '附件实际大小超过清单声明'));
           return;
         }
@@ -196,7 +221,11 @@ async function exportWorkspaceArchive({ output, workspace, attachments = [] } = 
       ? await openSafeFile(attachment.filePath, attachment.size)
       : await attachment.streamFactory();
     if (!input || typeof input.pipe !== 'function') throw fail('INVALID_ATTACHMENT', '附件流无效');
-    const verified = verifyingStream(attachment.size, manifest.attachments[index].sha256);
+    const verified = verifyingStream(
+      attachment.size,
+      manifest.attachments[index].sha256,
+      attachmentLimits(attachment.id, FORMAT_VERSION).attachmentBytes
+    );
     zip.addReadStream(verified, attachment.path, { size: attachment.size });
     input.pipe(verified);
   }
@@ -298,6 +327,8 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
   const zip = await openZip(archivePath);
   const createdFiles = [];
   const createdDirectories = [];
+  const validAttachmentIds = new Set();
+  const attachmentErrors = [];
   try {
     const first = await new Promise((resolve, reject) => {
       zip.once('error', error => reject(fail('INVALID_ARCHIVE', 'ZIP 目录读取失败', error)));
@@ -347,7 +378,7 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
       if (!descriptor) throw fail('UNKNOWN_ENTRY', 'ZIP 包含未在清单声明的条目');
       const fileType = (entry.externalFileAttributes >>> 16) & 0o170000;
       if ((fileType !== 0 && fileType !== 0o100000)
-        || entry.uncompressedSize !== descriptor.size || entry.uncompressedSize > MAX_ATTACHMENT_BYTES
+        || entry.uncompressedSize !== descriptor.size || entry.uncompressedSize > attachmentLimits(descriptor.id, manifest.formatVersion).attachmentBytes
         || !Number.isSafeInteger(entry.compressedSize) || entry.compressedSize < 0) {
         throw fail('SIZE_MISMATCH', '附件 ZIP 声明大小无效');
       }
@@ -367,7 +398,7 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
         transform(chunk, encoding, callback) {
           entryBytes += chunk.length;
           actualTotal += chunk.length;
-          if (entryBytes > descriptor.size || entryBytes > MAX_ATTACHMENT_BYTES) {
+          if (entryBytes > descriptor.size || entryBytes > attachmentLimits(descriptor.id, manifest.formatVersion).attachmentBytes) {
             callback(fail('SIZE_MISMATCH', '附件实际大小超过清单声明'));
           } else if (actualTotal > MAX_TOTAL_BYTES) {
             callback(fail('TOTAL_SIZE_LIMIT', 'ZIP 实际解压总量超过 2 GiB'));
@@ -384,18 +415,23 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
       createdFiles.push(destination);
       await pipeline(await readEntry(zip, entry), meter, fileHandle.createWriteStream());
       if (entryBytes !== descriptor.size || hash.digest('hex') !== descriptor.sha256) {
-        throw fail('CHECKSUM_MISMATCH', '附件大小或 SHA-256 校验失败');
-      }
+        await fs.promises.unlink(destination);
+        createdFiles.splice(createdFiles.indexOf(destination), 1);
+        attachmentErrors.push({ id: descriptor.id, taskId: descriptor.taskId, code: 'CHECKSUM_MISMATCH' });
+      } else validAttachmentIds.add(descriptor.id);
     }
-    if (seen.size !== paths.size || [...paths].some(name => !seen.has(name))) {
-      throw fail('MISSING_ENTRY', 'ZIP 缺少清单声明的附件');
+    for (const descriptor of manifest.attachments) {
+      if (!seen.has(descriptor.path)) attachmentErrors.push({ id: descriptor.id, taskId: descriptor.taskId, code: 'MISSING_ENTRY' });
     }
     zip.close();
+    for (const directory of createdDirectories.reverse()) await fs.promises.rmdir(directory).catch(() => {});
     return {
       format: FORMAT,
-      formatVersion: FORMAT_VERSION,
+      formatVersion: manifest.formatVersion,
       workspace: manifest.workspace,
-      attachments: manifest.attachments.map(item => ({ ...item, path: path.resolve(root, ...item.path.split('/')) }))
+      attachments: manifest.attachments.filter(item => validAttachmentIds.has(item.id))
+        .map(item => ({ ...item, path: path.resolve(root, ...item.path.split('/')) })),
+      attachmentErrors
     };
   } catch (error) {
     try { zip.close(); } catch {}
@@ -413,8 +449,9 @@ module.exports = {
     totalBytes: MAX_TOTAL_BYTES,
     manifestBytes: MAX_MANIFEST_BYTES,
     attachments: MAX_ATTACHMENTS,
-    attachmentBytes: MAX_ATTACHMENT_BYTES,
-    perTaskAttachmentBytes: MAX_ATTACHMENT_BYTES
+    attachmentBytes: MAX_WORKBENCH_ATTACHMENT_BYTES,
+    researchAttachmentBytes: MAX_RESEARCH_ATTACHMENT_BYTES,
+    perTaskAttachmentBytes: MAX_TASK_ATTACHMENT_BYTES
   }),
   WorkspaceArchiveError,
   exportWorkspaceArchive,

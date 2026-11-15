@@ -192,6 +192,10 @@ function createPromptAgentSources({
   return {
     selectDirectory,
     listAuthorized,
+    resolveAuthorizedRoot(id) {
+      assertStorageHealthy();
+      return resolveValidRoot(getGrant(id, true));
+    },
     searchIndex(id, query, filters) {
       assertStorageHealthy();
       const grant = getGrant(id, true);

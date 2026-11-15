@@ -17,6 +17,13 @@ function createWritingApp(options = {}) {
     addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
     querySelectorAll() { return []; }, querySelector() { return element('send-risk-checkbox'); }, setAttribute() {}, scrollIntoView() {}, focus() {}, click() { clicks.push(id); }, select() {}, remove() {} });
   const element = id => { if (!elements.has(id)) elements.set(id, makeElement(id)); return elements.get(id); };
+  Object.assign(element('settings-backup-import-dialog'), {
+    showModal() {
+      const choice = options.backupImportChoice || 'replace';
+      listeners.get('settings-backup-import-dialog:click')?.({ target: { closest: () => ({ dataset: { backupImportChoice: choice } }) } });
+    },
+    close() { this.open = false; }
+  });
   // 从真实页面读取表单默认值，避免替身凭空赋值掩盖空选择器等问题。
   const pageHTML = fs.readFileSync(require.resolve('../../prototype/index.html'), 'utf8');
   const knowledgeForms = [...pageHTML.matchAll(/<form\b[^>]*id="knowledge-entry-form"[^>]*>[\s\S]*?<\/form>/g)].map(match => match[0]);
@@ -30,8 +37,14 @@ function createWritingApp(options = {}) {
   };
   const scenes = ['task', 'ppt'].map(scene => Object.assign(element(`scene-${scene}`), { dataset: { agentScene: scene } }));
   const nav = ['article', 'prompt-agent'].map(view => Object.assign(element(`nav-${view}`), { dataset: { view } }));
+  nav.push(Object.assign(element('nav-memory'), { dataset: { view: 'article', navKey: 'memory' } }));
   const document = {
     getElementById(id) { return dom.document.getElementById(id) || academicReviewDOM.document.getElementById(id) || academicPublishingDOM.document.getElementById(id) || element(id); },
+    querySelector(selector) {
+      if (selector === '#view-article h1') return element('article-page-title');
+      if (selector === '#view-article .lede') return element('article-page-description');
+      return null;
+    },
     querySelectorAll(selector) { return selector === '[data-agent-scene]' ? scenes : selector === '[data-view]' ? nav : []; },
     createElement() { return makeElement('created'); }, body: { append() {} }, execCommand() { return true; }
   };

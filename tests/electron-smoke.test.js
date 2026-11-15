@@ -52,7 +52,7 @@ function loadBackupHandler({ channel, filePath, fsModule = fs, importCanceled = 
           app,
           BrowserWindow: MockBrowserWindow,
           dialog,
-          ipcMain: { handle: (name, handler) => registeredHandlers.set(name, handler) }
+          ipcMain: { handle: (name, handler) => registeredHandlers.set(name, handler), on: () => {} }
         };
       }
       if (request === 'node:fs') return fsModule;
@@ -100,11 +100,81 @@ test('Electron security settings and preload whitelist are present', () => {
   assert.match(main, /nodeIntegration:\s*false/);
   assert.match(main, /sandbox:\s*true/);
   for (const method of [
-    'getConfig', 'saveConfig', 'requestModel', 'requestSearch',
+    'getConfig', 'saveConfig', 'testWritingAssistant', 'requestModel', 'requestSearch',
     'exportBackup', 'importBackup', 'listBackups', 'readBackup', 'social', 'research'
   ]) {
     assert.match(preload, new RegExp(`${method}\\s*:`));
   }
+});
+
+test('Electron 模型和搜索 IPC 将各自配置分区传给客户端', async () => {
+  const registeredHandlers = new Map();
+  const clientConfigs = { model: [], search: [] };
+  const serviceConfig = {
+    model: { baseUrl: 'https://model.example/v1', name: 'fixture-model', apiKey: 'fixture-token' },
+    search: { baseUrl: 'https://search.example', apiKey: 'fixture-search-token' },
+    writingAssistant: {}
+  };
+  const app = {
+    isPackaged: false,
+    whenReady: () => Promise.resolve(),
+    getPath: () => os.tmpdir(),
+    getAppPath: () => root,
+    on: () => {},
+    quit: () => {}
+  };
+  class MockBrowserWindow { async loadURL() {} }
+  MockBrowserWindow.getAllWindows = () => [];
+  const context = {
+    console, __dirname: path.join(root, 'electron'), Buffer, Date, Promise, setTimeout, clearTimeout,
+    process: { env: {}, platform: 'win32', pid: 12345 },
+    require(request) {
+      if (request === 'electron') return {
+        app, BrowserWindow: MockBrowserWindow,
+        dialog: { showMessageBox: async () => {}, showOpenDialog: async () => ({ canceled: true }) },
+        ipcMain: { handle: (name, handler) => registeredHandlers.set(name, handler), on: () => {} }
+      };
+      if (request === path.join(root, 'electron', 'settings-store.js')) {
+        return { createSettingsStore: () => ({ getServiceConfig: () => serviceConfig }) };
+      }
+      if (request === path.join(root, 'server', 'model-client.js')) {
+        return { createModelClient: config => {
+          clientConfigs.model.push(config);
+          return { request: async messages => ({ text: messages[0].content }) };
+        } };
+      }
+      if (request === path.join(root, 'server', 'search-client.js')) {
+        return { createSearchClient: config => {
+          clientConfigs.search.push(config);
+          return { search: async query => ({ query }) };
+        } };
+      }
+      return require(request);
+    }
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8'), context, {
+    filename: path.join(root, 'electron', 'main.js')
+  });
+  await new Promise(resolve => setImmediate(resolve));
+
+  const model = await registeredHandlers.get('model:request')(null, { messages: [{ role: 'user', content: 'hello' }] });
+  const search = await registeredHandlers.get('search:request')(null, { query: 'hello' });
+  assert.equal(model.text, 'hello');
+  assert.deepEqual(clientConfigs.model, [serviceConfig.model]);
+  assert.deepEqual(clientConfigs.search, [serviceConfig.search]);
+  assert.deepEqual(search, { query: 'hello' });
+});
+
+test('写作辅助判断通过独立 IPC 配置测试且主进程复用安全存储凭证', () => {
+  const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'electron', 'preload.js'), 'utf8');
+  const settingsStore = fs.readFileSync(path.join(root, 'electron', 'settings-store.js'), 'utf8');
+  assert.match(main, /ipcMain\.handle\(['"]writing-assistant:test['"]/);
+  assert.match(main, /createWritingAssistantClient\(resolved\)\.testConnection\(\)/);
+  assert.match(preload, /testWritingAssistant:\s*config\s*=>\s*ipcRenderer\.invoke\(['"]writing-assistant:test['"],\s*config\)/);
+  assert.match(settingsStore, /writingAssistant:\s*\{/);
+  assert.match(settingsStore, /encode\(safeStorage, config\.writingAssistant\.apiKey\)/);
+  assert.doesNotMatch(preload, /apiKey|credential|safeStorage/);
 });
 
 test('Electron 备份 IPC 使用受限通道和文件对话框', () => {
@@ -295,6 +365,11 @@ test('真实服务支持随机端口，首页和配置接口可访问', async t 
   const config = await configResponse.json();
   assert.equal(typeof config.model.configured, 'boolean');
   assert.equal(typeof config.search.configured, 'boolean');
+
+  const probeResponse = await fetch(`${baseUrl}/__workspace_probe__`);
+  assert.equal(probeResponse.status, 200);
+  assert.match(probeResponse.headers.get('content-type'), /text\/html/);
+  assert.doesNotMatch(await probeResponse.text(), /<script|desktopApi|forward-step.workspace/i);
 });
 
 test('非法 HTTP URL 返回 JSON 错误，服务运行期错误会记录', async t => {
@@ -330,16 +405,19 @@ test('非法 HTTP URL 返回 JSON 错误，服务运行期错误会记录', asyn
   assert.equal(loggedErrors.at(-1)[1], runtimeError);
 });
 
-test('生产模式先启动随机端口服务，再使用实际地址加载页面', async () => {
+test('生产模式首次启动选定端口，重启继续使用原工作区来源', async t => {
   const mainSource = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'forward-step-electron-origin-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
   const events = [];
   const registeredHandlers = new Map();
+  const registeredListeners = new Map();
   const appEvents = new Map();
   const app = {
     isPackaged: true,
     whenReady: () => Promise.resolve(),
     getAppPath: () => root,
-    getPath: () => root,
+    getPath: () => userDataPath,
     on: (name, handler) => appEvents.set(name, handler),
     quit: () => events.push('quit')
   };
@@ -372,7 +450,10 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
           app,
           BrowserWindow: browserWindow,
           dialog: { showMessageBox: async () => {} },
-          ipcMain: { handle: (name, handler) => registeredHandlers.set(name, handler) }
+          ipcMain: {
+            handle: (name, handler) => registeredHandlers.set(name, handler),
+            on: (name, handler) => registeredListeners.set(name, handler)
+          }
         };
       }
       if (request === path.join(root, 'server.js')) {
@@ -398,6 +479,14 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'start-bundled-service:127.0.0.1:0',
     'load-url:http://127.0.0.1:50987'
   ]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(userDataPath, 'workspace-origin-port.json'), 'utf8')).port, 50987);
+  vm.runInNewContext(mainSource, { ...context }, { filename: path.join(root, 'electron', 'main.js') });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events.slice(3), [
+    'create-window',
+    'start-bundled-service:127.0.0.1:50987',
+    'load-url:http://127.0.0.1:50987'
+  ]);
   const expectedChannels = [
     'config:get', 'config:save', 'model:request', 'search:request',
     'backup:export', 'backup:import', 'backup:list', 'backup:read',
@@ -411,15 +500,17 @@ test('生产模式先启动随机端口服务，再使用实际地址加载页�
     'social-source:version:activate', 'social-source:version:cleanup', 'social-source:version:prepare',
     'social-source:version:rollback', 'social-source:versions:list',
     'research:save-attachment', 'research:read-attachment', 'research:delete-attachment',
-    'ppt-feedback:choose-file', 'ppt-feedback:list-attachments', 'ppt-feedback:open-preview',
-    'ppt-feedback:close-preview', 'ppt-feedback:delete-attachment', 'ppt-feedback:save-annotation',
+    'ppt-feedback:choose-file', 'ppt-feedback:list-attachments', 'ppt-feedback:list-deleted-attachments', 'ppt-feedback:list-backup-attachments', 'ppt-feedback:list-annotations', 'ppt-feedback:read-image', 'ppt-feedback:read-office', 'ppt-feedback:read-pdf', 'ppt-feedback:open-preview',
+    'ppt-feedback:close-preview', 'ppt-feedback:delete-attachment', 'ppt-feedback:restore-attachment', 'ppt-feedback:save-annotation', 'ppt-feedback:save-web-snapshot',
     'ppt-source:select-file', 'ppt-source:select-directory', 'ppt-source:list-directory',
     'ppt-source:read', 'ppt-source:cancel',
     'prompt-agent-sources:select-directory', 'prompt-agent-sources:list-authorized',
     'prompt-agent-sources:refresh-index', 'prompt-agent-sources:search-index',
-    'prompt-agent-sources:set-authorization-enabled', 'prompt-agent-sources:remove-authorization'
+    'prompt-agent-sources:set-authorization-enabled', 'prompt-agent-sources:remove-authorization',
+    'writing-assistant:evaluate', 'writing-assistant:test', 'writing-resource:execute', 'writing-resource:read'
   ];
   assert.deepEqual([...registeredHandlers.keys()].sort(), expectedChannels.sort());
+  assert.deepEqual([...registeredListeners.keys()].sort(), ['ppt-feedback:preview-target', 'ppt-feedback:set-preview-bounds'].sort());
   assert.doesNotMatch(mainSource, /loadFile\(/);
 
   let prevented = false;
@@ -464,7 +555,7 @@ test('Electron 初始化和窗口加载失败会显示错误并退出', async ()
             app,
             BrowserWindow: MockBrowserWindow,
             dialog: { showMessageBox: async () => events.push('show-error') },
-            ipcMain: { handle: () => {} }
+            ipcMain: { handle: () => {}, on: () => {} }
           };
         }
         return require(request);

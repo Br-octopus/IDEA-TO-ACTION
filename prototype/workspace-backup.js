@@ -11,7 +11,7 @@
   const SCOPES = new Set(["workspace", "knowledge-base"]);
   const WORKSPACE_COLLECTIONS = ["projects", "prompts", "cases", "knowledgeEntries", "references"];
   const OPTIONAL_WORKSPACE_COLLECTIONS = [
-    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories", "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects"
+    "promptAgentTasks", "promptAgentSources", "writingArticles", "writingMemories", "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects", "workbenchAttachments", "workbenchAnnotations"
   ];
   const WRITING_PACK_COLLECTIONS = ["writingPacks", "writingPackSettings"];
   const WRITING_REVIEW_COLLECTION = "writingReviews";
@@ -21,7 +21,8 @@
     "schemaVersion", "projects", "prompts", "references", "researchSelection",
     "knowledgeEntries", "knowledgeSelection", "cases", "knowledgeFilters", "knowledgeMetadata",
     "researchTasks", "platformConnections", "researchAttachments", "promptAgentTasks", "promptAgentSources",
-    "writingArticles", "writingMemories", "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects"
+    "writingArticles", "writingMemories", "writingPacks", "writingPackSettings", "writingReviews", "academicResponseProjects",
+    "workbenchAttachments", "workbenchAnnotations"
   ];
   const KNOWLEDGE_DATA_FIELDS = [
     "knowledgeEntries", "cases", "knowledgeMetadata"
@@ -43,8 +44,8 @@
     return { kind: "object", fields };
   }
 
-  function array(item) {
-    return { kind: "array", item };
+  function array(item, maxItems) {
+    return { kind: "array", item, ...(Number.isSafeInteger(maxItems) ? { maxItems } : {}) };
   }
 
   const PROJECT_STEP_FIELDS = {
@@ -60,6 +61,107 @@
     order: SCALAR,
     index: SCALAR,
     completed: SCALAR_OR_LIST
+  };
+
+  const WORKBENCH_MESSAGE_FIELDS = {
+    id: SCALAR,
+    role: SCALAR,
+    text: SCALAR,
+    kind: SCALAR,
+    question: SCALAR,
+    resolved: SCALAR,
+    confirmedRecommendation: SCALAR,
+    annotationConflictKey: SCALAR,
+    annotationConflictChoice: SCALAR,
+    annotationConflictKeepId: SCALAR,
+    recommendation: object({ text: SCALAR, reason: SCALAR }),
+    options: LIST
+  };
+
+  const WORKBENCH_VIEWER_FIELDS = {
+    zoom: SCALAR,
+    zoomMode: SCALAR,
+    pageIndex: SCALAR,
+    scrollLeft: SCALAR,
+    scrollTop: SCALAR
+  };
+
+  const WORKBENCH_PROMPT_CITATION_FIELDS = {
+    annotationId: SCALAR,
+    attachmentId: SCALAR,
+    attachmentName: SCALAR,
+    contentHash: SCALAR,
+    pageIndex: SCALAR,
+    targetSnapshot: SCALAR,
+    comment: SCALAR,
+    category: SCALAR,
+    intent: SCALAR
+  };
+
+  const WORKBENCH_KNOWLEDGE_SOURCE_FIELDS = {
+    sourceId: SCALAR,
+    version: SCALAR,
+    title: SCALAR,
+    type: SCALAR,
+    sourceType: SCALAR,
+    sourceUrl: SCALAR,
+    sourceVersion: SCALAR,
+    summary: SCALAR,
+    reusablePatterns: SCALAR,
+    contentExcerpt: SCALAR,
+    limitations: SCALAR,
+    licenseNote: SCALAR,
+    verificationStatus: SCALAR,
+    sourceUpdatedAt: SCALAR,
+    domains: LIST,
+    stages: LIST,
+    keywords: LIST,
+    importedAt: SCALAR
+  };
+
+  const WORKBENCH_PROMPT_VERSION_FIELDS = {
+    id: SCALAR,
+    version: SCALAR,
+    createdAt: SCALAR,
+    prompt: SCALAR,
+    citations: array(object(WORKBENCH_PROMPT_CITATION_FIELDS), 2000),
+    sources: array(object(WORKBENCH_KNOWLEDGE_SOURCE_FIELDS), 500)
+  };
+
+  const WORKBENCH_ATTACHMENT_FIELDS = {
+    id: SCALAR,
+    archiveId: SCALAR,
+    taskId: SCALAR,
+    displayName: SCALAR,
+    kind: SCALAR,
+    mimeType: SCALAR,
+    size: SCALAR,
+    sha256: SCALAR,
+    version: SCALAR,
+    createdAt: SCALAR,
+    deleted: SCALAR
+  };
+
+  const WORKBENCH_ANNOTATION_FIELDS = {
+    id: SCALAR,
+    taskId: SCALAR,
+    attachmentId: SCALAR,
+    contentHash: SCALAR,
+    pageIndex: SCALAR,
+    target: object({
+      kind: SCALAR, selector: SCALAR, excerpt: SCALAR, exact: SCALAR, prefix: SCALAR, suffix: SCALAR,
+      source: object({ url: SCALAR, fetchedAt: SCALAR, contentHash: SCALAR }),
+      start: SCALAR, end: SCALAR, x: SCALAR, y: SCALAR, width: SCALAR, height: SCALAR,
+      x1: SCALAR, y1: SCALAR, x2: SCALAR, y2: SCALAR, points: array(object({ x: SCALAR, y: SCALAR }), 128)
+    }),
+    comment: SCALAR,
+    category: SCALAR,
+    intent: SCALAR,
+    createdAt: SCALAR,
+    updatedAt: SCALAR,
+    status: SCALAR,
+    selected: SCALAR,
+    reassociatedFromId: SCALAR
   };
 
   const PROMPT_METADATA_FIELDS = {
@@ -142,7 +244,19 @@
     time: SCALAR,
     webSearch: SCALAR,
     completed: LIST,
-    masterPrompt: SCALAR
+    masterPrompt: SCALAR,
+    conversation: array(object(WORKBENCH_MESSAGE_FIELDS)),
+    conversationDraft: SCALAR,
+    workbenchLayout: SCALAR,
+    workbenchPreviewMode: SCALAR,
+    workbenchAttachmentId: SCALAR,
+    workbenchAttachmentIds: LIST,
+    workbenchClosedAttachmentIds: LIST,
+    workbenchViewerState: { kind: "record", item: object(WORKBENCH_VIEWER_FIELDS) },
+    workbenchGeneratedPrompt: SCALAR,
+    workbenchPromptDraft: SCALAR,
+    workbenchKnowledgeSources: array(object(WORKBENCH_KNOWLEDGE_SOURCE_FIELDS), 500),
+    workbenchPromptVersions: array(object(WORKBENCH_PROMPT_VERSION_FIELDS), 10)
   };
 
   const PROMPT_FIELDS = {
@@ -154,6 +268,7 @@
     createdAt: SCALAR,
     updatedAt: SCALAR,
     verified: SCALAR,
+    favorite: SCALAR,
     note: SCALAR,
     domain: SCALAR,
     type: SCALAR,
@@ -192,11 +307,17 @@
 
   const KNOWLEDGE_ENTRY_FIELDS = {
     id: SCALAR,
+    version: SCALAR,
     type: SCALAR,
     title: SCALAR,
     sourceUrl: SCALAR,
     url: SCALAR,
     sourceType: SCALAR,
+    sourcePath: SCALAR,
+    sourceFetchedAt: SCALAR,
+    sourceVersion: SCALAR,
+    sourceFormat: SCALAR,
+    sourceCapabilities: LIST,
     sourceKind: SCALAR,
     sourceId: SCALAR,
     hiddenAt: SCALAR,
@@ -306,9 +427,18 @@
       return Array.isArray(value) ? value.filter(isScalar).map(clone) : undefined;
     }
     if (schema.kind === "array") {
-      return Array.isArray(value)
-        ? value.map(item => sanitizeBySchema(item, schema.item)).filter(item => item !== undefined)
-        : undefined;
+      if (!Array.isArray(value)) return undefined;
+      const items = Number.isSafeInteger(schema.maxItems) ? value.slice(-schema.maxItems) : value;
+      return items.map(item => sanitizeBySchema(item, schema.item)).filter(item => item !== undefined);
+    }
+    if (schema.kind === "record") {
+      if (!isObject(value)) return undefined;
+      return Object.entries(value).slice(0, 200).reduce((result, [key, item]) => {
+        if (!/^[a-zA-Z0-9_-]{1,100}$/.test(key)) return result;
+        const sanitized = sanitizeBySchema(item, schema.item);
+        if (sanitized !== undefined) result[key] = sanitized;
+        return result;
+      }, {});
     }
     if (schema.kind === "object") {
       if (!isObject(value)) return undefined;
@@ -334,6 +464,8 @@
     sanitized.cases = sanitizeCollection(source.cases, CASE_FIELDS);
     sanitized.knowledgeEntries = sanitizeCollection(source.knowledgeEntries, KNOWLEDGE_ENTRY_FIELDS);
     sanitized.references = sanitizeCollection(source.references, REFERENCE_FIELDS);
+    sanitized.workbenchAttachments = sanitizeCollection(source.workbenchAttachments, WORKBENCH_ATTACHMENT_FIELDS);
+    sanitized.workbenchAnnotations = sanitizeCollection(source.workbenchAnnotations, WORKBENCH_ANNOTATION_FIELDS);
     sanitized.knowledgeMetadata = sanitizeBySchema(source.knowledgeMetadata, object(KNOWLEDGE_METADATA_FIELDS)) || {};
     sanitized.knowledgeFilters = sanitizeBySchema(source.knowledgeFilters, object(KNOWLEDGE_FILTER_FIELDS)) || {};
     if (storage && typeof storage.sanitizeResearchState === "function") {
@@ -404,6 +536,8 @@
     data.writingPackSettings = Array.isArray(state.writingPackSettings) ? clone(state.writingPackSettings) : [];
     data.writingReviews = Array.isArray(state.writingReviews) ? clone(state.writingReviews) : [];
     data.academicResponseProjects = Array.isArray(state.academicResponseProjects) ? clone(state.academicResponseProjects) : [];
+    data.workbenchAttachments = Array.isArray(state.workbenchAttachments) ? clone(state.workbenchAttachments) : [];
+    data.workbenchAnnotations = Array.isArray(state.workbenchAnnotations) ? clone(state.workbenchAnnotations) : [];
     return sanitizeResearchBackupData(data);
   }
 

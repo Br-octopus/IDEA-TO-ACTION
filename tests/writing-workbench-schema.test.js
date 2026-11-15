@@ -161,6 +161,22 @@ test('学术工作区 JSON 往返保留目标，旧工作区不会伪造目标�
   assert.equal(Object.hasOwn(schema.normalizeWritingWorkspace({ id: 'legacy', article: { id: 'legacy' } }).article, 'academicTarget'), false);
 });
 
+test('当前稿件轮次与外部新稿决定状态经过 schema 时稳定往返', () => {
+  const workspace = schema.normalizeWritingWorkspace({ id: 'draft-choice', genre: 'article',
+    article: { id: 'draft-choice', genre: 'article', draft: '已采用稿', draftRoundId: 'round-adopted' },
+    rounds: [{ id: 'round-adopted', draft: '已采用稿', draftDecision: {
+      status: 'adopted', previousDraft: '采用前稿', previousDraftRoundId: 'round-original',
+      adoptedAt: '2026-11-11T10:00:00.000Z', apiKey: 'must-not-survive'
+    } }, { id: 'round-pending', draft: '待比较稿', draftDecision: { status: 'pending', secret: 'must-not-survive' } }]
+  });
+  assert.equal(workspace.article.draftRoundId, 'round-adopted');
+  assert.deepEqual(workspace.rounds.map(round => round.draftDecision), [
+    { status: 'adopted', previousDraft: '采用前稿', previousDraftRoundId: 'round-original', adoptedAt: '2026-11-11T10:00:00.000Z', undoneAt: '' },
+    { status: 'pending', previousDraft: '', previousDraftRoundId: '', adoptedAt: '', undoneAt: '' }
+  ]);
+  assert.doesNotMatch(JSON.stringify(workspace), /must-not-survive/);
+});
+
 test('提示词版本保留学术任务类型，未知任务类型仍不进入历史', () => {
   const round = schema.normalizeWritingRound({ promptVersions: [
     { id: 'academic-outline', taskType: 'academic-outline', content: '提纲提示词' },
@@ -204,6 +220,33 @@ test('材料快照保留有限的读取范围状态并清理路径与凭证', ()
   assert.equal(reference.contentStatus, 'reference-only');
   assert.equal(Object.hasOwn(reference, 'password'), false);
   assert.equal(Object.hasOwn(schema.normalizeWritingRound({ materials: [{ title: '未知状态', contentStatus: 'read' }] }).materials[0], 'contentStatus'), false);
+});
+
+test('写作来源只保留当前附件版本、当前附件 ID 上已选的有效批注快照', () => {
+  const annotation = {
+    id: 'note-1', attachmentId: 'attachment-1', contentHash: 'sha256:version-1', pageIndex: 2,
+    target: { kind: 'text', selector: 'p:nth-of-type(2)', exact: '原文句子' },
+    comment: '保留事实，调整表述', category: 'style', intent: 'modify', selected: true, status: 'active'
+  };
+  const source = {
+    id: 'attachment-1', title: '说明文档.pdf', sourceId: 'attachment-1', sourceVersion: annotation.contentHash,
+    attachmentRequired: true, contentStatus: 'reference-only', selectedForPrompt: true,
+    annotationSnapshot: [annotation]
+  };
+  const normalized = schema.normalizeWritingRound({ sources: [source] }).sources[0];
+
+  assert.equal(normalized.annotationSnapshot.length, 1);
+  assert.equal(normalized.annotationSnapshot[0].comment, annotation.comment);
+  assert.equal(normalized.annotationSnapshot[0].target.exact, annotation.target.exact);
+  assert.throws(() => schema.normalizeWritingRound({ sources: [{
+    ...source, sourceId: 'other-attachment'
+  }] }), /当前附件/);
+  assert.throws(() => schema.normalizeWritingRound({ sources: [{
+    ...source, sourceVersion: 'sha256:old-version'
+  }] }), /当前版本/);
+  assert.throws(() => schema.normalizeWritingRound({ sources: [{
+    ...source, annotationSnapshot: [{ ...annotation, selected: false }]
+  }] }), /已选的有效批注/);
 });
 
 test('材料卡片与来源保留相对位置、版本、摘录行、选用理由和读取失败状态', () => {
@@ -430,7 +473,12 @@ test('记忆支持通用、文体、项目和旧单篇范围，并保留撤销�
   assert.equal(general.scope, 'general');
   assert.equal(general.sourceArticleId, 'article-1');
   assert.deepEqual(general.undo, { action: 'auto-promote', undoneAt: '2026-10-20' });
+  assert.equal(general.status, 'ignored');
+  assert.equal(general.enabled, false);
+  assert.equal(general.origin, 'repeated-round');
   assert.equal(article.scope, 'article');
+  assert.equal(article.status, 'confirmed');
+  assert.equal(article.origin, 'user-confirmed');
   assert.equal(article.articleId, 'article-2');
   assert.equal(project.scope, 'project');
   assert.equal(project.projectId, 'project-2');
@@ -500,7 +548,7 @@ test('轮次来源保留用途和验证状态，并剔除嵌套未知及凭证�
   }]);
 });
 
-test('轮次新增文本和来源元数据均有限长、有限条数', () => {
+test('轮次新增文本和来源元数据字段有限长，但不按文件份数截断', () => {
   const longText = '文'.repeat(20000);
   const round = schema.normalizeWritingRound({
     parentRoundId: longText, diagnosis: longText, prompt: longText, draft: longText,
@@ -510,9 +558,28 @@ test('轮次新增文本和来源元数据均有限长、有限条数', () => {
   assert.equal(round.diagnosis.length, 4000);
   assert.equal(round.prompt.length, 8000);
   assert.equal(round.draft.length, 8000);
-  assert.equal(round.sources.length, 20);
+  assert.equal(round.sources.length, 25);
   assert.ok(round.sources.every(source => source.title.length === 160
     && source.url.length === 2000 && source.excerpt.length === 1200));
+});
+
+test('资料库与提示词来源快照保留完整 8000 字正文、URL 和版本，超限明确拒绝', () => {
+  const excerpt = '正文'.repeat(4000);
+  const material = schema.normalizeWritingRound({ materials: [{ id: 'library-entry-1', title: '资料',
+    sourceType: 'library-entry', sourceId: 'knowledge-1', sourceVersion: 'V3',
+    url: 'https://example.test/source', excerpt }] }).materials[0];
+  const promptSource = schema.normalizeWritingRound({ sources: [{ id: 'prompt-1', title: '提示词',
+    sourceType: 'prompt-library', sourceId: 'prompt-1', sourceVersion: 'V8', excerpt }] }).sources[0];
+  assert.equal(material.excerpt, excerpt);
+  assert.equal(material.sourceId, 'knowledge-1');
+  assert.equal(material.sourceVersion, 'V3');
+  assert.equal(material.url, 'https://example.test/source');
+  assert.equal(promptSource.excerpt, excerpt);
+  assert.equal(promptSource.sourceVersion, 'V8');
+  assert.throws(() => schema.normalizeWritingRound({ materials: [{ sourceType: 'library-entry', excerpt: `${excerpt}超` }] }), /超过 8000 字/);
+  assert.throws(() => schema.normalizeWritingRound({ sources: [{ sourceType: 'prompt-library', excerpt: `${excerpt}超` }] }), /超过 8000 字/);
+  assert.equal(schema.normalizeWritingRound({ materials: [{ excerpt: '普'.repeat(1300) }] }).materials[0].excerpt.length, 1200,
+    '常规参考材料仍沿用原有 1200 字限制');
 });
 
 test('风格档案保留用户修正和适用范围，未知文体不伪装', () => {
@@ -692,6 +759,21 @@ test('自动记忆原候选关联显式保留且限长，缺省不增加字段',
   const memory = schema.normalizeWritingMemory({ preference: '编辑后的偏好', sourcePreferenceKey: '原'.repeat(600) });
   assert.equal(memory.sourcePreferenceKey.length, 500);
   assert.deepEqual(schema.normalizeWritingMemory(JSON.parse(JSON.stringify(memory))), memory);
+});
+
+test('待确认、启停、历史和偏好使用快照按白名单及上限规范化', () => {
+  const memory = schema.normalizeWritingMemory({ id: 'candidate', preference: '待确认', origin: 'repeated-round', status: 'pending', enabled: false,
+    history: Array.from({ length: 12 }, (_, i) => ({ id: `v${i}`, preference: `旧偏好${i}`, savedAt: 'now', password: 'secret' })) });
+  const workspace = schema.normalizeWritingWorkspace({ article: { id: 'a', skippedMemoryIds: ['m1', 'm1', ''] }, rounds: [{ id: 'r', memorySnapshot: [
+    { id: 'm1', preference: '本轮采用', scope: 'general', origin: 'user-confirmed' }, { id: 'm2', preference: '超出上限' }, { id: 'm3', preference: '超出上限' }, { id: 'm4', preference: '超出上限' }
+  ] }] });
+
+  assert.equal(memory.status, 'pending');
+  assert.equal(memory.enabled, false);
+  assert.equal(memory.history.length, 10);
+  assert.equal('password' in memory.history[0], false);
+  assert.deepEqual(workspace.article.skippedMemoryIds, ['m1']);
+  assert.deepEqual(workspace.rounds[0].memorySnapshot.map(item => item.id), ['m1', 'm2', 'm3']);
 });
 
 test('文章和轮次可选基础包选择与快照按白名单规范化', () => {

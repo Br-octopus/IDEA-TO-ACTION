@@ -37,6 +37,7 @@ function loadPreload() {
 
 function loadMain({ createSocialApiClient = socialApiClient.createSocialApiClient, openDialogResult = { canceled: true, filePaths: [] } } = {}) {
   const handlers = new Map();
+  const listeners = new Map();
   const windows = [];
   const executedScripts = [];
   const appEvents = new Map();
@@ -68,7 +69,10 @@ function loadMain({ createSocialApiClient = socialApiClient.createSocialApiClien
     app,
     BrowserWindow,
     dialog: { showMessageBox: async () => {}, showSaveDialog: async () => ({ canceled: true }), showOpenDialog: async () => openDialogResult },
-    ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
+    ipcMain: {
+      handle: (channel, handler) => handlers.set(channel, handler),
+      on: (channel, handler) => listeners.set(channel, handler)
+    },
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
     session: { fromPartition: partition => ({ partition, clearStorageData: async () => {}, clearCache: async () => {} }) }
   };
@@ -85,7 +89,7 @@ function loadMain({ createSocialApiClient = socialApiClient.createSocialApiClien
     }
   };
   vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), context, { filename: mainPath });
-  return new Promise(resolve => setImmediate(() => resolve({ handlers, windows, executedScripts, userData, appEvents, context })));
+  return new Promise(resolve => setImmediate(() => resolve({ handlers, listeners, windows, executedScripts, userData, appEvents, context })));
 }
 
 test('preload 只导出固定 social/research API，调用映射到命名 IPC 通道', async () => {
