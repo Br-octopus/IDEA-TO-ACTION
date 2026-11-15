@@ -48,6 +48,9 @@
     const url = cleanText(source.url || source.link, 1000);
     if (!/^https?:\/\//i.test(url)) return null;
     return {
+      platform: cleanText(source.platform, 60).toLowerCase(),
+      queries: (Array.isArray(source.searchQueries) ? source.searchQueries : Array.isArray(source.queries) ? source.queries : [])
+        .map(query => cleanText(query, 240)).filter(Boolean).slice(0, 5),
       title: cleanText(source.title, 180) || "未命名来源",
       url,
       date: cleanText(source.date || source.publishedAt || source.published_at, 80) || "未提供",
@@ -64,13 +67,31 @@
       .filter(Boolean)
       .slice(0, Math.min(DEFAULT_MAX_SOURCES, Math.max(0, Number(maximum) || DEFAULT_MAX_SOURCES)));
     const status = String(task.status || "unknown");
+    const errors = Object.entries(task.platformErrors || {}).map(([platform, error]) => ({
+      type: platform,
+      message: cleanText(error?.message, 240)
+    })).filter(item => item.message);
+    if (task.failureReason || task.reportError) {
+      errors.push({ type: "research", message: cleanText(task.failureReason || task.reportError, 240) });
+    }
     return {
       status,
       summary: cleanText(report.summary, 1200),
       sources,
       limitations: (Array.isArray(report.needsVerification) ? report.needsVerification : [])
         .map(item => cleanText(item, 240)).filter(Boolean).slice(0, 10),
-      incomplete: ["partial-failure", "failed", "cancelled", "unknown"].includes(status)
+      errors: errors.slice(0, 10),
+      budget: {
+        maxPlatforms: Number(task.budget?.maxPlatforms || 0),
+        maxQueriesPerPlatform: Number(task.budget?.maxQueriesPerPlatform || 0),
+        maxDetails: Number(task.budget?.maxDetails || 0),
+        maxQueries: Number(task.budget?.maxQueriesPerPlatform || 0) * (Array.isArray(task.platforms) ? task.platforms.length : 0),
+        usedQueries: Object.values(task.usage?.queriesByPlatform || {}).reduce((total, count) => total + (Number(count) || 0), 0),
+        maxSources: Number(task.budget?.maxDetails || 0),
+        usedSources: Number(task.usage?.details || 0)
+      },
+      queries: Array.isArray(task.queries) ? task.queries.map(query => cleanText(query, 240)).filter(Boolean).slice(0, 10) : [],
+      incomplete: !["awaiting-save", "saved", "complete", "completed"].includes(status)
     };
   }
 

@@ -9,9 +9,9 @@
   const LEGACY_RESEARCH_REJECTION = "用户已拒绝本任务联网研究";
   const TASK_FIELDS = new Set([
     "id", "type", "goal", "target", "currentState", "constraints", "successCriteria",
-    "preserveItems", "facts", "assumptions", "missingInfo", "clarificationCount", "clarifications",
+    "preserveItems", "facts", "assumptions", "missingInfo", "excludedSourceIds", "clarificationCount", "clarifications",
     "researchDecision", "researchScope", "researchReturn", "steps",
-    "currentStepId", "researchBudget", "review", "status", "stage", "createdAt", "updatedAt"
+    "currentStepId", "researchBudget", "review", "status", "stage", "draft", "selectedSources", "createdAt", "updatedAt"
   ]);
   const STEP_FIELDS = new Set([
     "id", "title", "description", "goal", "inputs", "deliverable", "checklist", "status", "order"
@@ -116,6 +116,7 @@
       facts: textList(source.facts),
       assumptions: textList(source.assumptions).filter(item => item !== LEGACY_RESEARCH_REJECTION),
       missingInfo: textList(source.missingInfo),
+      excludedSourceIds: textList(source.excludedSourceIds, 20),
       clarificationCount: count(source.clarificationCount, 3),
       clarifications: Array.isArray(source.clarifications)
         ? source.clarifications.slice(0, 3).map(item => ({
@@ -129,7 +130,39 @@
       researchScope: normalizePromptAgentResearchScope(source.researchScope),
       researchReturn: {
         status: text(rawResearchReturn.status, 60),
-        stage: text(rawResearchReturn.stage, 60)
+        stage: text(rawResearchReturn.stage, 60),
+        socialTaskId: text(rawResearchReturn.socialTaskId, 100),
+        collected: rawResearchReturn.collected === true,
+        summary: text(rawResearchReturn.summary, 1200),
+        sources: Array.isArray(rawResearchReturn.sources) ? rawResearchReturn.sources.slice(0, 5).map(item => {
+          const sourceItem = isObject(item) ? item : {};
+          const url = text(sourceItem.url, 1000);
+          return {
+            platform: text(sourceItem.platform, 60).toLowerCase(),
+            queries: textList(sourceItem.queries, 5).map(query => query.slice(0, 240)),
+            title: text(sourceItem.title, 180),
+            url: /^https?:\/\//i.test(url) ? url : "",
+            date: text(sourceItem.date, 80),
+            summary: text(sourceItem.summary, 600),
+            applicability: text(sourceItem.applicability, 240),
+            limitations: text(sourceItem.limitations, 240)
+          };
+        }).filter(item => item.url) : [],
+        limitations: textList(rawResearchReturn.limitations, 10),
+        errors: Array.isArray(rawResearchReturn.errors) ? rawResearchReturn.errors.slice(0, 10).map(item => ({
+          type: text(isObject(item) ? item.type : "", 60),
+          message: text(isObject(item) ? item.message : item, 240)
+        })).filter(item => item.message) : [],
+        queries: textList(rawResearchReturn.queries, 10).map(query => query.slice(0, 240)),
+        budget: {
+          maxPlatforms: count(rawResearchReturn.budget?.maxPlatforms, 3),
+          maxQueriesPerPlatform: count(rawResearchReturn.budget?.maxQueriesPerPlatform, 10),
+          maxDetails: count(rawResearchReturn.budget?.maxDetails, 20),
+          maxQueries: count(rawResearchReturn.budget?.maxQueries, 10),
+          usedQueries: count(rawResearchReturn.budget?.usedQueries, 10),
+          maxSources: count(rawResearchReturn.budget?.maxSources, 20),
+          usedSources: count(rawResearchReturn.budget?.usedSources, 20)
+        }
       },
       steps,
       currentStepId: stepIds.has(source.currentStepId) ? source.currentStepId : "",
@@ -140,6 +173,23 @@
         usedSources: count(rawBudget.usedSources, 5)
       },
       review,
+      draft: text(source.draft, 8000),
+      selectedSources: Array.isArray(source.selectedSources) ? source.selectedSources.slice(0, 8).map(item => {
+        const sourceItem = isObject(item) ? item : {};
+        const location = text(sourceItem.location, 500);
+        return {
+          id: text(sourceItem.id, 100),
+          title: text(sourceItem.title, 120),
+          type: text(sourceItem.type, 60),
+          location: /^https?:\/\//i.test(location) ? location : location.replace(/(?:[A-Za-z]:[\\/]|\\\\)[^\s]*/g, "授权资料"),
+          useReason: text(sourceItem.useReason, 120),
+          verificationStatus: text(sourceItem.verificationStatus, 40),
+          applicableConditions: text(sourceItem.applicableConditions, 160),
+          limitations: text(sourceItem.limitations, 160),
+          excerpt: text(sourceItem.excerpt, 240),
+          selected: sourceItem.selected !== false
+        };
+      }).filter(item => item.id || item.title) : [],
       status: ["clarifying", "planning", "ready", "reviewing", "completed", "awaiting-research-approval", "awaiting-research-budget-approval"].includes(source.status) ? source.status : "clarifying",
       stage: text(source.stage, 60),
       createdAt: text(source.createdAt, 80),

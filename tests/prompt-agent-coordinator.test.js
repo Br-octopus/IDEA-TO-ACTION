@@ -248,6 +248,25 @@ test('模型失败或无新命中时保留并合并任务已有引用，最多�
   assert.ok(result.task.selectedSources.some(source => source.id === 'saved-1'));
 });
 
+test('明确排除的已有来源不会进入模型提示词', async () => {
+  const requests = [];
+  const excludedSource = {
+    id: 'excluded-1', title: '用户排除的资料', location: 'notes/excluded.md',
+    useReason: '不使用', verificationStatus: 'unverified',
+    applicableConditions: '无', limitations: '无', excerpt: 'EXCLUDED_SOURCE_PRIVATE_EXCERPT', selected: false
+  };
+  const { task, coordinator } = fixture({
+    getState: () => ({}),
+    searchLocalSources: async () => [],
+    requestModel: async request => { requests.push(request); return '草稿'; }
+  });
+
+  await coordinator.runStage({ ...task, selectedSources: [excludedSource] }, { stage: 'clarification' });
+
+  assert.equal(JSON.stringify(requests).includes('用户排除的资料'), false);
+  assert.equal(JSON.stringify(requests).includes('EXCLUDED_SOURCE_PRIVATE_EXCERPT'), false);
+});
+
 test('coordinator 经 knowledge schema 清洗后仍按 limitations 与 applicableCases 选中适用条目', async () => {
   const knowledgeEntries = [
     ...Array.from({ length: 26 }, (_, index) => ({

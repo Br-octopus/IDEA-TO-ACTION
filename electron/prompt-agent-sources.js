@@ -7,6 +7,7 @@ const CHANNELS = Object.freeze({
   select: 'prompt-agent-sources:select-directory',
   list: 'prompt-agent-sources:list-authorized',
   refresh: 'prompt-agent-sources:refresh-index',
+  search: 'prompt-agent-sources:search-index',
   setEnabled: 'prompt-agent-sources:set-authorization-enabled',
   remove: 'prompt-agent-sources:remove-authorization'
 });
@@ -162,6 +163,12 @@ function createPromptAgentSources({
     const freshRoot = resolveValidRoot(grant);
     grant.index = refreshSourceIndex(freshRoot, grant.index, { fs, path });
     return publicIndex(grant.index);
+  });
+  ipcMain.handle(CHANNELS.search, async (_event, id, query, filters, ...args) => {
+    assertNoExtraArgs(args);
+    if (typeof query !== 'string' || query.length > 240) throw new TypeError('搜索词无效');
+    if (filters !== undefined && (!filters || typeof filters !== 'object' || Array.isArray(filters))) throw new TypeError('搜索筛选无效');
+    return searchIndex(id, query, filters || {});
   });
   ipcMain.handle(CHANNELS.setEnabled, async (_event, id, enabled, ...args) => {
     assertNoExtraArgs(args);

@@ -19,7 +19,26 @@
       保留项: list(source.preserveItems),
       已知事实: list(source.facts),
       当前假设: list(source.assumptions),
-      待确认信息: list(source.missingInfo)
+      待确认信息: list(source.missingInfo),
+      外部研究结果: source.researchReturn && (
+        source.researchReturn.summary || source.researchReturn.sources?.length || source.researchReturn.errors?.length
+      ) ? {
+        状态: source.researchReturn.status,
+        摘要: String(source.researchReturn.summary || '').slice(0, 800),
+        查询: list(source.researchReturn.queries).slice(0, 5),
+        来源: Array.isArray(source.researchReturn.sources) ? source.researchReturn.sources.slice(0, 3).map(item => ({
+          平台: item.platform || '',
+          查询: list(item.queries).slice(0, 2),
+          标题: String(item.title || '').slice(0, 100),
+          链接: item.url || '',
+          日期: item.date || '',
+          摘要: String(item.summary || '').slice(0, 240),
+          适用性: String(item.applicability || '').slice(0, 120),
+          局限: String(item.limitations || '').slice(0, 120)
+        })) : [],
+        局限: list(source.researchReturn.limitations).slice(0, 5),
+        未完成项: Array.isArray(source.researchReturn.errors) ? source.researchReturn.errors : []
+      } : null
     };
   }
 
@@ -32,11 +51,11 @@
   }
 
   function buildClarificationPrompt(task) {
-    return `${base(task)}\n\n请整理目标理解，并区分事实、假设和待确认信息。只提出最能改变方案的一个问题；每轮最多提出一个问题，累计最多三个关键追问。信息已足够时先给可修改的分析初稿，非阻断缺口列为假设。只提供分析和建议，不得直接产出目标成果。`;
+    return `${base(task)}\n\n请按“目标理解、已知事实、当前假设、待确认信息、本轮关键问题、建议”分段输出。只提出最能改变方案的一个问题；每轮最多提出一个问题，累计最多三个关键追问。信息已足够时先给可修改的分析初稿，非阻断缺口列为假设。只提供分析和建议，不得直接产出目标成果。`;
   }
 
   function buildDiagnosisPrompt(task) {
-    return `${base(task)}\n\n诊断当前任务输入中的遗漏、矛盾、依据不足和必须保留项；引用具体依据并给出可修改的诊断初稿。每轮最多提出一个问题，累计最多三个关键追问。不得直接产出目标成果，不改写文章、不生成代码，只给分析、建议和后续验收要点。`;
+    return `${base(task)}\n\n请按“目标理解、已知事实、当前假设、待确认信息、遗漏与矛盾、必须保留、本轮关键问题、建议”分段输出。诊断当前任务输入中的遗漏、矛盾、依据不足和必须保留项；引用具体依据并给出可修改的诊断初稿。每轮最多提出一个问题，累计最多三个关键追问。不得直接产出目标成果，不改写文章、不生成代码，只给分析、建议和后续验收要点。`;
   }
 
   function buildRoutePrompt(task, evidence) {
