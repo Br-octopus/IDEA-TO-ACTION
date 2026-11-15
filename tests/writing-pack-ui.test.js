@@ -13,6 +13,39 @@ test('包管理区展示内置与自定义包，详情显示来源和验证状�
   assert.equal(dom.mount.innerHTML.includes('数据-action="pack-detail"') || dom.mount.innerHTML.includes('pack-detail'), true, '详情入口存在');
 });
 
+test('打开和关闭包管理不会替换或清空写作工作台', async () => {
+  const app = createWritingApp();
+  await app.settle();
+  await app.input('writing-goal', '这段未提交的写作目标');
+
+  await app.click('manage-packs');
+  assert.equal(app.mount.innerHTML.includes('专业基础包'), true, '包管理面板已打开');
+  assert.equal(app.mount.innerHTML.includes('writing-goal'), true, '原写作表单仍在页面中');
+
+  await app.click('pack-close');
+  assert.equal(app.mount.innerHTML.includes('写作工作台'), true, '关闭管理面板后工作台仍可用');
+  assert.equal(app.node('writing-goal').value, '这段未提交的写作目标', '未提交输入仍然保留');
+  assert.equal(app.mount.innerHTML.includes('专业基础包'), false, '包管理面板已关闭');
+});
+
+test('包管理用真实输入事件保存名称和检查项修改', async () => {
+  const app = createWritingApp();
+  await app.settle();
+  const coordinator = app.packCoordinator;
+  await coordinator.createPack({ id: 'ui-edit-me', name: '旧名称', layer: 'task', checks: [{ id: 'c1', statement: '旧检查' }] });
+  await app.settle();
+  await app.click('manage-packs');
+  await app.click('pack-edit', { packId: 'ui-edit-me' });
+  await app.input('pack-field-name', '新名称');
+  await app.input('pack-field-checks', '新检查');
+  await app.click('pack-save');
+  await app.settle();
+
+  const edited = app.state.writingPacks.find(pack => pack.id === 'ui-edit-me');
+  assert.equal(edited.name, '新名称');
+  assert.equal(edited.checks[0].statement, '新检查');
+});
+
 test('编辑内置包生成带 basePackId 的副本并保存到状态', async () => {
   const app = createWritingApp({ confirm: () => true, prompt: () => '我的文章包' });
   await app.settle();
