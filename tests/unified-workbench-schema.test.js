@@ -28,15 +28,19 @@ test("内容、版本、画布节点和提示词轮次保留稳定 ID 与快照�
   assert.deepEqual(project.workbenchSelection.items.map(item => item.contentVersionId), ["version-1"]);
 });
 
-test("显式旧记录关联可重复迁移且不自动吞并旧集合", () => {
-  const record = { collection: "promptAgentTasks", sourceId: "task-1" };
+test("显式旧记录快照可重复接入且保留旧集合", () => {
+  const record = { collection: "promptAgentTasks", sourceId: "task-1", contentId: "legacy-task-1",
+    content: { id: "legacy-task-1", title: "历史 Agent 任务", kind: "document", sourceRef: { type: "legacy", collection: "promptAgentTasks", sourceId: "task-1" }, versions: [{ id: "legacy-task-1-v1", text: "保留的历史内容", parseStatus: "read" }] } };
   const source = { id: "p1", idea: "任务", legacyTaskSnapshot: { id: "task-1" } };
   const once = schema.migrateWorkbenchProject(source, [record, record]);
   const twice = schema.migrateWorkbenchProject(once, [record]);
-  assert.deepEqual(once.workbenchLegacyRefs, [record]);
-  assert.deepEqual(twice.workbenchLegacyRefs, [record]);
+  assert.deepEqual(once.workbenchLegacyRefs, [{ collection: "promptAgentTasks", sourceId: "task-1", contentId: "legacy-task-1" }]);
+  assert.deepEqual(twice.workbenchLegacyRefs, [{ collection: "promptAgentTasks", sourceId: "task-1", contentId: "legacy-task-1" }]);
+  assert.equal(twice.workbenchContents.length, 1);
+  assert.equal(twice.workbenchContents[0].versions[0].text, "保留的历史内容");
   assert.equal(twice.legacyTaskSnapshot.id, "task-1");
   assert.deepEqual(schema.normalizeWorkbenchProject(source).workbenchLegacyRefs, []);
+  assert.equal(source.workbenchContents, undefined, "旧任务对象保持不变");
 });
 
 test("悬空引用、重复 ID 和错误引用类型明确失败", () => {

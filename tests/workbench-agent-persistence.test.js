@@ -10,6 +10,10 @@ const start = source.indexOf('  async function requestWorkbenchAgent(project) {'
 const end = source.indexOf('  document.getElementById("workbench-message-input").addEventListener("keydown"', start);
 assert.ok(start >= 0 && end > start);
 const requestSource = source.slice(start, end);
+const legacyStart = source.indexOf('  function legacyWorkbenchRecordTitle(');
+const legacyEnd = source.indexOf('  function renderWorkbenchContentCatalog(', legacyStart);
+assert.ok(legacyStart >= 0 && legacyEnd > legacyStart);
+const legacySource = source.slice(legacyStart, legacyEnd);
 const submitStart = source.indexOf('  async function submitWorkbenchReply(');
 const submitEnd = source.indexOf('  document.getElementById("workbench-messages").addEventListener("click"', submitStart);
 assert.ok(submitStart >= 0 && submitEnd > submitStart);
@@ -22,6 +26,181 @@ const restoreStart = source.indexOf('  async function restoreWorkbenchManifests(
 const restoreEnd = source.indexOf('  function getWorkbenchSessionLayout(', restoreStart);
 assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
 const restoreSource = source.slice(restoreStart, restoreEnd);
+const writingHelpersStart = source.indexOf('  function getWorkbenchPromptGoal(');
+const writingHelpersEnd = source.indexOf('  function getWorkbenchUnifiedPrompt(', writingHelpersStart);
+assert.ok(writingHelpersStart >= 0 && writingHelpersEnd > writingHelpersStart);
+const writingHelpersSource = source.slice(writingHelpersStart, writingHelpersEnd);
+const attachmentHelpersStart = source.indexOf('  function getWorkbenchPromptDeliveries(');
+const attachmentHelpersEnd = source.indexOf('  function findWorkbenchAttachmentVersion(', attachmentHelpersStart);
+assert.ok(attachmentHelpersStart >= 0 && attachmentHelpersEnd > attachmentHelpersStart);
+const attachmentHelpersSource = source.slice(attachmentHelpersStart, attachmentHelpersEnd);
+
+test('首次学术论文任务进入写作规则并按目标选择任务类型', () => {
+  const state = { promptAgentTasks: [], writingArticles: [], writingPacks: [], writingPackSettings: [] };
+  const context = {
+    state,
+    methodCardsApi: require('../prototype/method-cards.js'),
+    window: { WritingWorkbenchSchema: require('../prototype/writing-workbench-schema.js') }
+  };
+  const helpers = vm.runInNewContext(`(function(){ ${writingHelpersSource}; return {
+    getWorkbenchPromptRoute, getWorkbenchWritingPromptInput, getWorkbenchWritingTaskType, getWorkbenchWritingFollowUpRule
+  }; })()`, context);
+  const planning = { id: 'academic-plan', goalSummary: '为硕士学位论文制定研究计划' };
+  const diagnosis = { id: 'academic-review', goalSummary: '诊断这篇论文的结构与论证' };
+
+  assert.equal(helpers.getWorkbenchPromptRoute(planning), 'writing');
+  assert.equal(helpers.getWorkbenchWritingPromptInput(planning).article.genre, 'academic-paper');
+  assert.equal(helpers.getWorkbenchWritingTaskType(planning, state), 'academic-planning');
+  assert.equal(helpers.getWorkbenchWritingTaskType(diagnosis, state), 'diagnosis');
+});
+
+test('邮件和周报按新目标选择写作文体与任务类型并结合已有对话追问', () => {
+  const state = { writingArticles: [{ id: 'legacy-writing', article: { genre: 'article' },
+    rounds: [{ taskType: 'revision' }] }] };
+  const context = {
+    state,
+    methodCardsApi: require('../prototype/method-cards.js'),
+    window: { WritingWorkbenchSchema: require('../prototype/writing-workbench-schema.js') }
+  };
+  const helpers = vm.runInNewContext(`(function(){ ${writingHelpersSource}; return {
+    getWorkbenchPromptRoute, getWorkbenchWritingPromptInput, getWorkbenchWritingTaskType, getWorkbenchWritingFollowUpRule
+  }; })()`, context);
+  const linked = [{ collection: 'writingArticles', sourceId: 'legacy-writing' }];
+  const email = { id: 'email-task', goalSummary: '起草一封邮件', workbenchLegacyRefs: linked,
+    conversation: [{ role: 'user', text: '收件人是合作方，邀请下周开会' }], workbenchDraft: { opinion: '语气简洁' } };
+  const emailInput = helpers.getWorkbenchWritingPromptInput(email);
+  assert.equal(helpers.getWorkbenchPromptRoute(email), 'writing');
+  assert.equal(emailInput.article.genre, 'email', '新目标应覆盖旧文章文体');
+  assert.equal(helpers.getWorkbenchWritingTaskType(email, state), 'email-draft', '旧轮次类型不能覆盖邮件起草');
+  assert.match(emailInput.round.feedback, /收件人是合作方/);
+  assert.match(emailInput.round.feedback, /语气简洁/);
+  assert.match(helpers.getWorkbenchWritingFollowUpRule('email'), /收件人关系、沟通目的和期望行动/);
+  assert.equal(helpers.getWorkbenchWritingTaskType({ ...email, goalSummary: '润色这封邮件' }, state), 'email-revision');
+  assert.equal(helpers.getWorkbenchWritingTaskType({ ...email, goalSummary: '审阅这封邮件' }, state), 'email-review');
+
+  const report = { ...email, goalSummary: '根据本周数据写周报' };
+  assert.equal(helpers.getWorkbenchPromptRoute(report), 'writing');
+  assert.equal(helpers.getWorkbenchWritingPromptInput(report).article.genre, 'business-document');
+  assert.equal(helpers.getWorkbenchWritingTaskType(report, state), 'business-report');
+  assert.match(helpers.getWorkbenchWritingFollowUpRule('business-document'), /统计周期、目标读者和数据来源/);
+});
+
+test('回填优先关联已复制版本；无交付时提示最近准备稿并支持解除关联', () => {
+  const context = {
+    workbenchSchema: require('../prototype/unified-workbench-schema.js'),
+    workbenchContentKind: attachment => attachment.kind || 'file'
+  };
+  const helpers = vm.runInNewContext(`(function(){ ${attachmentHelpersSource}; return {
+    getWorkbenchPromptDeliveries, getWorkbenchPromptDeliverySuggestion, ensureWorkbenchAttachmentContents, updateWorkbenchPromptAssociation
+  }; })()`, context);
+  const project = { id: 'task-association', workbenchPromptRounds: [
+    { id: 'round-1', deliveries: [
+      { id: 'prepared-1', status: 'prepared' }, { id: 'copied-1', status: 'copied' },
+      { id: 'export-1', status: 'prepared', exportSnapshot: true }
+    ] },
+    { id: 'round-2', deliveries: [{ id: 'prepared-2', status: 'prepared' }] }
+  ] };
+  assert.deepEqual(Array.from(helpers.getWorkbenchPromptDeliveries(project), item => item.delivery.id),
+    ['prepared-1', 'copied-1', 'prepared-2'], '素材包快照不作为提示词版本');
+  assert.equal(helpers.getWorkbenchPromptDeliverySuggestion(project).delivery.id, 'copied-1',
+    '已有复制/交付版本优先于更新的准备稿');
+
+  const preparedOnly = { id: 'task-prepared', workbenchPromptRounds: [
+    { id: 'round-1', deliveries: [{ id: 'prepared-1', status: 'prepared' }] },
+    { id: 'round-2', deliveries: [{ id: 'prepared-2', status: 'prepared' }] }
+  ] };
+  assert.equal(helpers.getWorkbenchPromptDeliverySuggestion(preparedOnly).delivery.id, 'prepared-2');
+  assert.equal(helpers.ensureWorkbenchAttachmentContents(preparedOnly, [
+    { id: 'attachment-1', displayName: '回填稿.txt', kind: 'text', sha256: 'sha256:1' }
+  ]), true);
+  const content = preparedOnly.workbenchContents[0];
+  const version = content.versions[0];
+  assert.equal(content.purpose, 'result');
+  assert.match(content.purposeReason, /尚未记录交付/);
+  assert.deepEqual([version.roundId, version.deliveryId], ['round-2', 'prepared-2']);
+
+  assert.equal(helpers.updateWorkbenchPromptAssociation(preparedOnly, version.id, '1'), true);
+  assert.deepEqual([version.roundId, version.deliveryId], ['round-1', 'prepared-1']);
+  assert.equal(helpers.updateWorkbenchPromptAssociation(preparedOnly, version.id, ''), true);
+  assert.equal(version.roundId, undefined, '选择独立保存会解除轮次关联');
+  assert.equal(version.deliveryId, undefined);
+
+  const independent = { id: 'task-independent' };
+  helpers.ensureWorkbenchAttachmentContents(independent, [
+    { id: 'attachment-2', displayName: '参考资料.txt', kind: 'text', sha256: 'sha256:2' }
+  ]);
+  assert.equal(independent.workbenchContents[0].purpose, 'reference');
+  assert.equal(independent.workbenchContents[0].versions[0].roundId, undefined);
+  assert.match(source, /data-workbench-prompt-association/);
+});
+
+test('用户显式导入历史 Agent 和写作记录时建立来源快照并按来源去重', () => {
+  const agent = { id: 'agent-old', type: 'advance-idea', goal: '整理项目计划', steps: [{ title: '拆分步骤', deliverable: '步骤清单' }] };
+  const writing = { id: 'writing-old', article: { title: '旧文章', genre: 'article', draft: '已保存正文' },
+    rounds: [{ id: 'round-old', taskType: 'revision', userFeedback: '保留原意', draft: '上一轮正文' }] };
+  const state = { promptAgentTasks: [agent], writingArticles: [writing] };
+  const original = structuredClone(state);
+  const project = { id: 'unified-task', idea: '继续整理' };
+  const opened = [];
+  const toasts = [];
+  let id = 0;
+  let saves = 0;
+  const context = {
+    state, project, workbenchSchema: require('../prototype/unified-workbench-schema.js'), structuredClone,
+    workbenchId: prefix => `${prefix}-${++id}`, openWorkbenchDocument: (_project, content) => opened.push(content.id),
+    persist: () => { saves++; return true; }, renderWorkbench() {}, toast: message => toasts.push(message)
+  };
+  vm.runInNewContext(`${legacySource}\nimportWorkbenchLegacyRecord(project, 'promptAgentTasks', 'agent-old');\nimportWorkbenchLegacyRecord(project, 'writingArticles', 'writing-old');\nimportWorkbenchLegacyRecord(project, 'promptAgentTasks', 'agent-old');`, context);
+
+  assert.equal(project.workbenchContents.length, 2);
+  assert.deepEqual(Array.from(project.workbenchLegacyRefs, item => [item.collection, item.sourceId]), [
+    ['promptAgentTasks', 'agent-old'], ['writingArticles', 'writing-old']
+  ]);
+  assert.match(project.workbenchContents[0].versions[0].text, /拆分步骤/);
+  assert.match(project.workbenchContents[1].versions[0].text, /已保存正文/);
+  assert.deepEqual(state, original, '原始历史集合保持不变');
+  assert.equal(saves, 2, '重复选择已有来源不会再次创建副本');
+  assert.equal(opened.length, 1, '重复选择会打开已关联快照');
+  assert.equal(toasts.length, 3);
+});
+
+test('社媒报告交接会保存为统一任务内容并选入当前提示词', async () => {
+  const start = source.indexOf('  async function handoffSocialResearchToWorkbench(');
+  const end = source.indexOf('  async function beginHomeMaterialImport(', start);
+  assert.ok(start >= 0 && end > start);
+  const handoffSource = source.slice(start, end);
+  const project = { id: 'unified-social-task' };
+  let createdIdea = '';
+  let persisted = 0;
+  let rendered = 0;
+  const context = {
+    createProjectFromIdea: async idea => { createdIdea = idea; return project; },
+    ensureWorkbenchProjectData(value) {
+      value.workbenchContents ||= [];
+      value.workbenchSelection ||= { items: [], layoutIntent: { enabled: false } };
+      value.workbenchDraft ||= { goal: '', opinion: '', promptText: '', annotations: [] };
+    },
+    createWorkbenchTextSnapshot: input => ({
+      ...input, id: 'content-1', draft: { text: input.text, baseVersionId: 'version-1' },
+      versions: [{ id: 'version-1', text: input.text }]
+    }),
+    persist: () => { persisted++; return true; },
+    renderProject: value => { assert.equal(value, project); rendered++; },
+    toast() {}
+  };
+  const handoff = vm.runInNewContext(`(function(){ ${handoffSource}; return handoffSocialResearchToWorkbench; })()`, context);
+  const result = await handoff({ topic: '分析订阅退款原因', summary: '首月退款增加。', sourceTaskId: 'research-1' });
+
+  assert.equal(result, project);
+  assert.equal(createdIdea, '基于社媒研究结果继续：分析订阅退款原因');
+  assert.equal(project.workbenchContents[0].draft.text, '首月退款增加。');
+  assert.equal(project.workbenchContents[0].sourceRef.sourceId, 'research-1');
+  assert.equal(JSON.stringify(project.workbenchSelection.items), JSON.stringify([{ contentVersionId: 'version-1' }]));
+  assert.equal(project.workbenchOpenContentId, 'content-1');
+  assert.equal(project.workbenchPreviewMode, 'material');
+  assert.equal(persisted, 1);
+  assert.equal(rendered, 1);
+});
 
 test('桌面启动时恢复未进入本地索引的工作台任务', async () => {
   const project = { id: 'task-restored', title: '恢复任务', workbenchPersistenceEnabled: true, workbenchDraft: { goal: '继续整理' } };
@@ -30,7 +209,7 @@ test('桌面启动时恢复未进入本地索引的工作台任务', async () =>
     desktopApi: { workbench: { listManifests: async () => ({
       manifests: [{ taskId: project.id, revision: 4, project }], errors: []
     }) } },
-    window: { ForwardStepStorage: { migrateState: value => ({ projects: value.projects.map(item => ({ ...item })) }) } },
+    migrateState: value => ({ projects: value.projects.map(item => ({ ...item })) }),
     workbenchManifestRevisions: new Map(), workbenchManifestSignatures: new Map(),
     isUnifiedWorkbenchProject: item => item.workbenchPersistenceEnabled === true,
     getWorkbenchManifestSignature: item => JSON.stringify(item),
@@ -62,15 +241,19 @@ for (const mode of ['success', 'failure']) {
     const initialState = { projects: [{ id: 'task-1', conversation: [{ role: 'user', text: '每周进度回顾' }] }] };
     const pendingWorkbenchProjects = new Set();
     const queuedWorkbenchProjects = new Set();
+    const modelRequests = [];
     const context = {
       state: initialState, pendingWorkbenchProjects, queuedWorkbenchProjects,
       renderWorkbench: () => { context.state = structuredClone(context.state); },
       persist: () => { context.state = structuredClone(context.state); }, activeProjectId: 'task-1', serviceConfigReady: true,
       serviceConfig: { model: { configured: true } },
-      desktopApi: { requestModel: async () => {
+      desktopApi: { requestModel: async ({ messages }) => {
+        modelRequests.push(messages);
         if (mode === 'failure') throw Error('模型测试错误');
         return { text: '{"reply":"已了解目标","recommendation":{"text":"周五回顾","reason":"容易执行"},"question":"先统一哪一部分？","options":["整体结构","更新节奏"],"recommendedOption":1}' };
       } },
+      window: { ForwardStepPromptAgentPrompts: require('../prototype/prompt-agent-prompts.js') },
+      getWorkbenchPromptAgentTask: project => ({ id: project.id, type: 'advance-idea', goal: project.conversation[0].text }),
       workbenchDialogue: require('../prototype/workbench-dialogue.js'),
       crypto: { randomUUID: () => 'response-id' },
       fetch: () => { throw Error('桌面版不应调用浏览器请求'); }
@@ -81,6 +264,8 @@ for (const mode of ['success', 'failure']) {
     assert.equal(messages.length, 2);
     assert.equal(messages[1].role, 'assistant');
     assert.match(messages[1].text, mode === 'success' ? /已了解目标/ : /模型测试错误/);
+    assert.match(modelRequests[0][0].content, /当前阶段任务摘要/);
+    assert.match(modelRequests[0][0].content, /每周进度回顾/);
     if (mode === 'success') {
       assert.deepEqual(Array.from(messages[1].options), ['整体结构', '更新节奏']);
       assert.equal(messages[1].recommendedOption, 1);
@@ -109,6 +294,8 @@ test('模型失败后重试沿用原答复，不重复写入用户消息或内�
       if (attempt++ === 0) throw Error('临时连接错误');
       return { text: '{"reply":"重试成功"}' };
     } },
+    window: { ForwardStepPromptAgentPrompts: require('../prototype/prompt-agent-prompts.js') },
+    getWorkbenchPromptAgentTask: current => ({ id: current.id, type: 'advance-idea', goal: current.conversation[0].text }),
     workbenchDialogue: require('../prototype/workbench-dialogue.js'),
     crypto: { randomUUID: () => `response-${++messageId}` },
     fetch: () => { throw Error('桌面版不应调用浏览器请求'); }

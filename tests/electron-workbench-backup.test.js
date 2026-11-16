@@ -158,8 +158,12 @@ test('桌面完整 ZIP 备份携带工作台任务清单并可在导入预览读
       workbenchDraft: { goal: '恢复目标', opinion: '', promptText: '提示词', annotations: [] }
     });
     const store = createPptFeedbackAttachmentStore({ app: { getPath: () => userData } });
+    const unrelatedProject = workbenchSchema.normalizeWorkbenchProject({ id: 'task-unrelated', workbenchPersistenceEnabled: true });
     store.saveTaskManifest(taskId, {
       schemaVersion: workbenchSchema.WORKBENCH_SCHEMA_VERSION, taskId, revision: 2, project
+    });
+    store.saveTaskManifest(unrelatedProject.id, {
+      schemaVersion: workbenchSchema.WORKBENCH_SCHEMA_VERSION, taskId: unrelatedProject.id, revision: 1, project: unrelatedProject
     });
     const handlers = loadMain({ userData, archivePath });
     const backup = {
@@ -168,7 +172,7 @@ test('桌面完整 ZIP 备份携带工作台任务清单并可在导入预览读
     };
 
     await handlers.get('backup:export')(null, {
-      format: 'workspace-archive', content: JSON.stringify(backup), attachmentIds: []
+      format: 'workspace-archive', content: JSON.stringify(backup), attachmentIds: [], workbenchTaskIds: [taskId]
     });
     const stage = await handlers.get('backup:import')();
     assert.equal(stage.workbenchManifests.length, 1);

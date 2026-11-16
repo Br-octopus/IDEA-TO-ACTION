@@ -1469,7 +1469,7 @@ if (typeof globalThis !== "undefined") globalThis.ForwardStepKnowledgeManagement
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
 (() => {
-  const { STORAGE_KEY, createEmptyState, loadState, saveState, addPromptVersion, promptGroupKey, listPromptGroups, togglePromptFavorite, getPromptVariables, fillPromptTemplate, comparePromptTexts, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse: deferCaseReuseState } = window.ForwardStepStorage;
+  const { STORAGE_KEY, createEmptyState, loadState, migrateState, saveState, addPromptVersion, promptGroupKey, listPromptGroups, togglePromptFavorite, getPromptVariables, fillPromptTemplate, comparePromptTexts, confirmCase, updateCase, upsertKnowledgeEntry, getCurrentCaseVersion, listCaseVersions, compareCaseVersions, deleteCase, deferCaseReuse: deferCaseReuseState } = window.ForwardStepStorage;
   const research = window.ForwardStepResearchCatalog;
   const feedback = window.ForwardStepPptFeedback;
   const knowledgeSchema = window.ForwardStepKnowledgeSchema;
@@ -1877,9 +1877,15 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function renderWorkbenchSaveStatus(project) {
     const status = document.getElementById("workbench-save-status");
     const openFolder = document.getElementById("workbench-open-folder");
+    const exportTask = document.getElementById("workbench-export-task");
     if (!status || !project) return;
     const desktopReady = Boolean(desktopApi?.workbench?.saveManifest);
     if (openFolder) openFolder.hidden = !desktopApi?.workbench?.openTaskFolder;
+    if (exportTask) {
+      exportTask.hidden = !desktopApi?.exportBackup;
+      exportTask.disabled = !desktopApi?.exportBackup;
+      exportTask.title = desktopApi?.exportBackup ? "导出当前任务及其附件" : "完整任务 ZIP 导出需要 Electron 桌面版";
+    }
     const labels = {
       dirty: "正在保存到本机…", saving: "正在保存到本机…", saved: "已保存到本机",
       error: `保存失败：${project.workbenchSaveError || "可重试"}`
@@ -1906,7 +1912,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         if (!projectId || manifest.project?.id !== projectId || !Number.isSafeInteger(manifest.revision)) continue;
         manifestIds.add(projectId);
         workbenchManifestRevisions.set(projectId, manifest.revision);
-        const restored = window.ForwardStepStorage.migrateState({ projects: [manifest.project] }).projects[0];
+        const restored = migrateState({ projects: [manifest.project] }).projects[0];
         restored.workbenchRevision = manifest.revision;
         restored.workbenchDraftStatus = "saved";
         restored.workbenchSaveError = "";
@@ -1953,6 +1959,15 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       renderRecent();
       const active = getActiveProject();
       if (active) renderWorkbench(active);
+      else if (activeView === "home") {
+        const homeDraft = [...state.projects].reverse().find(project => !project.idea && String(project.workbenchDraft?.goal || "").trim());
+        const input = document.getElementById("idea");
+        if (homeDraft && input && !input.value.trim()) {
+          homeWorkbenchGoalDraftId = homeDraft.id;
+          input.value = homeDraft.workbenchDraft.goal;
+          document.getElementById("project-title").textContent = homeDraft.workbenchDraft.goal.slice(0, 60);
+        }
+      }
     } catch (error) {
       toast(`桌面任务恢复失败：${error.message || "可稍后重试"}`);
     }
@@ -1963,6 +1978,23 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       mode: "chat", ratio: workbenchPreferences.splitRatio, lastSide: "chat"
     });
     return workbenchSessionLayouts.get(project.id);
+  }
+  function getWorkbenchPreviewState(project) {
+    return ["pinned", "closed"].includes(project?.workbenchPreviewState) ? project.workbenchPreviewState : "open";
+  }
+  function canAutoOpenWorkbenchPreview(project) {
+    return getWorkbenchPreviewState(project) === "open";
+  }
+  function setWorkbenchPreviewMode(project, mode, { automatic = false } = {}) {
+    if (!project || !["material", "prompt", "task"].includes(mode)) return false;
+    if (automatic && !canAutoOpenWorkbenchPreview(project)) return false;
+    if (!automatic && getWorkbenchPreviewState(project) === "closed") {
+      project.workbenchPreviewState = "open";
+      const layout = getWorkbenchSessionLayout(project);
+      if (layout.mode === "chat") { layout.mode = "split"; layout.lastSide = "preview"; }
+    }
+    project.workbenchPreviewMode = mode;
+    return true;
   }
   function getWorkbenchLayoutMode(project) {
     return project?.id === activeProjectId && activeView === "project"
@@ -1983,7 +2015,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const shell = document.getElementById("workbench-shell");
     if (!shell || shell.clientWidth <= 0 || document.getElementById("workbench-surface").hidden) return null;
     const saved = stateOverride || getWorkbenchSessionLayout(project);
-    const result = window.ForwardStepWorkbenchLayout.resolveLayout(saved, shell.clientWidth);
+    shell.dataset.previewState = getWorkbenchPreviewState(project);
+    const resolvedState = shell.dataset.previewState === "closed" ? { ...saved, mode: "chat" } : saved;
+    const result = window.ForwardStepWorkbenchLayout.resolveLayout(resolvedState, shell.clientWidth);
     shell.dataset.layout = result.mode;
     shell.style.setProperty("--chat-width", `${result.chatWidth}px`);
     for (const button of document.querySelectorAll("[data-workbench-layout]")) {
@@ -2014,6 +2048,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       : '<button type="button" class="button-secondary" data-home-return-chat>返回对话</button>';
     preview.innerHTML = `<div><span class="workbench-home-preview-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 4h6l4 4v12H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M14 4v4h4M10 13h6m-6 3h6"/></svg></span><h2>${copy[0]}</h2><p>${copy[1]}</p>${action}</div>`;
     preview.hidden = false;
+    document.getElementById("workbench-preview-pin").hidden = true;
+    document.getElementById("workbench-preview-close").hidden = true;
     document.getElementById("workbench-material-view").hidden = true;
     document.getElementById("workbench-prompt-status").hidden = true;
     document.getElementById("workbench-prompt-preview").hidden = true;
@@ -2068,12 +2104,20 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function setTaskSidebarCollapsed(collapsed) {
     const shell = document.getElementById("app-shell");
     const toggle = document.getElementById("sidebar-toggle");
+    const mobileToggle = document.getElementById("mobile-task-list-toggle");
+    const backdrop = document.getElementById("mobile-task-list-backdrop");
     const divider = document.getElementById("task-sidebar-divider");
+    const mobileOpen = !collapsed && window.matchMedia?.("(max-width: 760px)").matches;
     shell.classList.toggle("sidebar-collapsed", collapsed);
+    shell.classList.toggle("mobile-tasks-open", Boolean(mobileOpen));
     toggle.setAttribute("aria-expanded", String(!collapsed));
     toggle.setAttribute("aria-label", collapsed ? "展开任务列表" : "收起任务列表");
     toggle.dataset.tooltip = collapsed ? "展开任务列表" : "收起任务列表";
     toggle.title = toggle.dataset.tooltip;
+    mobileToggle?.setAttribute("aria-expanded", String(Boolean(mobileOpen)));
+    mobileToggle?.setAttribute("aria-label", mobileOpen ? "收起任务列表" : "展开任务列表");
+    mobileToggle?.setAttribute("title", mobileOpen ? "收起任务列表" : "展开任务列表");
+    if (backdrop) backdrop.hidden = !mobileOpen;
     divider.tabIndex = collapsed ? -1 : 0;
     if (!collapsed) shell.style.setProperty("--task-sidebar-width", `${workbenchPreferences.sidebarWidth}px`);
     applyWorkbenchLayout(activeView === "project" ? getActiveProject() : null);
@@ -2185,6 +2229,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   const navKeyByView = { home: "workspace-new", plans: "workspace-plans", project: "workspace-plans", "prompt-agent": "workspace-prompts", "prompt-optimize": "workspace-prompts", references: "library", library: "favorites", article: "writing", "academic-workbench": "research-academic", "social-research": "research-social", settings: "settings" };
   function go(view, navKey = navKeyByView[view]) {
+    if (view === "prompt-agent" || view === "prompt-optimize" || (view === "article" && navKey === "writing")) {
+      const project = state.projects.find(item => item.id === activeProjectId);
+      if (project) { renderProject(project); return; }
+      view = "home";
+      navKey = "workspace-new";
+    }
     if (workbenchDrag) finishWorkbenchResize(true);
     if (view !== "project") workbenchDetailsTrigger = null;
     if (activeView === "project" && view !== "project" && view !== "home") {
@@ -2235,6 +2285,15 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   document.getElementById("sidebar-toggle").addEventListener("click", () => {
     setTaskSidebarCollapsed(!document.getElementById("app-shell").classList.contains("sidebar-collapsed"));
   });
+  document.getElementById("mobile-task-list-toggle").addEventListener("click", () => {
+    const opening = !document.getElementById("app-shell").classList.contains("mobile-tasks-open");
+    setTaskSidebarCollapsed(!opening);
+    if (opening) document.querySelector("#recent-list [data-open-project]")?.focus({ preventScroll: true });
+  });
+  document.getElementById("mobile-task-list-backdrop").addEventListener("click", () => {
+    setTaskSidebarCollapsed(true);
+    document.getElementById("mobile-task-list-toggle").focus({ preventScroll: true });
+  });
   for (const [id, kind] of [["task-sidebar-divider", "sidebar"], ["workbench-divider", "content"]]) {
     const handle = document.getElementById(id);
     handle.addEventListener("pointerdown", event => beginWorkbenchResize(event, kind));
@@ -2266,6 +2325,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   });
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
+    if (document.getElementById("app-shell").classList.contains("mobile-tasks-open")) {
+      event.preventDefault();
+      setTaskSidebarCollapsed(true);
+      document.getElementById("mobile-task-list-toggle").focus({ preventScroll: true });
+      return;
+    }
     if (workbenchDrag) {
       event.preventDefault();
       finishWorkbenchResize(true);
@@ -2297,8 +2362,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     socialResearchUI = window.ForwardStepSocialResearchUI.createSocialResearchUI({
       document, desktopApi, coordinator, getState: () => state,
       persistState: persistWorkbenchState,
-      navigate: go,
-      getPromptAgentController: () => window.ForwardStepPromptAgentUIController
+      handoffToWorkbench: context => handoffSocialResearchToWorkbench(context),
+      notify: toast
     });
   }
   if (window.ForwardStepPromptAgentCoordinator && window.ForwardStepPromptAgentUI) {
@@ -2735,6 +2800,100 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     project.workbenchPromptDraft = value;
     project.workbenchDraft.promptText = value;
   }
+  function getWorkbenchPromptGoal(project) {
+    return String(project?.goalSummary || project?.idea || project?.workbenchDraft?.goal || project?.goal || "").trim();
+  }
+  function getWorkbenchWritingGenre(goal) {
+    const text = String(goal || "");
+    if (/(?:邮件|e-?mail)/iu.test(text) && /(?:写|撰写|起草|草拟|拟|回复|润色|改写|修改|修订|审阅|检查|校对|生成|编写|完善)/u.test(text)) return "email";
+    if (/(?:日报|周报|月报|工作报告|工作总结|进展报告|总结报告)/u.test(text)
+      && /(?:写|撰写|起草|草拟|整理|生成|编写|完善|总结|修改|润色|改写)/u.test(text)) return "business-document";
+    if (/(?:学术|毕业|学位)?论文|(?:研究|文献)综述/u.test(text)) return "academic-paper";
+    return "";
+  }
+  function getWorkbenchPromptRoute(project) {
+    const goal = getWorkbenchPromptGoal(project);
+    if (getWorkbenchWritingGenre(goal)) return "writing";
+    const domains = methodCardsApi?.inferTaskDomains?.(goal) || [];
+    if (domains.length === 1) return domains[0] === "写作" ? "writing" : "agent";
+    return project?.domain === "写作" && domains.length === 0 ? "writing" : "agent";
+  }
+  function getWorkbenchPromptAgentTask(project) {
+    const goal = getWorkbenchPromptGoal(project);
+    const linkedTaskId = (project?.workbenchLegacyRefs || []).find(item => item.collection === "promptAgentTasks")?.sourceId;
+    const legacy = (state.promptAgentTasks || []).find(item => item.id === linkedTaskId) || {};
+    const type = /(?:提示词.{0,12}(?:优化|改进|审计|检查)|(?:优化|改进|审计|检查).{0,12}提示词)/iu.test(goal)
+      ? "optimize-prompt"
+      : /(?:(?:AI|模型|外部).{0,12}(?:结果|回复|输出)|(?:结果|回复|输出).{0,12}(?:AI|模型|外部)).{0,12}(?:诊断|评估|复盘|检查)/iu.test(goal)
+        ? "diagnose-ai-result" : legacy.type || "advance-idea";
+    return {
+      ...legacy, id: project.id, type, goal: goal || legacy.goal,
+      target: project.target || legacy.target || "", currentState: project.currentState || legacy.currentState || "",
+      constraints: project.constraints || legacy.constraints || "",
+      successCriteria: project.successCriteria?.length ? project.successCriteria : legacy.successCriteria || [],
+      preserveItems: project.preserveItems?.length ? project.preserveItems : legacy.preserveItems || [],
+      facts: project.facts?.length ? project.facts : legacy.facts || [],
+      assumptions: project.assumptions?.length ? project.assumptions : legacy.assumptions || [],
+      missingInfo: project.missingInfo?.length ? project.missingInfo : legacy.missingInfo || [],
+      steps: legacy.steps?.length ? legacy.steps : Array.isArray(project.steps) ? project.steps : [],
+      currentStepId: project.currentStepId || legacy.currentStepId || ""
+    };
+  }
+  function getWorkbenchWritingPromptInput(project) {
+    const linkedArticleId = (project?.workbenchLegacyRefs || []).find(item => item.collection === "writingArticles")?.sourceId;
+    const legacy = (state.writingArticles || []).find(item => item.id === linkedArticleId) || {};
+    const previousRound = legacy.rounds?.at(-1) || {};
+    const goal = getWorkbenchPromptGoal(project);
+    const followUps = (project.conversation || []).filter((item, index) => item?.role === "user" && !item.skipped
+      && !(index === 0 && String(item.text || "").trim() === String(project.idea || "").trim()))
+      .map(item => String(item.text || "").trim()).filter(Boolean);
+    const feedback = [followUps.join("\n"), project.workbenchDraft?.opinion].filter(Boolean).join("\n\n");
+    const article = legacy.article || {};
+    const genre = getWorkbenchWritingGenre(goal) || article.genre || "article";
+    return {
+      ...legacy,
+      article: {
+        ...article, id: article.id || project.id, genre, goal: goal || article.goal || "",
+        audience: project.audience || article.audience || "",
+        successCriteria: project.successCriteria?.length ? project.successCriteria : article.successCriteria || [],
+        preserveItems: project.preserveItems?.length ? project.preserveItems : article.preserveItems || [],
+        constraints: project.constraints || article.constraints || ""
+      },
+      round: { ...previousRound, id: `unified-${project.id}`, draft: "", feedback, userFeedback: project.workbenchDraft?.opinion || "", materials: [] },
+      writingPacks: state.writingPacks || [], writingPackSettings: state.writingPackSettings || []
+    };
+  }
+  function getWorkbenchWritingTaskType(project, currentState) {
+    const linkedId = (project?.workbenchLegacyRefs || []).find(item => item.collection === "writingArticles")?.sourceId;
+    const workspace = (currentState.writingArticles || []).find(item => item.id === linkedId);
+    const goal = getWorkbenchPromptGoal(project);
+    const inferredGenre = getWorkbenchWritingGenre(goal);
+    const genre = inferredGenre || workspace?.article?.genre || "article";
+    if (genre === "email") {
+      if (/(?:审阅|评估|检查|校对)/u.test(goal)) return "email-review";
+      if (/(?:修改|改写|润色|修订)/u.test(goal)) return "email-revision";
+      if (inferredGenre) return "email-draft";
+    }
+    if (genre === "business-document") {
+      if (/(?:营销|推广|宣传)/u.test(goal)) return "business-marketing";
+      if (/(?:方案|提案)/u.test(goal)) return "business-proposal";
+      if (inferredGenre) return "business-report";
+    }
+    const previousType = workspace?.rounds?.at(-1)?.taskType;
+    const genreConfig = window.WritingWorkbenchSchema?.getWritingGenreConfig?.(genre);
+    if (previousType && (!genreConfig?.taskTypes?.length || genreConfig.taskTypes.includes(previousType))) return previousType;
+    if (genre === "academic-paper") {
+      return /(?:诊断|评估|审阅|核对)/u.test(goal) ? "diagnosis"
+        : /(?:修改|改写|润色|修订)/u.test(goal) ? "revision" : "academic-planning";
+    }
+    return genreConfig?.taskTypes?.[0] || "revision";
+  }
+  function getWorkbenchWritingFollowUpRule(genre) {
+    const focus = genre === "email" ? "邮件优先关注收件人关系、沟通目的和期望行动"
+      : genre === "business-document" ? "周报/报告优先关注统计周期、目标读者和数据来源"
+        : "优先关注当前文体必需的对象、目标和依据";
+    return `必要追问：先综合任务目标、对话补充、已确认要求、本轮资料与批注，不重复询问已确认信息。仅当缺失信息会实质改变结果时提出一个最关键的问题；${focus}。其他缺项标明待补充，能有限假设时说明后继续，不整理成长表单。`;
+  }
   function getWorkbenchUnifiedPrompt(project, promptSources = []) {
     if (!unifiedWorkbenchPrompts?.buildUnifiedPrompt) return { text: workbenchDialogue.buildModificationPrompt(project), contentVersionIds: [], layoutIntent: { enabled: false }, selectedContents: [], annotations: [] };
     const selection = project.workbenchSelection || { items: [], layoutIntent: { enabled: false } };
@@ -2785,7 +2944,29 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       project.preserveItems?.length ? `需要保留：\n${project.preserveItems.join("\n")}` : "",
       project.constraints ? `约束：\n${project.constraints}` : ""
     ].filter(Boolean).join("\n\n");
-    const basePrompt = [workbenchDialogue.buildModificationPrompt(project), domainRules].filter(Boolean).join("\n\n");
+    const route = getWorkbenchPromptRoute(project);
+    const writingInput = route === "writing" ? getWorkbenchWritingPromptInput(project) : null;
+    const writingTaskType = route === "writing" ? getWorkbenchWritingTaskType(project, state) : "";
+    const agentTask = getWorkbenchPromptAgentTask(project);
+    const currentStep = (agentTask.steps || []).find(item => item.id === agentTask.currentStepId)
+      || (agentTask.steps || []).find(item => item.status === "current")
+      || { id: `${project.id}-current`, title: project.nextAction || "当前目标", goal: getWorkbenchPromptGoal(project),
+        inputs: selectedContents.map(item => item.title), deliverable: "供外部 AI 执行的提示词", checklist: agentTask.successCriteria };
+    const externalResult = selectedContents.find(item => item.purpose === "result")?.text || "";
+    const originalPrompt = selectedContents.find(item => item.purpose !== "result" && item.text)?.text || "";
+    const agentStage = project.workbenchPromptStage || (agentTask.type === "diagnose-ai-result"
+      ? externalResult ? "review" : "diagnosis"
+      : "step-prompt");
+    const taskRules = unifiedWorkbenchPrompts.buildTaskRulePrompt(route === "writing"
+      ? { route, writingPrompts: window.WritingWorkbenchPrompts, writingSchema: window.WritingWorkbenchSchema,
+        writingInput, writingTaskType }
+      : { route, stage: agentStage, agentPrompts: window.ForwardStepPromptAgentPrompts,
+        agentTask, step: currentStep, originalPrompt, externalResult,
+        feedback: project.workbenchDraft?.opinion || "" });
+    const writingFollowUpRule = route === "writing" ? getWorkbenchWritingFollowUpRule(writingInput.article.genre) : "";
+    const basePrompt = [workbenchDialogue.buildModificationPrompt(project), domainRules,
+      writingFollowUpRule,
+      `【${route === "writing" ? "写作" : "提示词 Agent"}规则】\n${taskRules}`].filter(Boolean).join("\n\n");
     const prompt = unifiedWorkbenchPrompts.buildUnifiedPrompt({
       basePrompt, selectedContents, annotations, feedback: project.workbenchDraft?.opinion || "",
       layoutIntent: selection.layoutIntent || { enabled: false }
@@ -2793,7 +2974,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     return { ...prompt, selectedContents, annotations };
   }
   function getWorkbenchPromptBatchState(project, annotations = []) {
-    const base = getWorkbenchUnifiedPrompt(project, annotations).text;
+    const unifiedPrompt = getWorkbenchUnifiedPrompt(project, annotations);
+    const base = unifiedPrompt.text;
     const material = getWorkbenchMaterialState(project);
     const feedbackBatches = feedback.buildSelectedAnnotationPromptBatches(annotations, material.attachments || [], {
       maxCharacters: Math.max(1, 8000 - base.length - 120)
@@ -2806,7 +2988,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       : [{ prompt: base, annotationIds: [], itemCount: 0, characterCount: base.length, oversized: base.length > 8000 }];
     const requestedIndex = Number.isSafeInteger(project.workbenchPromptBatchIndex) ? project.workbenchPromptBatchIndex : 0;
     const index = Math.min(Math.max(0, requestedIndex), batches.length - 1);
-    return { ...feedbackBatches, batches, batchCount: batches.length, index, current: batches[index] };
+    return { ...feedbackBatches, selectedContents: unifiedPrompt.selectedContents, canvasAnnotations: unifiedPrompt.annotations, batches, batchCount: batches.length, index, current: batches[index] };
   }
   function buildWorkbenchPrompt(project, annotations = []) {
     return getWorkbenchPromptBatchState(project, annotations).current.prompt;
@@ -3464,26 +3646,43 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function workbenchContentKind(attachment) {
     return ({ text: "text", markdown: "markdown", docx: "document", pptx: "presentation" })[attachment?.kind] || attachment?.kind || "file";
   }
+  function getWorkbenchPromptDeliveries(project) {
+    const result = [];
+    for (const [roundIndex, round] of (project.workbenchPromptRounds || []).entries()) {
+      let versionNumber = 0;
+      for (const delivery of round.deliveries || []) {
+        if (delivery.exportSnapshot || !["prepared", "copied", "delivered"].includes(delivery.status)) continue;
+        versionNumber += 1;
+        result.push({ round, delivery, roundIndex, versionNumber });
+      }
+    }
+    return result;
+  }
+  function getWorkbenchPromptDeliverySuggestion(project) {
+    const deliveries = getWorkbenchPromptDeliveries(project);
+    return deliveries.filter(item => ["copied", "delivered"].includes(item.delivery.status)).at(-1)
+      || deliveries.filter(item => item.delivery.status === "prepared").at(-1) || null;
+  }
   function ensureWorkbenchAttachmentContents(project, attachments) {
     const contents = Array.isArray(project.workbenchContents) ? project.workbenchContents.slice() : [];
+    const promptDelivery = getWorkbenchPromptDeliverySuggestion(project);
     let changed = false;
     for (const attachment of attachments || []) {
       const existingContent = contents.find(content => content.versions?.some(version => version.attachmentId === attachment.id));
       if (existingContent?.versions?.some(version => version.attachmentId === attachment.id && version.hash === attachment.sha256)) continue;
-      const copiedDelivery = [...(project.workbenchPromptRounds || [])].reverse()
-        .flatMap(round => [...(round.deliveries || [])].reverse().map(delivery => ({ round, delivery })))
-        .find(item => ["copied", "delivered"].includes(item.delivery.status));
-      const purpose = copiedDelivery ? "result" : "reference";
+      const purpose = promptDelivery ? "result" : "reference";
       const versionId = `workbench-version-${attachment.id}${existingContent ? `-${String(attachment.sha256 || "").slice(0, 12)}` : ""}`;
       const version = {
         id: versionId, attachmentId: attachment.id, hash: attachment.sha256,
         sourceRef: { kind: "attachment", attachmentId: attachment.id, hash: attachment.sha256, title: attachment.displayName || "" },
         parseStatus: "preview",
-        ...(copiedDelivery ? { roundId: copiedDelivery.round.id, deliveryId: copiedDelivery.delivery.id } : {})
+        ...(promptDelivery ? { roundId: promptDelivery.round.id, deliveryId: promptDelivery.delivery.id } : {})
       };
       const content = existingContent || {
         id: `workbench-content-${attachment.id}`, title: attachment.displayName || "未命名资料",
-        kind: workbenchContentKind(attachment), purpose, purposeReason: copiedDelivery ? "默认关联最近复制的提示词轮次" : "整理阶段新增内容默认作为参考资料",
+        kind: workbenchContentKind(attachment), purpose,
+        purposeReason: promptDelivery?.delivery.status === "prepared" ? "可能是外部结果；关联最近准备稿，尚未记录交付"
+          : promptDelivery ? "可能是外部结果；关联最近复制/交付的提示词版本" : "整理阶段新增内容默认作为参考资料",
         draft: { text: "", baseVersionId: "" }, versions: [], sourceRef: version.sourceRef
       };
       content.versions = [...(content.versions || []), version];
@@ -3504,6 +3703,25 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       if (version) return { content, version };
     }
     return null;
+  }
+  function updateWorkbenchPromptAssociation(project, versionId, selectedIndex) {
+    const found = findWorkbenchContentVersion(project, versionId);
+    if (!found) return false;
+    const choices = getWorkbenchPromptDeliveries(project);
+    let association = null;
+    if (selectedIndex !== "") {
+      const index = Number(selectedIndex);
+      if (!Number.isInteger(index) || index < 1 || index > choices.length) return false;
+      association = choices[index - 1];
+    }
+    if (association) {
+      found.version.roundId = association.round.id;
+      found.version.deliveryId = association.delivery.id;
+    } else {
+      delete found.version.roundId;
+      delete found.version.deliveryId;
+    }
+    return true;
   }
   function findWorkbenchAttachmentVersion(project, attachmentId) {
     for (const content of project.workbenchContents || []) {
@@ -3611,6 +3829,80 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       confirm.disabled = false;
     }
   }
+  function legacyWorkbenchRecordTitle(collection, record) {
+    return collection === "promptAgentTasks"
+      ? record.goal || `历史 Agent 任务 ${record.id}`
+      : record.article?.title || record.article?.goal || `历史写作记录 ${record.id}`;
+  }
+  function legacyWorkbenchRecordText(collection, record) {
+    const lines = [];
+    const add = (label, value) => {
+      const text = Array.isArray(value) ? value.filter(Boolean).join("\n") : String(value || "").trim();
+      if (text) lines.push(`${label}：\n${text}`);
+    };
+    if (collection === "promptAgentTasks") {
+      lines.push("历史提示词 Agent 任务");
+      for (const key of ["type", "goal", "target", "currentState", "constraints", "successCriteria", "preserveItems", "facts", "assumptions", "missingInfo", "draft"]) {
+        add(key, record[key]);
+      }
+      add("研究摘要", record.researchReturn?.summary);
+      add("步骤", (record.steps || []).map((step, index) => [
+        `${index + 1}. ${step.title || step.goal || "未命名步骤"}`, step.description, step.goal, step.deliverable,
+        ...(step.inputs || []), ...(step.checklist || [])
+      ].filter(Boolean).join("\n")));
+      add("复盘意见", record.review?.feedback);
+    } else {
+      const article = record.article || {};
+      const rounds = Array.isArray(record.rounds) ? record.rounds : [];
+      const latest = rounds.at(-1) || {};
+      lines.push("历史写作工作区");
+      for (const key of ["title", "genre", "goal", "audience", "platform", "constraints", "successCriteria", "preserveItems"]) {
+        add(key, article[key] || (key === "genre" ? record.genre : ""));
+      }
+      add("文章草稿", article.draft || latest.draft);
+      add("最近一轮修改意见", latest.userFeedback || latest.feedback || latest.revisionNote);
+      add("最近一轮诊断", latest.diagnosis);
+      add("最近一轮提示词", latest.prompt);
+      add("保存轮次数", rounds.length);
+    }
+    return lines.join("\n\n");
+  }
+  function importWorkbenchLegacyRecord(project, collection, sourceId) {
+    if (!project || !["promptAgentTasks", "writingArticles"].includes(collection)) return;
+    const record = (state[collection] || []).find(item => item.id === sourceId);
+    if (!record) { toast("找不到这条已保存的历史记录；原记录未修改"); return; }
+    const reference = (project.workbenchLegacyRefs || []).find(item => item.collection === collection && item.sourceId === sourceId);
+    const existing = reference?.contentId && (project.workbenchContents || []).find(item => item.id === reference.contentId);
+    if (existing) {
+      void openWorkbenchDocument(project, existing);
+      toast("这条历史记录已关联；打开的是来源快照，原记录保持不变");
+      return;
+    }
+    const title = legacyWorkbenchRecordTitle(collection, record);
+    const sourceRef = { type: "legacy", collection, sourceId };
+    const versionId = workbenchId("workbench-legacy-version");
+    const snapshotText = legacyWorkbenchRecordText(collection, record);
+    const content = {
+      id: workbenchId("workbench-legacy-content"), title, kind: "document", purpose: "reference",
+      purposeReason: "用户显式选择的历史记录快照；修改不会回写原记录",
+      draft: { text: snapshotText, baseVersionId: versionId },
+      versions: [{ id: versionId, text: snapshotText, parseStatus: "read", sourceRef }], sourceRef
+    };
+    const previous = structuredClone(project);
+    try {
+      Object.assign(project, workbenchSchema.migrateWorkbenchProject(project, [{ collection, sourceId, contentId: content.id, content }]));
+      project.workbenchPersistenceEnabled = true;
+      project.workbenchOpenContentId = content.id;
+      project.workbenchMaterialPanel = "document";
+      project.workbenchPreviewMode = "material";
+      if (!persist()) { Object.assign(project, previous); return; }
+      renderWorkbench(project);
+      toast("历史记录已作为任务内容快照导入；原记录和历史轮次保持不变");
+    } catch (error) {
+      Object.assign(project, previous);
+      toast(`历史记录未导入：${String(error.message || error).slice(0, 160)}；原记录保持不变`);
+    }
+  }
   function renderWorkbenchContentCatalog(project, material) {
     const contents = (project.workbenchContents || []).filter(item => !item.removedAt);
     const canvases = (project.workbenchCanvases || []).filter(item => !item.removedAt);
@@ -3625,7 +3917,15 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const status = ({ read: "已读正文", parsed: "已读正文", preview: "仅预览", original: "仅原件", failed: "解析失败" })[version?.parseStatus] || (version?.text ? "已读正文" : "仅原件");
       const selected = version && selectedIds.has(version.id);
       const kind = ({ document: "文档", text: "TXT 文稿", markdown: "Markdown", presentation: "演示文稿", pdf: "PDF", image: "图片", html: "网页快照" })[content.kind] || "文件";
-      return `<article class="workbench-content-card"><h3>${escapeHtml(content.title || "未命名内容")}</h3><p class="workbench-content-meta">${kind} · ${status}${version?.hash ? ` · ${escapeHtml(String(version.hash).slice(0, 18))}` : ""}</p><label class="workbench-content-purpose">用途<select data-workbench-purpose="${escapeHtml(content.id)}"><option value="reference" ${content.purpose === "reference" ? "selected" : ""}>参考资料</option><option value="result" ${content.purpose === "result" ? "selected" : ""}>外部结果</option></select></label><div class="workbench-content-actions"><button class="button-secondary" type="button" data-workbench-open-content="${escapeHtml(content.id)}">${["document", "text", "markdown"].includes(content.kind) ? "打开文档" : "查看资料"}</button>${["document", "text", "markdown"].includes(content.kind) ? `<button class="button-quiet" type="button" data-workbench-edit-content="${escapeHtml(content.id)}">编辑</button>` : ""}<label><input type="checkbox" data-workbench-select-content="${escapeHtml(content.id)}" ${version ? "" : "disabled"} ${selected ? "checked" : ""}> 本轮使用</label></div><small class="workbench-content-meta">${escapeHtml(content.purposeReason || (content.purpose === "result" ? "外部 AI 回填结果" : "任务参考内容"))}</small></article>`;
+      const promptDeliveries = getWorkbenchPromptDeliveries(project);
+      const associatedPromptIndex = promptDeliveries.findIndex(item => item.round.id === version?.roundId && item.delivery.id === version?.deliveryId);
+      const associationOptions = promptDeliveries.map((item, index) => {
+        const statusLabel = ({ prepared: "未记录交付", copied: "已复制", delivered: "已交付" })[item.delivery.status];
+        return `<option value="${index + 1}" ${index === associatedPromptIndex ? "selected" : ""}>第 ${item.roundIndex + 1} 轮 · V${item.versionNumber} · ${statusLabel}</option>`;
+      }).join("");
+      const standaloneLabel = (version?.roundId || version?.deliveryId) && associatedPromptIndex < 0
+        ? "关联版本不可用（解除关联）" : "不关联（独立保存）";
+      return `<article class="workbench-content-card"><h3>${escapeHtml(content.title || "未命名内容")}</h3><p class="workbench-content-meta">${kind} · ${status}${version?.hash ? ` · ${escapeHtml(String(version.hash).slice(0, 18))}` : ""}</p><label class="workbench-content-purpose">用途<select data-workbench-purpose="${escapeHtml(content.id)}"><option value="reference" ${content.purpose === "reference" ? "selected" : ""}>参考资料</option><option value="result" ${content.purpose === "result" ? "selected" : ""}>外部结果</option></select></label>${version ? `<label class="workbench-content-purpose">关联提示词<select data-workbench-prompt-association data-workbench-version="${escapeHtml(version.id)}"><option value="" ${associatedPromptIndex < 0 ? "selected" : ""}>${standaloneLabel}</option>${associationOptions}</select></label>` : ""}<div class="workbench-content-actions"><button class="button-secondary" type="button" data-workbench-open-content="${escapeHtml(content.id)}">${["document", "text", "markdown"].includes(content.kind) ? "打开文档" : "查看资料"}</button>${["document", "text", "markdown"].includes(content.kind) ? `<button class="button-quiet" type="button" data-workbench-edit-content="${escapeHtml(content.id)}">编辑</button>` : ""}<label><input type="checkbox" data-workbench-select-content="${escapeHtml(content.id)}" ${version ? "" : "disabled"} ${selected ? "checked" : ""}> 本轮使用</label></div><small class="workbench-content-meta">${escapeHtml(content.purposeReason || (content.purpose === "result" ? "外部 AI 回填结果" : "任务参考内容"))}</small></article>`;
     }).join("");
     const canvasCards = filter === "documents" || filter === "files" ? [] : canvases.map(canvas => `<article class="workbench-content-card"><h3>${escapeHtml(canvas.title || "未命名画布")}</h3><p class="workbench-content-meta">画布 · ${canvas.nodes?.length || 0} 个内容节点 · ${canvas.purpose === "result" ? "外部结果" : "参考构图"}</p><div class="workbench-content-actions"><button class="button-secondary" type="button" data-workbench-open-canvas="${escapeHtml(canvas.id)}">打开画布</button></div></article>`).join("");
     const promptCards = filter === "documents" || filter === "files" || filter === "canvases" ? [] : rounds.map(round => (round.deliveries || []).map(delivery => {
@@ -3635,7 +3935,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         : `<button class="button-secondary" type="button" disabled title="浏览器临时演示未接入桌面文件导出">桌面导出</button>`;
       return `<details class="workbench-content-card"><summary>${delivery.exportSnapshot ? "素材包快照" : "提示词轮次"} · ${escapeHtml(delivery.status || "已准备")}</summary><p class="workbench-content-meta">${(delivery.materials || []).length} 份素材快照</p><div class="workbench-content-actions">${exportAction}</div><pre>${escapeHtml(delivery.text || round.draftText || "")}</pre></details>`;
     }).join("")).join("");
-    return `${workbenchPanelNavigation(project, "catalog")}<section class="workbench-content-panel"><div class="workbench-content-toolbar"><label>筛选<select data-workbench-content-filter><option value="all" ${filter === "all" ? "selected" : ""}>全部内容</option><option value="documents" ${filter === "documents" ? "selected" : ""}>文档</option><option value="files" ${filter === "files" ? "selected" : ""}>文件</option><option value="canvases" ${filter === "canvases" ? "selected" : ""}>画布</option><option value="prompts" ${filter === "prompts" ? "selected" : ""}>提示词</option></select></label><button class="button-secondary" type="button" data-workbench-create-document>新建粘贴文档</button><button class="button-secondary" type="button" data-workbench-create-canvas>新建画布</button><button class="button-secondary" type="button" data-workbench-choose-material ${desktopApi?.pptFeedback?.chooseFile ? "" : "disabled"}>添加文件</button></div><div class="workbench-content-list">${contentCards || canvasCards || promptCards ? `${contentCards}${canvasCards}${promptCards}` : `<p class="workbench-canvas-empty">本任务还没有内容。可以新建文档、导入文件或创建画布。</p>`}</div></section>`;
+    const linkedRefs = new Set((project.workbenchLegacyRefs || []).filter(ref => ref.contentId && contents.some(content => content.id === ref.contentId))
+      .map(ref => JSON.stringify([ref.collection, ref.sourceId])));
+    const legacyCards = filter === "all" || filter === "documents" ? [
+      ...(state.promptAgentTasks || []).map(record => ({ collection: "promptAgentTasks", record })),
+      ...(state.writingArticles || []).map(record => ({ collection: "writingArticles", record }))
+    ].filter(({ collection, record }) => record?.id && !linkedRefs.has(JSON.stringify([collection, record.id]))).map(({ collection, record }) => {
+      const title = legacyWorkbenchRecordTitle(collection, record);
+      const label = collection === "promptAgentTasks" ? "提示词 Agent" : "写作";
+      return `<article class="workbench-content-card"><h3>${escapeHtml(title)}</h3><p class="workbench-content-meta">历史${label}记录 · 导入会建立任务内快照，不改动原记录</p><div class="workbench-content-actions"><button class="button-secondary" type="button" data-workbench-import-legacy="${collection}" data-workbench-legacy-id="${escapeHtml(record.id)}">作为任务内容导入</button></div></article>`;
+    }).join("") : "";
+    const currentCards = `${contentCards}${canvasCards}${promptCards}`;
+    const legacySection = legacyCards ? `<details class="workbench-content-card"><summary>导入历史提示词 Agent / 写作记录</summary><div class="workbench-content-list">${legacyCards}</div></details>` : "";
+    return `${workbenchPanelNavigation(project, "catalog")}<section class="workbench-content-panel"><div class="workbench-content-toolbar"><label>筛选<select data-workbench-content-filter><option value="all" ${filter === "all" ? "selected" : ""}>全部内容</option><option value="documents" ${filter === "documents" ? "selected" : ""}>文档</option><option value="files" ${filter === "files" ? "selected" : ""}>文件</option><option value="canvases" ${filter === "canvases" ? "selected" : ""}>画布</option><option value="prompts" ${filter === "prompts" ? "selected" : ""}>提示词</option></select></label><button class="button-secondary" type="button" data-workbench-create-document>新建粘贴文档</button><button class="button-secondary" type="button" data-workbench-create-canvas>新建画布</button><button class="button-secondary" type="button" data-workbench-choose-material ${desktopApi?.pptFeedback?.chooseFile ? "" : "disabled"}>添加文件</button></div><div class="workbench-content-list">${currentCards || (legacySection ? "" : `<p class="workbench-canvas-empty">本任务还没有内容。可以新建文档、导入文件或创建画布。</p>`)}${legacySection}</div></section>`;
   }
   function renderWorkbenchDocumentEditor(project, material, content) {
     const draft = content.draft || { text: "", baseVersionId: "" };
@@ -3699,8 +4011,17 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   function openWorkbenchAttachment(project, attachmentId) {
     project.workbenchClosedAttachmentIds = (project.workbenchClosedAttachmentIds || []).filter(id => id !== attachmentId);
+    if (!setWorkbenchPreviewMode(project, "material")) return false;
     project.workbenchAttachmentId = attachmentId;
-    project.workbenchPreviewMode = "material";
+    project.workbenchMaterialPanel = "viewer";
+    return true;
+  }
+  function addWorkbenchAttachment(project, attachmentId) {
+    project.workbenchClosedAttachmentIds = (project.workbenchClosedAttachmentIds || []).filter(id => id !== attachmentId);
+    if (!setWorkbenchPreviewMode(project, "material", { automatic: true })) return false;
+    project.workbenchAttachmentId = attachmentId;
+    project.workbenchMaterialPanel = "viewer";
+    return true;
   }
   function closeWorkbenchAttachment(project, attachmentId, attachments) {
     const opened = getWorkbenchOpenAttachments(project, attachments);
@@ -4032,7 +4353,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       }
       const openedAttachments = getWorkbenchOpenAttachments(project, material.attachments);
       if (!openedAttachments.some(item => item.id === project.workbenchAttachmentId)) {
-        project.workbenchAttachmentId = openedAttachments[0]?.id || "";
+        project.workbenchAttachmentId = canAutoOpenWorkbenchPreview(project) ? openedAttachments[0]?.id || "" : "";
         persist();
         project = state.projects.find(item => item.id === project.id) || project;
       }
@@ -4146,8 +4467,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   function updateWorkbenchPasteAction(project = getActiveProject()) {
     const button = document.querySelector("[data-workbench-convert-paste]");
-    if (!button) return;
     const input = document.getElementById("workbench-message-input");
+    if (!button || !input) return;
     const range = project && workbenchLongPaste?.projectId === project.id
       ? locateWorkbenchLongPaste(input.value, workbenchLongPaste)
       : null;
@@ -4171,31 +4492,42 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     workbenchLongPaste = { projectId: getActiveProject()?.id, text: input.value.slice(start, start + normalized.length) };
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
-  function createWorkbenchDocument(project, text = "") {
-    ensureWorkbenchProjectData(project);
-    const previousView = {
-      contentId: project.workbenchOpenContentId,
-      panel: project.workbenchMaterialPanel,
-      previewMode: project.workbenchPreviewMode
+  function createWorkbenchTextSnapshot({ title, text, sourceRef, purposeReason }) {
+    const versionId = workbenchId("workbench-version");
+    return {
+      id: workbenchId("workbench-content"), title, kind: "document", purpose: "reference", purposeReason,
+      draft: { text, baseVersionId: versionId },
+      versions: [{ id: versionId, text, parseStatus: "read", sourceRef }], sourceRef
     };
+  }
+  function createWorkbenchDocument(project, initialText = "") {
+    ensureWorkbenchProjectData(project);
     const id = workbenchId("workbench-content");
+    const previousView = {
+      previewMode: project.workbenchPreviewMode,
+      openContentId: project.workbenchOpenContentId,
+      materialPanel: project.workbenchMaterialPanel
+    };
     project.workbenchContents.push({
       id, title: "未命名文档", kind: "document", purpose: "reference",
-      purposeReason: "新建文档默认作为任务参考内容", draft: { text, baseVersionId: "" }, versions: [], sourceRef: null
+      purposeReason: "新建文档默认作为任务参考内容", draft: { text: initialText, baseVersionId: "" }, versions: [], sourceRef: null
     });
-    project.workbenchOpenContentId = id;
-    project.workbenchMaterialPanel = "document";
-    project.workbenchPreviewMode = "material";
+    const showNewDocument = setWorkbenchPreviewMode(project, "material", { automatic: true });
+    if (showNewDocument) {
+      project.workbenchOpenContentId = id;
+      project.workbenchMaterialPanel = "document";
+    }
     if (!persist()) {
-      project.workbenchContents.pop();
-      project.workbenchOpenContentId = previousView.contentId;
-      project.workbenchMaterialPanel = previousView.panel;
+      project.workbenchContents = project.workbenchContents.filter(content => content.id !== id);
       project.workbenchPreviewMode = previousView.previewMode;
-      return false;
+      project.workbenchOpenContentId = previousView.openContentId;
+      project.workbenchMaterialPanel = previousView.materialPanel;
+      return null;
     }
     renderWorkbench(project);
-    document.querySelector("[data-workbench-document-text]")?.focus();
-    return true;
+    if (showNewDocument) document.querySelector("[data-workbench-document-text]")?.focus();
+    else toast("文档已加入本任务内容；当前预览保持不变，可在内容列表中打开");
+    return id;
   }
   function transferWorkbenchPasteToDocument() {
     const project = getActiveProject();
@@ -4212,8 +4544,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (workbenchDraftSaveTimer !== null) clearTimeout(workbenchDraftSaveTimer);
     workbenchDraftSaveTimer = null;
     project.conversationDraft = remainingText;
-    if (!createWorkbenchDocument(project, transferredText)) {
+    const contentId = createWorkbenchDocument(project, transferredText);
+    if (!contentId) {
       project.conversationDraft = originalText;
+      input.value = originalText;
       return false;
     }
     workbenchLongPaste = null;
@@ -4224,16 +4558,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     ensureWorkbenchProjectData(project);
     const canvas = workbenchCanvasApi.createCanvas({ title: "未命名画布" });
     project.workbenchCanvases.push(canvas);
-    project.workbenchActiveCanvasId = canvas.id;
-    project.workbenchMaterialPanel = "canvas";
-    project.workbenchPreviewMode = "material";
+    const showNewCanvas = setWorkbenchPreviewMode(project, "material", { automatic: true });
+    if (showNewCanvas) {
+      project.workbenchActiveCanvasId = canvas.id;
+      project.workbenchMaterialPanel = "canvas";
+    }
     persist();
     renderWorkbench(project);
+    if (!showNewCanvas) toast("画布已加入本任务内容；当前预览保持不变，可从内容列表打开");
   }
   function showWorkbenchPanel(project, panel) {
     if (!project) return;
     project.workbenchMaterialPanel = panel;
-    project.workbenchPreviewMode = "material";
+    setWorkbenchPreviewMode(project, "material");
     persist();
     renderWorkbench(project);
   }
@@ -4283,7 +4620,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (!body.value.trim()) { toast("正文为空；草稿已保留，填写正文后再保存版本。"); return; }
     let hash;
     try { hash = await hashWorkbenchText(body.value); }
-    catch (error) { toast(`正文草稿已保留，版本校验失败：${error.message || error}`); return; }
+    catch (error) { toast(`正文草稿已保留，版本校验失败：${error.message || error}`); return false; }
     const version = {
       id: workbenchId("workbench-version"), text: body.value, hash, parseStatus: "read", annotations: [],
       sourceRef: { kind: "document", title: content.title }, parentVersionId: content.draft.baseVersionId || "",
@@ -4297,10 +4634,11 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (desktopApi?.workbench?.saveManifest && !await saveWorkbenchManifest(project.id)) {
       toast("新版本已加入当前任务，但桌面清单未确认保存；草稿仍保留，可重试保存。");
       renderWorkbench(project);
-      return;
+      return false;
     }
     renderWorkbench(project);
     toast("已保存为新的不可变文档版本");
+    return true;
   }
   function setWorkbenchContentSelection(project, versionId, selected) {
     const current = project.workbenchSelection || { items: [], layoutIntent: { enabled: false } };
@@ -4425,6 +4763,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (!button) return;
     const panelButton = button.closest("[data-workbench-panel]");
     if (panelButton) { showWorkbenchPanel(project, panelButton.dataset.workbenchPanel); return; }
+    if (button.matches("[data-workbench-import-legacy]")) {
+      importWorkbenchLegacyRecord(project, button.dataset.workbenchImportLegacy, button.dataset.workbenchLegacyId);
+      return;
+    }
     if (button.matches("[data-workbench-export-delivery]")) {
       renderWorkbenchExportChoices(project, button.dataset.workbenchExportRound, button.dataset.workbenchExportDelivery);
       return;
@@ -4557,6 +4899,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       persist();
     }, 250);
   }
+  function updateWorkbenchComposerDocumentAction() {
+    const input = document.getElementById("workbench-message-input");
+    const button = document.getElementById("workbench-promote-to-document");
+    if (!input || !button) return;
+    button.hidden = !workbenchDialogue?.buildComposerDocumentTransfer(
+      input.value, input.selectionStart, input.selectionEnd
+    );
+  }
   function saveWorkbenchDraft() {
     const project = getActiveProject();
     if (!project) return;
@@ -4587,6 +4937,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const field = event.target;
     const project = getActiveProject();
     if (!project) return;
+    if (field.matches?.("[data-workbench-prompt-association]")) {
+      if (!updateWorkbenchPromptAssociation(project, field.dataset.workbenchVersion, field.value)) return;
+      persist();
+      renderWorkbench(project);
+      return;
+    }
     if (field.matches?.("[data-workbench-content-filter]")) {
       getWorkbenchMaterialState(project).contentFilter = field.value;
       renderWorkbenchMaterial(project);
@@ -4854,6 +5210,35 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (requestAgent && idea) void requestWorkbenchAgent(persistedProject);
     return persistedProject;
   }
+  async function handoffSocialResearchToWorkbench({ topic, summary, sourceTaskId } = {}) {
+    const idea = `基于社媒研究结果继续：${String(topic || "").trim() || "整理研究结论"}`;
+    const project = await createProjectFromIdea(idea, { requestAgent: false });
+    if (!project) throw new Error("统一任务未能保存，研究报告仍留在原任务中");
+    ensureWorkbenchProjectData(project);
+    const text = String(summary || "").trim();
+    if (text) {
+      const content = createWorkbenchTextSnapshot({
+        title: `社媒研究摘要 · ${String(topic || "研究结论").trim() || "未命名主题"}`,
+        text,
+        purposeReason: "从社媒研究报告转入的参考摘要",
+        sourceRef: { type: "social-research", sourceId: String(sourceTaskId || "") }
+      });
+      project.workbenchContents.push(content);
+      project.workbenchSelection = {
+        ...(project.workbenchSelection || {}),
+        items: [{ contentVersionId: content.versions[0].id }],
+        layoutIntent: project.workbenchSelection?.layoutIntent || { enabled: false }
+      };
+      project.workbenchOpenContentId = content.id;
+      project.workbenchMaterialPanel = "document";
+      project.workbenchPreviewMode = "material";
+    }
+    project.workbenchPersistenceEnabled = true;
+    if (!persist()) throw new Error("研究报告已加入内存任务，但本地索引未确认保存");
+    renderProject(project);
+    toast(text ? "研究报告已加入新任务，可在同一工作区继续" : "已在统一工作区新建研究任务");
+    return project;
+  }
   async function beginHomeMaterialImport() {
     if (homeImportBusy) return;
     if (pendingHomeImport) {
@@ -4989,9 +5374,25 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const latestAssistant = [...messages].reverse().find(message => message?.role === "assistant" && !message.kind);
     document.getElementById("workbench-message-input").value = project.conversationDraft || "";
     updateWorkbenchPasteAction(project);
+    updateWorkbenchComposerDocumentAction();
     document.getElementById("workbench-home-preview").hidden = true;
     const list = document.getElementById("workbench-messages");
     list.textContent = "";
+    const foldedMessageTargets = new Map();
+    const conversationTurns = workbenchDialogue?.groupConversationTurns?.(messages) || [];
+    for (const turn of conversationTurns.slice(0, -1)) {
+      const details = document.createElement("details");
+      details.className = "workbench-old-turn";
+      const summary = document.createElement("summary");
+      const userMessage = turn.messages.find(message => message.role === "user");
+      const summaryText = String(userMessage?.text || turn.messages[0]?.text || "上一轮对话").replace(/\s+/g, " ").trim();
+      summary.textContent = `上一轮：${summaryText.slice(0, 72)}${summaryText.length > 72 ? "…" : ""} · ${turn.messages.length} 条消息`;
+      const body = document.createElement("div");
+      body.className = "workbench-old-turn-body";
+      details.append(summary, body);
+      list.append(details);
+      for (const message of turn.messages) foldedMessageTargets.set(message, body);
+    }
     messages.forEach((message, index) => {
       if (!message || !["user", "assistant"].includes(message.role)) return;
       const bubble = document.createElement("article");
@@ -5070,7 +5471,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         retry.disabled = pendingWorkbenchProjects.has(project.id);
         bubble.append(retry);
       }
-      list.append(bubble);
+      (foldedMessageTargets.get(message) || list).append(bubble);
     });
     const material = getWorkbenchMaterialState(project);
     const sourceState = getWorkbenchPromptSourceState(material, project);
@@ -5137,11 +5538,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const promptEditor = document.getElementById("workbench-prompt-preview");
     const { selectedAnnotations, promptConflicts, conflictedIds, promptSources, deferredConflictCount } = sourceState;
     const knowledgeSources = Array.isArray(project.workbenchKnowledgeSources) ? project.workbenchKnowledgeSources : [];
+    const selectedWorkbenchContents = promptBatchState.selectedContents;
+    const selectedCanvasAnnotations = promptBatchState.canvasAnnotations;
+    const selectedAnnotationCount = selectedAnnotations.length + selectedCanvasAnnotations.length;
     const promptDraftEdited = typeof project.workbenchPromptDraft === "string"
       && typeof project.workbenchGeneratedPrompt === "string"
       && project.workbenchPromptDraft !== project.workbenchGeneratedPrompt;
     const hasPromptBasis = messages.some(message => message?.role === "user" && !message.skipped && String(message.text || "").trim())
-      || selectedAnnotations.length > 0 || knowledgeSources.length > 0;
+      || selectedAnnotations.length > 0 || selectedCanvasAnnotations.length > 0 || knowledgeSources.length > 0;
     const promptUnavailable = !hasPromptBasis && !String(project.workbenchPromptDraft || "").trim();
     const promptContentChanged = !promptUnavailable && !promptDraftEdited
       && (project.workbenchGeneratedPrompt !== prompt || project.workbenchPromptDraft !== prompt);
@@ -5167,8 +5571,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         ? "尚未生成修改提示词。先在对话中补充目标，或在资料上添加并选择有效批注。"
         : promptConflicts.length
         ? `还有 ${promptConflicts.length} 组互斥批注待你决定，相关意见暂不纳入提示词。`
-        : selectedAnnotations.length
-          ? `已按 ${new Set(promptSources.map(item => item.attachmentId)).size} 份批注资料整理 ${promptSources.length} 条有效意见${knowledgeSources.length ? `，并引用 ${knowledgeSources.length} 份资料摘要` : ""}。`
+        : selectedAnnotationCount
+          ? `本轮已纳入 ${selectedAnnotationCount} 条有效批注${selectedWorkbenchContents.length ? `，对应 ${selectedWorkbenchContents.length} 份选中内容` : ""}${knowledgeSources.length ? `，并引用 ${knowledgeSources.length} 份资料摘要` : ""}。`
+          : selectedWorkbenchContents.length
+            ? `本轮已带入 ${selectedWorkbenchContents.length} 份选中内容及版本快照；提示词仍可编辑。`
           : knowledgeSources.length
             ? `已带入 ${knowledgeSources.length} 份资料摘要及版本快照；提示词仍可编辑。`
             : "当前没有选中且版本有效的批注或已带入资料；下面的提示词仅根据任务对话整理。";
@@ -5199,6 +5605,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     document.getElementById("workbench-task-feedback-count").textContent = `${Math.max(0, messages.filter(message => message?.role === "user").length - 1)} 条补充或确认`;
 
     const previewMode = ["material", "prompt", "task"].includes(project.workbenchPreviewMode) ? project.workbenchPreviewMode : "material";
+    const previewPinned = getWorkbenchPreviewState(project) === "pinned";
+    const pinButton = document.getElementById("workbench-preview-pin");
+    pinButton.setAttribute("aria-pressed", String(previewPinned));
+    pinButton.title = previewPinned ? "取消固定当前预览" : "固定当前预览";
+    pinButton.setAttribute("aria-label", pinButton.title);
+    document.getElementById("workbench-preview-close").hidden = false;
     document.querySelectorAll("[data-workbench-preview]").forEach(button => {
       button.setAttribute("aria-selected", String(button.dataset.workbenchPreview === previewMode));
     });
@@ -5286,8 +5698,16 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     }
 
     const conversation = Array.isArray(project.conversation) ? project.conversation : [];
+    const agentTask = getWorkbenchPromptAgentTask(project);
+    const clarificationPrompt = typeof window !== "undefined"
+      ? window.ForwardStepPromptAgentPrompts?.buildClarificationPrompt?.(agentTask) || "" : "";
     const messages = [
-      { role: "system", content: "你是向前一步桌面应用中的任务协作 Agent。先理解用户目标，自己比较可行做法并给出推荐和简短理由。只有缺失信息会实质改变方案时才提一个关键问题；需要用户选择时，给出与当前描述相关的 1–3 个简短选项，推荐项用索引标记。不要在首页生成固定问卷，也不要每轮都强行提问。用户可以自由输入修改、组合或否定选项；确认后继续推进，不重复问已回答内容。非关键追问标 optional=true。选择只记录任务方向，不授权外发、执行文件修改或覆盖手动稿。只输出 JSON：{\"reply\":\"回应\",\"recommendation\":null,\"question\":null,\"options\":[],\"recommendedOption\":null,\"optional\":false}。recommendation 非空时包含 text 和 reason；question 非空时是一个字符串；options 为字符串数组；recommendedOption 为 options 的从 0 开始的索引或 null。" },
+      { role: "system", content: [
+        "你是向前一步桌面应用中的任务协作 Agent。",
+        clarificationPrompt,
+        "比较可行做法并给出简短推荐；用户可以自由输入修改、组合或否定选项。选择只记录任务方向，不授权外发、执行文件修改或覆盖手动稿。",
+        "只输出 JSON：{\"reply\":\"回应\",\"recommendation\":null,\"question\":null,\"options\":[],\"recommendedOption\":null,\"optional\":false}。recommendation 非空时包含 text 和 reason；question 非空时是一个字符串；options 为字符串数组；recommendedOption 为 options 的从 0 开始的索引或 null。"
+      ].filter(Boolean).join("\n\n") },
       ...conversation.filter(message => ["user", "assistant"].includes(message?.role) && !message?.kind).map(message => {
         const linkedReply = message.role === "assistant" && message.id
           ? conversation.find(item => item?.role === "user" && item.replyToMessageId === message.id) : null;
@@ -5352,7 +5772,11 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   document.getElementById("workbench-message-input").addEventListener("input", () => {
     scheduleWorkbenchDraftSave();
     updateWorkbenchPasteAction();
+    updateWorkbenchComposerDocumentAction();
   });
+  document.getElementById("workbench-message-input").addEventListener("select", updateWorkbenchComposerDocumentAction);
+  document.getElementById("workbench-message-input").addEventListener("keyup", updateWorkbenchComposerDocumentAction);
+  document.getElementById("workbench-message-input").addEventListener("mouseup", updateWorkbenchComposerDocumentAction);
   document.getElementById("workbench-message-input").addEventListener("blur", saveWorkbenchDraft);
   document.querySelector("[data-workbench-convert-paste]")?.addEventListener("click", transferWorkbenchPasteToDocument);
   window.addEventListener?.("beforeunload", () => {
@@ -5459,6 +5883,41 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const input = document.getElementById("workbench-message-input");
     void submitWorkbenchReply(input.value, { fromComposer: true });
   });
+  document.getElementById("workbench-promote-to-document").addEventListener("click", async () => {
+    const project = getActiveProject();
+    const input = document.getElementById("workbench-message-input");
+    const originalText = input.value;
+    const transfer = workbenchDialogue?.buildComposerDocumentTransfer(
+      originalText, input.selectionStart, input.selectionEnd
+    );
+    if (!project || !transfer) return;
+
+    const contentId = createWorkbenchDocument(project);
+    let current = state.projects.find(item => item.id === project.id);
+    const content = current?.workbenchContents?.find(item => item.id === contentId);
+    if (!content) return;
+    content.title = "粘贴内容";
+    content.draft = { text: transfer.text, baseVersionId: "" };
+    current.conversationDraft = transfer.remaining;
+    if (!persist()) {
+      current.conversationDraft = originalText;
+      input.value = originalText;
+      return;
+    }
+    current = state.projects.find(item => item.id === project.id);
+    if (desktopApi?.workbench?.saveManifest && !(await saveWorkbenchManifest(project.id))) {
+      if (current) current.conversationDraft = originalText;
+      input.value = originalText;
+      persist();
+      toast("文档草稿已保留，但保存未确认；原输入仍在对话框中");
+      return;
+    }
+    input.value = transfer.remaining;
+    updateWorkbenchComposerDocumentAction();
+    input.focus();
+    if (activeProjectId === project.id) renderWorkbench(project);
+    toast("已将正文保存为独立文档；剩余意见仍留在对话框中");
+  });
 
   document.getElementById("workbench-prompt-status").addEventListener("click", event => {
     if (!event.target.closest?.("[data-workbench-return-chat]")) return;
@@ -5477,10 +5936,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (!["split", "chat", "preview"].includes(mode)) return;
     const project = activeView === "project" ? getActiveProject() : null;
     if (project) saveWorkbenchViewState();
+    const reopenPreview = project && mode === "preview" && getWorkbenchPreviewState(project) === "closed";
+    if (reopenPreview) project.workbenchPreviewState = "open";
     const layout = getWorkbenchSessionLayout(project);
     layout.mode = mode;
     if (mode === "chat" || mode === "preview") layout.lastSide = mode;
     applyWorkbenchLayout(project);
+    if (reopenPreview) persist();
     if (!project) renderWorkbenchHomePreview(homeWorkbenchPreviewMode);
   }));
   document.querySelectorAll("[data-workbench-preview]").forEach(button => button.addEventListener("click", () => {
@@ -5491,11 +5953,25 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       return;
     }
     saveWorkbenchViewState();
-    project.workbenchPreviewMode = mode;
+    setWorkbenchPreviewMode(project, mode);
     project.workbenchVisitedPreviewModes = [...(project.workbenchVisitedPreviewModes || []).filter(item => item !== mode), mode];
     persist();
     renderWorkbench(project);
   }));
+  document.getElementById("workbench-preview-pin").addEventListener("click", () => {
+    const project = activeView === "project" ? getActiveProject() : null;
+    if (!project) return;
+    project.workbenchPreviewState = getWorkbenchPreviewState(project) === "pinned" ? "open" : "pinned";
+    persist();
+    renderWorkbench(project);
+  });
+  document.getElementById("workbench-preview-close").addEventListener("click", () => {
+    const project = activeView === "project" ? getActiveProject() : null;
+    if (!project) return;
+    project.workbenchPreviewState = "closed";
+    persist();
+    renderWorkbench(project);
+  });
   document.getElementById("workbench-save-status").addEventListener("click", event => {
     if (!event.target.closest?.("[data-workbench-retry-save]")) return;
     const project = getActiveProject();
@@ -5510,6 +5986,15 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       toast("已打开当前任务的保存位置");
     } catch (error) { toast(`保存位置未能打开：${String(error.message || error).slice(0, 180)}`); }
   });
+  document.getElementById("workbench-export-task").addEventListener("click", async () => {
+    const project = getActiveProject();
+    if (!project) return;
+    try {
+      const result = await exportWorkbenchTaskBackup(project);
+      if (result?.canceled) { toast("已取消导出"); return; }
+      toast("本任务完整 ZIP 已导出");
+    } catch (error) { toast(`任务导出失败：${String(error.message || error).slice(0, 180)}`); }
+  });
   document.getElementById("workbench-export-confirm").addEventListener("click", () => { void exportWorkbenchDelivery(); });
   document.getElementById("workbench-export-dialog").addEventListener("close", () => { pendingWorkbenchExport = null; });
   document.getElementById("workbench-copy-prompt").addEventListener("click", () => {
@@ -5517,7 +6002,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   });
   document.getElementById("workbench-prompt-actions").addEventListener("click", async event => {
     const nextBatch = event.target.closest?.("[data-workbench-next-prompt-batch]");
-    const carryToWriting = event.target.closest?.("[data-workbench-carry-writing]");
     const button = event.target.closest?.("[data-workbench-prompt-source]");
     let project = getActiveProject();
     if (!project) return;
@@ -5539,38 +6023,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       persist();
       renderWorkbench(project);
       toast(`已载入第 ${index + 1}/${batchState.batchCount} 批修改提示词`);
-      return;
-    }
-    if (carryToWriting) {
-      const { promptConflicts, promptSources } = getWorkbenchPromptSourceState(material, project);
-      if (promptConflicts.length) {
-        toast(`先处理 ${promptConflicts.length} 组互斥批注，再带入写作`);
-        return;
-      }
-      if (!promptSources.length) { toast("没有可带入的当前版本有效批注"); return; }
-      if (!window.WritingWorkbenchUIController?.prepareAnnotationDraft) { toast("写作工作台暂不可用"); return; }
-      const notesByAttachment = new Map();
-      for (const annotation of promptSources) {
-        if (!notesByAttachment.has(annotation.attachmentId)) notesByAttachment.set(annotation.attachmentId, []);
-        notesByAttachment.get(annotation.attachmentId).push(annotation);
-      }
-      const sources = [...notesByAttachment].map(([attachmentId, annotationSnapshot]) => {
-        const attachment = material.attachments.find(item => item.id === attachmentId);
-        if (!attachment) return null;
-        return {
-          id: `workbench-${attachment.id}`, title: attachment.displayName || attachment.id,
-          sourceId: attachment.id, sourceVersion: attachment.sha256,
-          sourceType: attachment.kind === "pdf" ? "pdf" : attachment.kind === "image" ? "image" : "web-text",
-          origin: attachment.kind === "html" ? "link" : "manual", purpose: "content",
-          contentStatus: "reference-only", attachmentRequired: true, selectedForPrompt: true, annotationSnapshot
-        };
-      }).filter(Boolean);
-      try {
-        const goal = project.goalSummary || project.idea || project.goal || "根据已选批注意见修改所附原文，并保留未涉及内容。";
-        if (window.WritingWorkbenchUIController.prepareAnnotationDraft({ goal, sources })) {
-          toast("批注已带入写作向导；确认任务后再生成提示词，原文件需另行附加");
-        }
-      } catch (error) { toast(`批注未能带入写作：${String(error.message || error).slice(0, 160)}`); }
       return;
     }
     if (!button) return;
@@ -5652,7 +6104,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       }
       if (!result?.attachment?.id) throw new Error("附件已选择但没有返回安全标识");
       project = state.projects.find(item => item.id === project.id) || project;
-      openWorkbenchAttachment(project, result.attachment.id);
+      addWorkbenchAttachment(project, result.attachment.id);
       persist();
       await refreshWorkbenchMaterials(project);
     } catch (error) {
@@ -5717,7 +6169,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         throw new Error('新版快照已保存，但旧版批注未全部取消勾选；请在批注列表核对后再生成提示词。');
       }
       project = state.projects.find(item => item.id === project.id) || project;
-      openWorkbenchAttachment(project, result.attachment.id);
+      addWorkbenchAttachment(project, result.attachment.id);
       material.webUrl = '';
       material.webFormOpen = false;
       persist();
@@ -5778,6 +6230,30 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   document.getElementById("workbench-material-view").addEventListener("keydown", event => {
     const project = getActiveProject();
     if (!project) return;
+    if (project.workbenchMaterialPanel === "canvas") {
+      const target = event.target;
+      const editing = target.closest?.("input, textarea, select, [contenteditable=true]");
+      const command = event.ctrlKey || event.metaKey;
+      const key = String(event.key || "").toLowerCase();
+      const undo = command && key === "z" && !event.shiftKey;
+      const redo = command && (key === "y" || key === "z" && event.shiftKey);
+      if (!editing && (undo || redo)) {
+        const button = document.querySelector(`[data-workbench-canvas-${redo ? "redo" : "undo"}]`);
+        if (button && !button.disabled) {
+          event.preventDefault();
+          button.click();
+          return;
+        }
+      }
+      if (!editing && ["Backspace", "Delete"].includes(event.key) && target.matches?.("[data-workbench-canvas-node]")) {
+        const button = target.querySelector("[data-workbench-canvas-remove]");
+        if (button && !button.disabled) {
+          event.preventDefault();
+          button.click();
+          return;
+        }
+      }
+    }
     const material = getWorkbenchMaterialState(project);
     const editor = document.getElementById("workbench-annotation-editor");
     const floatingEditor = Boolean(editor && !material.annotationListOpen
@@ -6771,7 +7247,32 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (!optimized) { toast("先粘贴 AI 给出的优化版提示词"); document.getElementById("optimized-output").focus(); return; }
     savePrompt(document.getElementById("prompt-purpose").value.trim() || "提示词优化版本", optimized, null);
   });
-  document.getElementById("new-optimize").addEventListener("click", () => go("prompt-optimize"));
+  document.getElementById("new-optimize").addEventListener("click", async () => {
+    const prompt = state.prompts.find(item => item.id === selectedPromptVersionId);
+    const idea = prompt ? `优化提示词：${prompt.title || "未命名提示词"}` : "优化一条提示词";
+    const project = await createProjectFromIdea(idea, { requestAgent: false });
+    if (!project) return;
+    ensureWorkbenchProjectData(project);
+    if (prompt) {
+      const content = createWorkbenchTextSnapshot({
+        title: `原提示词 · ${prompt.title || "未命名提示词"} · V${prompt.version || 1}`,
+        text: String(prompt.text || ""),
+        purposeReason: "从提示词收藏中选择用于优化的原文",
+        sourceRef: { type: "prompt-library", sourceId: prompt.id, version: prompt.version || 1 }
+      });
+      project.workbenchContents.push(content);
+      project.workbenchSelection = {
+        ...(project.workbenchSelection || {}), items: [{ contentVersionId: content.versions[0].id }],
+        layoutIntent: project.workbenchSelection?.layoutIntent || { enabled: false }
+      };
+      project.workbenchOpenContentId = content.id;
+      project.workbenchMaterialPanel = "document";
+      project.workbenchPreviewMode = "material";
+    }
+    project.workbenchPersistenceEnabled = true;
+    if (!persist()) return;
+    renderProject(project);
+  });
   document.getElementById("community-query").addEventListener("input", event => {
     const query = event.target.value.trim() || "通用提示词";
     document.getElementById("github-prompt-search").href = `https://github.com/search?q=${encodeURIComponent(`prompt ${query}`)}&type=repositories`;
@@ -6857,7 +7358,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const recentProjects = (Array.isArray(state.projects) ? state.projects : []).filter(project => !project.archivedAt);
     if (!recentProjects.length) { root.innerHTML = '<div class="empty-recent"><span class="empty-recent-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4.5h12A1.5 1.5 0 0 1 19.5 6v14h-15V6A1.5 1.5 0 0 1 6 4.5Z"/><path d="M8.5 9h7M8.5 12.5h7M8.5 16h4"/></svg></span><strong>还没有进行中的计划</strong><span>新建计划后，会显示在这里。</span></div>'; return; }
     root.innerHTML = recentProjects.slice(0, 3).map(project => `<button class="recent-item" data-open-project="${escapeHtml(project.id)}" ${project.id === activeProjectId ? 'aria-current="page"' : ""}><span><span class="recent-title">${escapeHtml((project.idea || project.goalSummary || "未命名计划").slice(0, 90))}</span><span class="recent-meta">${escapeHtml(project.domain || "通用计划")} · ${formatDate(project.createdAt)}</span></span></button>`).join("");
-    root.querySelectorAll("[data-open-project]").forEach(button => button.addEventListener("click", () => { const p = state.projects.find(item => item.id === button.dataset.openProject); if (p) renderProject(p); }));
+    root.querySelectorAll("[data-open-project]").forEach(button => button.addEventListener("click", () => { const p = state.projects.find(item => item.id === button.dataset.openProject); if (p) { if (window.matchMedia?.("(max-width: 760px)").matches) setTaskSidebarCollapsed(true); renderProject(p); } }));
   }
   function renderLibrary() {
     const root = document.getElementById("library-list");
@@ -6912,7 +7413,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const compareTarget = selected.id === group.latest.id ? group.versions.find(item => item.id !== selected.id) : group.latest;
       const variables = getPromptVariables(selected.text);
       detail.innerHTML = `<div class="library-item-head"><div><h2>${escapeHtml(selected.title || "未命名提示词")}</h2><div class="library-meta">${escapeHtml(selected.domain || "通用")} · V${escapeHtml(selected.version || 1)} · ${formatDate(selected.createdAt)} · ${selected.verified ? "已验证" : "待测试"}</div></div><span class="status ${selected.verified ? "verified" : ""}">${selected.verified ? "已验证" : "待测试"}</span></div>
-        <div class="library-actions"><button class="button-primary" type="button" data-prompt-use="${escapeHtml(selected.id)}">用于工作台任务</button><button class="button-secondary" type="button" data-prompt-write="${escapeHtml(selected.id)}">用于写作</button><button class="button-secondary" type="button" data-prompt-copy="${escapeHtml(selected.id)}">复制</button><button class="button-secondary" type="button" data-prompt-edit="${escapeHtml(selected.id)}">${selected.id === group.latest.id ? "编辑为新版本" : `以 V${escapeHtml(selected.version)} 创建新版本`}</button><button class="button-quiet" type="button" data-prompt-favorite="${escapeHtml(group.groupKey)}">${group.favorite ? "取消收藏" : "收藏"}</button></div>
+        <div class="library-actions"><button class="button-primary" type="button" data-prompt-use="${escapeHtml(selected.id)}">用于工作台任务</button><button class="button-secondary" type="button" data-prompt-copy="${escapeHtml(selected.id)}">复制</button><button class="button-secondary" type="button" data-prompt-edit="${escapeHtml(selected.id)}">${selected.id === group.latest.id ? "编辑为新版本" : `以 V${escapeHtml(selected.version)} 创建新版本`}</button><button class="button-quiet" type="button" data-prompt-favorite="${escapeHtml(group.groupKey)}">${group.favorite ? "取消收藏" : "收藏"}</button></div>
         <label class="field" style="max-width:340px;margin-top:12px"><span class="field-label">查看版本</span><select data-prompt-version-select>${group.versions.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === selected.id ? "selected" : ""}>V${escapeHtml(item.version)} · ${escapeHtml(formatDate(item.createdAt))}${item.id === group.latest.id ? " · 当前版本" : ""}</option>`).join("")}</select></label>
         <p class="library-meta">${variables.length ? `必填变量：${variables.map(name => `{{${escapeHtml(name)}}}`).join("、")}` : "此提示词没有待填写变量。"}</p>
         <details open><summary>提示词正文</summary><pre>${escapeHtml(selected.text || "")}</pre></details>
@@ -6969,8 +7470,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     taskField.hidden = action !== "use";
     taskSelect.required = action === "use";
     contextField.hidden = action === "copy";
-    document.getElementById("prompt-use-title").textContent = action === "copy" ? "填写变量后复制" : action === "write" ? "检查并带入写作" : "检查并带入工作台";
-    document.getElementById("prompt-use-submit").textContent = action === "copy" ? "复制已填正文" : action === "write" ? "确认并用于写作" : "确认并带入";
+    document.getElementById("prompt-use-title").textContent = action === "copy" ? "填写变量后复制" : "检查并带入工作台";
+    document.getElementById("prompt-use-submit").textContent = action === "copy" ? "复制已填正文" : "确认并带入";
     document.getElementById("prompt-use-context").value = "";
     document.getElementById("prompt-use-variable-fields").innerHTML = variables.map(name => `<label class="field"><span class="field-label">${escapeHtml(name)} <span class="library-meta">必填变量 {{${escapeHtml(name)}}}</span></span><textarea data-prompt-variable="${escapeHtml(name)}" required placeholder="填写本次使用的 ${escapeHtml(name)}"></textarea></label>`).join("");
     updatePromptUsePreview();
@@ -6990,8 +7491,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     document.getElementById("prompt-use-status").textContent = missing.length
       ? `${sourceLabel} 还需填写：${missing.join("、")}`
       : promptUseAction === "use" && !taskId ? `${sourceLabel}：选择一个工作台任务后才能带入；不会自动调用模型。`
-        : promptUseAction === "write" ? `来源：${sourceLabel}。确认后将完整变量填充正文带入写作向导，不修改收藏版本。`
-          : `来源：${sourceLabel}。预览已更新；确认后只创建本次任务副本，不修改收藏版本。`;
+        : `来源：${sourceLabel}。预览已更新；确认后只创建本次任务副本，不修改收藏版本。`;
     document.getElementById("prompt-use-submit").disabled = !ready;
     return { prompt, result, context, taskId, ready };
   }
@@ -7029,9 +7529,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const updated = togglePromptFavorite(state, button.dataset.promptFavorite);
       state = updated.state;
       if (persist()) { renderLibrary(); toast(updated.favorite ? "已收藏该提示词及其版本" : "已取消收藏"); }
-    } else if (button.dataset.promptUse || button.dataset.promptWrite || button.dataset.promptCopy) {
-      const prompt = state.prompts.find(item => item.id === (button.dataset.promptUse || button.dataset.promptWrite || button.dataset.promptCopy));
-      if (prompt) openPromptUseDialog(prompt, button.dataset.promptWrite ? "write" : button.dataset.promptCopy ? "copy" : "use");
+    } else if (button.dataset.promptUse || button.dataset.promptCopy) {
+      const prompt = state.prompts.find(item => item.id === (button.dataset.promptUse || button.dataset.promptCopy));
+      if (prompt) openPromptUseDialog(prompt, button.dataset.promptCopy ? "copy" : "use");
     } else if (button.dataset.promptEdit) {
       const prompt = state.prompts.find(item => item.id === button.dataset.promptEdit);
       if (prompt) openPromptEditor(prompt);
@@ -7105,20 +7605,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       document.getElementById("prompt-use-dialog").close();
       return;
     }
-    if (promptUseAction === "write") {
-      try {
-        const writing = window.WritingWorkbenchUIController;
-        if (!writing?.preparePromptDraft) throw new Error("写作工作台暂不可用，未修改收藏提示词");
-        const text = [preview.result.text, preview.context ? `【本次补充】\n${preview.context}` : ""].filter(Boolean).join("\n\n");
-        if (!writing.preparePromptDraft({ promptId: preview.prompt.id, title: preview.prompt.title,
-          version: preview.prompt.version || 1, text })) return;
-        document.getElementById("prompt-use-dialog").close();
-        toast(`已将“${preview.prompt.title || "提示词"}”V${preview.prompt.version || 1}带入写作向导；正文和来源版本已保留`);
-      } catch (error) {
-        document.getElementById("prompt-use-status").textContent = error.message || "带入写作失败；当前输入和收藏版本均已保留。";
-      }
-      return;
-    }
     const project = state.projects.find(item => item.id === preview.taskId);
     if (!project) { document.getElementById("prompt-use-status").textContent = "找不到所选任务，请重新选择。"; return; }
     const prompt = preview.prompt;
@@ -7180,31 +7666,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       + '<p><strong>局限：</strong>' + escapeHtml(item.limitations || "未填写") + '</p>'
       + '<p><strong>许可或来源说明：</strong>' + escapeHtml(item.licenseNote || item.sourceType || "未填写") + '</p>'
       + (sourceUrl ? '<p><strong>来源：</strong><a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noreferrer">' + escapeHtml(sourceUrl) + ' ↗</a></p>' : '<p><strong>来源：</strong>未提供链接</p>')
-       + '<p><strong>来源元数据：</strong>相对路径 ' + escapeHtml(item.sourcePath || "未记录") + ' · 访问/抓取时间 ' + escapeHtml(item.sourceFetchedAt || "未记录") + ' · 内容版本 ' + escapeHtml(item.sourceVersion || "未记录") + ' · 格式 ' + escapeHtml(item.sourceFormat || "未记录") + ' · 可用能力 ' + escapeHtml((item.sourceCapabilities || []).join("、") || "未记录") + '</p>'
-      + `<button class="button-primary" type="button" data-knowledge-bring-to-workbench="${escapeHtml(item.id)}" ${getActiveProject() ? "" : "disabled"}>${getActiveProject() ? "带入当前任务" : "先打开一个任务"}</button><button class="button-secondary" type="button" data-knowledge-writing="${escapeHtml(item.id)}">带入新写作</button>`;
+       + '<p><strong>来源元数据：</strong>相对路径 ' + escapeHtml(item.sourcePath || "未记录") + ' · 访问/抓取时间 ' + escapeHtml(item.sourceFetchedAt || "未记录") + ' · 内容版本 ' + escapeHtml(item.sourceVersion || "未记录") + ' · 格式 ' + escapeHtml(item.sourceFormat || "未记录") + ' · 可用能力 ' + escapeHtml((item.sourceCapabilities || []).join("、") || "未记录") + '</p>';
     panel.hidden = false;
     panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
-  document.getElementById("knowledge-detail")?.addEventListener("click", event => {
-    const button = event.target.closest?.("[data-knowledge-writing]");
-    if (!button) return;
-    const entry = knowledgeEntries.find(item => item.id === button.dataset.knowledgeWriting);
-    if (!entry) { toast("找不到该资料，未修改写作草稿"); return; }
-    const excerpt = [
-      entry.summary && `资料摘要：\n${entry.summary}`,
-      entry.contentExcerpt && `已保存摘录：\n${entry.contentExcerpt}`,
-      entry.literature?.abstractExcerpt && `文献摘要/摘录：\n${entry.literature.abstractExcerpt}`,
-      entry.reusablePatterns && `可借鉴方法：\n${entry.reusablePatterns}`
-    ].filter(Boolean).join("\n\n");
-    try {
-      const writing = window.WritingWorkbenchUIController;
-      if (!writing?.prepareLibraryDraft) throw new Error("写作工作台暂不可用，未修改资料库记录");
-      if (writing.prepareLibraryDraft({ source: { id: entry.id, title: entry.title, version: entry.version || 1,
-        url: knowledgeSourceUrl(entry), excerpt, verificationStatus: entry.verificationStatus } })) {
-        toast(`已将“${entry.title || "资料"}”V${entry.version || 1}的已保存摘要/摘录带入写作；请确认采用范围`);
-      }
-    } catch (error) { toast(error.message || "带入写作失败；原资料和写作输入均已保留"); }
-  });
   function renderKnowledgeResults(items = []) {
     const root = document.getElementById("knowledge-results");
     if (!root) return;
@@ -7613,7 +8078,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const manualEntry = !item.linkedCaseId && (item.sourceKind || "manual") === "manual"
         && state.knowledgeEntries.some(entry => entry.id === item.id);
       const sourceAction = derived ? `<button class="button-secondary" data-knowledge-source="${escapeHtml(item.id)}" type="button">编辑原始来源</button>` : manualEntry ? `<button class="button-secondary" data-knowledge-edit="${escapeHtml(item.id)}" type="button">编辑资料</button>` : "";
-      const bringAction = removed ? "" : `<button class="button-secondary" data-knowledge-bring="${escapeHtml(item.id)}" type="button" ${getActiveProject() ? "" : "disabled"}>${getActiveProject() ? "带入当前任务" : "先打开一个任务"}</button><button class="button-secondary" data-knowledge-writing="${escapeHtml(item.id)}" type="button">用于写作</button>`;
+      const bringAction = removed ? "" : `<button class="button-secondary" data-knowledge-bring="${escapeHtml(item.id)}" type="button" ${getActiveProject() ? "" : "disabled"}>${getActiveProject() ? "带入当前任务" : "先打开一个任务"}</button>`;
       const actions = removed
         ? `<button class="button-secondary" data-knowledge-restore="${escapeHtml(item.id)}" type="button">恢复到资料库</button>`
         : `<button class="button-secondary" data-knowledge-favorite="${escapeHtml(item.id)}" type="button">${item.favorite ? "取消收藏" : "收藏"}</button><button class="button-secondary" data-knowledge-pin="${escapeHtml(item.id)}" type="button">${item.pinned ? "取消置顶" : "置顶"}</button>${insightButton}${sourceAction}${bringAction}<button class="button-secondary" data-knowledge-select="${escapeHtml(item.id)}" type="button">${selected ? "取消选择" : "选择摘要用于当前提示词"}</button><button class="button-secondary" data-knowledge-open="${escapeHtml(item.id)}" type="button">查看来源</button><button class="button-secondary" data-knowledge-hide="${escapeHtml(item.id)}" type="button">从资料库移除</button>${manualEntry ? `<button class="button-quiet" data-knowledge-delete="${escapeHtml(item.id)}" type="button">永久删除</button>` : ""}`;
@@ -7642,24 +8107,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       if (!persist()) return;
       renderProject(project);
       toast(alreadyAdded ? "这份资料的相同版本已在当前任务中" : `已带入“${entry.title || "资料"}”V${entry.version || 1}，来源快照已保存`);
-    }));
-    root.querySelectorAll("[data-knowledge-writing]").forEach(button => button.addEventListener("click", () => {
-      const entry = entries.find(item => item.id === button.dataset.knowledgeWriting);
-      if (!entry) { toast("找不到该资料，未修改写作草稿"); return; }
-      const excerpt = [
-        entry.summary && `资料摘要：\n${entry.summary}`,
-        entry.contentExcerpt && `已保存摘录：\n${entry.contentExcerpt}`,
-        entry.literature?.abstractExcerpt && `文献摘要/摘录：\n${entry.literature.abstractExcerpt}`,
-        entry.reusablePatterns && `可借鉴方法：\n${entry.reusablePatterns}`
-      ].filter(Boolean).join("\n\n");
-      try {
-        const writing = window.WritingWorkbenchUIController;
-        if (!writing?.prepareLibraryDraft) throw new Error("写作工作台暂不可用，未修改资料库记录");
-        if (writing.prepareLibraryDraft({ source: { id: entry.id, title: entry.title, version: entry.version || 1,
-          url: knowledgeSourceUrl(entry), excerpt, verificationStatus: entry.verificationStatus } })) {
-          toast(`已将“${entry.title || "资料"}”V${entry.version || 1}的已保存摘要/摘录带入写作；请确认采用范围`);
-        }
-      } catch (error) { toast(error.message || "带入写作失败；原资料和写作输入均已保留"); }
     }));
     root.querySelectorAll("[data-knowledge-check]").forEach(input => input.addEventListener("change", () => { state = selectKnowledgeEntries(state, [...root.querySelectorAll("[data-knowledge-check]:checked")].map(item => item.dataset.knowledgeCheck)); persist(); refreshKnowledgeView(); }));
     root.querySelectorAll("[data-knowledge-hide]").forEach(button => button.addEventListener("click", () => { state = hideKnowledgeEntry(state, button.dataset.knowledgeHide); persist(); refreshKnowledgeView(); }));
@@ -7849,6 +8296,23 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   async function createWorkspaceBackup(now) {
     return addWorkbenchBackupAssets(workspaceBackup.createBackup(state, { scope: "workspace", now }));
+  }
+  async function exportWorkbenchTaskBackup(project) {
+    if (!project || !workspaceBackup || !desktopApi?.exportBackup) throw new Error("完整任务 ZIP 导出需要 Electron 桌面版");
+    if (!(await saveWorkbenchManifest(project.id))) throw new Error("当前任务尚未确认保存，导出已取消");
+    const backup = await addWorkbenchBackupAssets(workspaceBackup.createTaskBackup(state, project.id, { now: new Date().toISOString() }));
+    const result = await desktopApi.exportBackup({
+      format: "workspace-archive",
+      content: JSON.stringify(backup, null, 2),
+      attachmentIds: [
+        ...(backup.data.researchAttachments || []).map(item => item.id),
+        ...(backup.data.workbenchAttachments || []).map(item => item.archiveId)
+      ],
+      workbenchTaskIds: [project.id]
+    });
+    if (result?.canceled) return result;
+    if (!result?.filePath) throw new Error("桌面端未确认任务 ZIP 已写入");
+    return result;
   }
   async function exportKnowledgeBackup(scope) {
     if (!workspaceBackup) { toast("备份功能暂不可用"); return; }

@@ -36,6 +36,7 @@ function fixture(persistResult = true) {
     getActiveProject: () => project,
     ensureWorkbenchProjectData: current => { current.workbenchContents ||= []; },
     workbenchId: () => 'document-1',
+    setWorkbenchPreviewMode: (current, mode) => { current.workbenchPreviewMode = mode; return true; },
     workbenchDraftSaveTimer: 1,
     clearTimeout: () => { calls.clearTimeout++; },
     persist: () => { calls.persist++; return persistResult; },
@@ -66,6 +67,7 @@ test('文档保存失败时保留原输入且撤回未保存文档', () => {
   assert.equal(state.project.conversationDraft, state.originalText);
   assert.equal(state.input.value, state.originalText);
   assert.equal(state.project.workbenchOpenContentId, 'previous');
+  assert.equal(state.project.workbenchPreviewMode, 'chat');
   assert.equal(state.button.hidden, false);
   assert.equal(state.calls.persist, 1);
   assert.equal(state.calls.render, 0);

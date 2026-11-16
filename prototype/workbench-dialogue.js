@@ -40,6 +40,32 @@
     return !preservedPrompts.includes(draft);
   }
 
+  function groupConversationTurns(messages = []) {
+    const turns = [];
+    for (const message of Array.isArray(messages) ? messages : []) {
+      if (!message || !['user', 'assistant'].includes(message.role)) continue;
+      if (message.role === 'user' || !turns.length) turns.push([]);
+      turns.at(-1).push(message);
+    }
+    return turns.map((items, index) => ({ messages: items, current: index === turns.length - 1 }));
+  }
+
+  function buildComposerDocumentTransfer(value, selectionStart = 0, selectionEnd = 0, minimumLength = 800) {
+    const text = String(value || "");
+    const start = Math.max(0, Math.min(text.length, Number(selectionStart) || 0));
+    const end = Math.max(start, Math.min(text.length, Number(selectionEnd) || 0));
+    const hasSelection = end > start;
+    if (!hasSelection && text.trim().length < minimumLength) return null;
+    const transferredText = hasSelection ? text.slice(start, end) : text;
+    if (!transferredText.trim()) return null;
+    return {
+      text: transferredText,
+      remaining: hasSelection ? `${text.slice(0, start)}${text.slice(end)}` : "",
+      start: hasSelection ? start : 0,
+      end: hasSelection ? end : text.length
+    };
+  }
+
   function buildPromptTransferDraft(prompt, content, context = '', latestVersionId = '') {
     if (!prompt || !prompt.id) return '';
     return [
@@ -176,5 +202,5 @@
     return [...current, entry].slice(-10);
   }
 
-  return { parseAgentResponse, confirmsRecommendation, promptReplacementNeedsConfirmation, buildPromptTransferDraft, captureKnowledgeSource, appendKnowledgeSource, buildModificationPrompt, appendPromptVersion };
+  return { parseAgentResponse, confirmsRecommendation, promptReplacementNeedsConfirmation, groupConversationTurns, buildComposerDocumentTransfer, buildPromptTransferDraft, captureKnowledgeSource, appendKnowledgeSource, buildModificationPrompt, appendPromptVersion };
 });

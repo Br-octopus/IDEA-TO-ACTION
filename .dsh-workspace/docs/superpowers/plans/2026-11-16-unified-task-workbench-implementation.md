@@ -423,7 +423,14 @@ git commit -m "feat: 完成统一任务工作台交付"
 未覆盖：真实文件选择器路径、外部模型实际执行（桌面模型未配置）、复杂 Office 格式保真；云同步、协作、专业绘图和完整 PPT 编辑仍不属于本次范围。
 未提交：D 盘目标工作树位于 main 且已有未提交改动，未执行 add/commit，避免混入既有修改。C 盘 task-workbench-merge 是不同工作树，`prototype/app.js` 与 D 盘版本不同，本次不做跨树覆盖或同步。
 
-入口复核补记（2026-11-16）：统一任务首页已存在，但桌面与窄屏主导航仍把“提示词 Agent”和“写作工作台”作为并列入口，未满足三入口融合。现将二者从主导航收起并放入“旧版工作台/更多”作为兼容访问，不删除旧页面或数据。旧版页面内容迁入统一任务目录、旧建任务事件全部重接到统一工作区仍未完成，不能据此标记融合工作全部完成。
+1. **Subagent-Driven (recommended)** - dispatch a fresh subagent per task, review between tasks.
+2. **Inline Execution** - execute tasks in this session with checkpoints.
+
+当前任务已完成主要实现。素材导出已支持原件去重、版本校验、构图参考图、本机路径隐藏，以及 PDF 页和图片区域裁剪；无法生成裁剪图时会明确保留原件范围并允许排除素材。
+
+本轮复核：`tests/storage.test.js` 与 `tests/electron-ppt-preview.test.js` 共 66 项通过，覆盖此前两个失败用例；前序定向测试已覆盖素材包、PDF 选页、图片区域裁剪和备份恢复。`git diff --check` 通过，未运行全量测试，也未提交。
+
+前序未完成/未验证记录（本次补测前）：Task 6 的 Electron 桌面连续流程尚未实测；当前补测结果与剩余未验证项见下方“完整融合复核”。云同步、协作、专业绘图、完整 PPT 编辑、模型自动执行和真实格式保真仍属设计外能力。
 
 ## 最新批注核对（545e9bd0-c249-4998-8f32-d91866b2a57e）
 
@@ -436,4 +443,25 @@ git commit -m "feat: 完成统一任务工作台交付"
 | 重复标题、布局靠右、任务名、侧栏空态 | 3 | Task 4 Step 4：保留；无需新增视觉验收关卡 |
 | 精简测试与验收 | 7 | 验证预算、Task 1/2/6：去掉缺模块失败检查和最终重复备份往返，保留一次连续桌面操作 |
 
-续跑复核更新（2026-11-16）：`electron/preload.js` 已桥接工作台任务清单与素材包 API，`prototype/workspace-backup.js` 使用显式字段白名单；桌面任务清单按 revision 串行写入，确认 manifest 后回写本地缓存并更新保存状态。TXT/MD 已接入附件类型与大小校验、桌面文件选择导入、UTF-8 版本校验和正文预览；`node --test tests/electron-ppt-preview.test.js tests/electron-workbench-backup.test.js` 33 项通过。回归曾发现长粘贴转换按钮缺失时工作台初始化崩溃，`prototype/app.js` 已改为可选监听；`node --test tests/storage.test.js tests/workbench-long-paste.test.js` 51 项通过。真实系统文件选择器、外部模型实际执行与复杂 Office 格式保真仍未验证；本轮未提交，保留 D 盘工作树既有改动。
+设计要求已有文字落点；本次修正的是实施遗漏与契约歧义，不代表功能已经完成。代码证据：`electron/preload.js` 负责桥接，`prototype/workspace-backup.js` 使用显式白名单，`persistWorkbenchState` 仅写本地状态，附件格式表当前未含 TXT/MD。后续实现据此更新对应文件及调用者。
+
+## 完整融合复核（2026-11-16）
+
+- **统一入口：**C 盘目标工作树主界面使用统一任务入口；主导航不再展示“提示词 Agent”或“写作工作台”。旧视图和控制器代码仍保留为隐藏兼容实现，不作为主任务流程入口。
+- **本轮补齐：**新增桌面端“导出本任务”按钮。导出前等待当前任务清单保存成功，再复用单任务备份与 ZIP 流程；IPC 按请求任务范围筛选 manifest，并校验备份任务与附件范围，避免混入其他任务。
+- **服务核验：**`4175` 提供的 `prototype/index.html`、`prototype/app.js` 与 D 盘主工作区哈希一致。`4177` 提供 C 盘 `task-workbench-merge` 工作树源码；页面仅显示统一任务入口，提示词 Agent/写作工作台旧标签不在可见导航中。
+- **定向验证：**任务导出与工作台状态 `35/35` 通过；Electron 工作台备份和 ZIP 归档 `31/31` 通过；新增导出按钮、保存前置和归档任务过滤均有直接测试。另有统一 schema、提示词、画布、对话、持久化测试通过。`node --check prototype/app.js`、`node --check electron/main.js` 与 `git diff --check` 通过。
+- **C 盘桌面流程实测（2026-11-16）：**在 C 盘 `task-workbench-merge` 工作树的 Electron 页面完成未发送目标自动保存、未命名文档、真实 JPEG 导入、两张画布引用同一图片版本、已复制提示词轮次、外部结果保存/关联及用途切换。未发送草稿写入 manifest revision 1，重载后重新填入输入框且对话消息数仍为 0。原文档 SHA-256 `sha256:d7fcf98c8a0a5e41a04565ca1717ae892d438ab781f4f397c0c4235e5c826345` 未变；图片重载后可解码显示（1316×2832）；外部结果仍关联第 1 轮已复制版本。`4177` 提供的 `prototype/app.js` 哈希与 C 盘工作树文件一致；主导航可见项没有“提示词 Agent”或“写作工作台”，旧视图保留为隐藏兼容实现。
+- **恢复缺陷与修复：**Electron 进程重启后首次恢复显示 `storage is not defined`。根因是浏览器侧恢复函数引用了未定义的 `storage`；现从 `ForwardStepStorage` 解构 `migrateState` 并直接调用，恢复测试夹具不再注入 `storage`。修复后重载渲染页，桌面 manifest revision 28 的任务成功恢复并可从最近任务重新打开；未再关停/启动 Electron 主进程复测。
+- **本轮 C 盘补齐（2026-11-16）：**`prototype/app.js` 修复两处恢复缺口：在任务视图显式选择“专注查看”会重开并保存已关闭的预览；画布焦点节点支持 Delete/Backspace，Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做，编辑控件内仍使用原生编辑快捷键；异步恢复桌面任务清单后，若首页输入框仍为空则回填未发送目标并绑定原任务 ID。
+- **补齐验证：**`node --test --test-reporter=spec tests/workbench-view-state.test.js tests/e2e-smoke.test.js` 为 76/76 通过；`node --check prototype/app.js`、`node --check tests/workbench-view-state.test.js` 与 `git diff --check` 均退出码 0。C 盘 `4177` 的 Electron 页面实测：关闭预览后状态回到 `closed/chat`，显式“专注查看”后为 `open/preview`；画布节点 Delete 后从 1 个变为 0，Ctrl+Z 后恢复为 1；390×844 下“专注查看”切回对话且草稿保留。
+- **进程级恢复：**在使用临时隔离用户数据目录的 C 盘 Electron 实例中保存未发送目标（revision 1），正常关闭并重启主进程；清除该测试配置的渲染器 localStorage 后再次启动，桌面 manifest 仍恢复到 revision 2，首页输入、最近任务、`saved` 状态和 0 条对话均正确。测试服务 `GET http://127.0.0.1:4177/` 返回 200；所服务 `prototype/app.js` 与 C 盘源文件 SHA-256 一致。实际用户默认数据目录未触碰。
+- **仍未完成/未验证：**模型未配置，不包含外部模型执行；未重走整套端到端业务流程、未运行全量测试，也未提交，因此 Task 6 Step 4/5 复选框仍未勾选。进程级恢复是在隔离临时配置下实测，未用用户的默认生产数据目录重复。
+- **计划追踪：**原计划步骤的复选框尚未按本次证据逐项回填；它们目前不能单独代表代码完成状态。本次只核对到中文设计稿和计划，未找到对应英文配对记录。
+
+### C 盘补齐记录（2026-11-16）
+
+- 邮件起草/修改/审阅与日报、周报、月报目标现进入对应写作规则和任务类型；新目标优先于不匹配的旧写作轮次。写作提示词结合已有对话、已确认要求、资料和批注，只要求在关键缺项影响结果时追问一个问题。
+- 回填优先关联最近复制/交付的提示词版本；没有此类版本时关联最近准备稿并标注“尚未记录交付”。内容目录展示轮次/版本，可改选关联或解除关联；没有候选时仍可独立保存。
+- 定向验证：`node --test --test-reporter=spec tests/workbench-agent-persistence.test.js` 14/14 通过；`node --check prototype/app.js`、`git diff --check` 通过。
+- 早前 C 盘补测只运行 `tests/workbench-agent-persistence.test.js`（14/14）；预览重开、画布键盘、窄屏草稿往返和隔离配置下的进程级恢复后续结果见上方“完整融合复核”。

@@ -1,8 +1,10 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports && typeof require === 'function'
+    ? require('./prompt-engine.js')
+    : root.ForwardStepPromptEngine);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.ForwardStepPromptAgentPrompts = api;
-})(typeof globalThis === 'undefined' ? this : globalThis, function () {
+})(typeof globalThis === 'undefined' ? this : globalThis, function (promptEngine) {
   function list(value) {
     return Array.isArray(value) ? value.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim()) : [];
   }
@@ -73,6 +75,13 @@
     return `${base(task)}\n\n当前选定步骤\n${JSON.stringify(current, null, 2)}\n\n仅为上述步骤编写可交给外部 AI 的执行提示词，明确步骤目标、输入、产出和检查项。不得展开其他步骤，不得直接完成目标任务，也不得产出最终文章、代码及其他目标成果。`;
   }
 
+  function buildOptimizationPrompt(task, originalPrompt) {
+    if (typeof promptEngine?.buildPromptOptimizationPrompt !== 'function') {
+      throw new Error('提示词优化规则尚未加载');
+    }
+    return promptEngine.buildPromptOptimizationPrompt(originalPrompt, task?.goal || '');
+  }
+
   function buildResultReviewPrompt(task, externalResult, feedback) {
     const result = externalResult && typeof externalResult === 'object' ? {
       excerpt: externalResult.excerpt || '', differences: list(externalResult.differences), evidence: list(externalResult.evidence)
@@ -80,5 +89,5 @@
     return `${base(task)}\n\n待复盘结果摘录与差异\n${JSON.stringify(result, null, 2)}\n\n用户反馈\n${String(feedback || '')}\n\n对照目标、成功标准和保留项，逐项引用具体差异及证据；给出“成功”“失败”或“待验证”的建议标签，并说明依据、局限和下一步核验建议。不得改写结果正文或直接产出目标成果。`;
   }
 
-  return { buildClarificationPrompt, buildDiagnosisPrompt, buildRoutePrompt, buildStepPrompt, buildResultReviewPrompt };
+  return { buildClarificationPrompt, buildDiagnosisPrompt, buildRoutePrompt, buildStepPrompt, buildOptimizationPrompt, buildResultReviewPrompt };
 });

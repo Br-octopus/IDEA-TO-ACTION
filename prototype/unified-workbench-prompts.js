@@ -93,6 +93,36 @@
     return source.enabled === true ? { ...clone(source), enabled: true } : { enabled: false };
   }
 
+  function buildTaskRulePrompt(input = {}) {
+    const source = object(input);
+    if (text(source.route) === 'writing') {
+      const prompts = object(source.writingPrompts);
+      const workspace = object(source.writingInput);
+      const genre = text(object(workspace.article).genre || workspace.genre) || 'article';
+      if (genre === 'article') return prompts.buildWritingRevisionPrompt(workspace);
+      if (genre === 'academic-paper') {
+        return prompts.buildAcademicWritingPrompt(workspace, text(source.writingTaskType) || 'academic-planning');
+      }
+      const config = source.writingSchema?.getWritingGenreConfig?.(genre);
+      const taskType = text(source.writingTaskType) || config?.taskTypes?.[0];
+      if (!taskType) throw new TypeError(`文体 ${genre} 没有可用的写作任务类型`);
+      return prompts.buildDomainWritingPrompt(workspace, taskType, { phase: 'revision' });
+    }
+
+    const prompts = object(source.agentPrompts);
+    const task = object(source.agentTask);
+    const step = object(source.step);
+    if (text(task.type) === 'optimize-prompt') return prompts.buildOptimizationPrompt(task, text(source.originalPrompt));
+    const stage = text(source.stage) || (text(task.type) === 'diagnose-ai-result' ? 'review' : 'step-prompt');
+    switch (stage) {
+      case 'clarification': return prompts.buildClarificationPrompt(task);
+      case 'diagnosis': return prompts.buildDiagnosisPrompt(task);
+      case 'route': return prompts.buildRoutePrompt(task, source.evidence);
+      case 'review': return prompts.buildResultReviewPrompt(task, source.externalResult, source.feedback);
+      default: return prompts.buildStepPrompt(task, step);
+    }
+  }
+
   function buildUnifiedPrompt(input = {}) {
     const source = object(input);
     const materials = buildMaterialManifest(source.selectedContents);
@@ -204,5 +234,5 @@
     };
   }
 
-  return { buildUnifiedPrompt, buildMaterialManifest, snapshotPromptRound, snapshotMaterialExport, sanitizeLocalPaths };
+  return { buildTaskRulePrompt, buildUnifiedPrompt, buildMaterialManifest, snapshotPromptRound, snapshotMaterialExport, sanitizeLocalPaths };
 });

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createBackup,
+  createTaskBackup,
   validateBackup,
   getBackupSummary,
   replaceState,
@@ -10,6 +11,33 @@ const {
 } = require('../prototype/workspace-backup.js');
 
 const exportedAt = '2026-10-19T08:00:00.000Z';
+
+test('单任务备份只包含目标任务及显式关联的历史 Agent 和写作记录', () => {
+  const backup = createTaskBackup({
+    projects: [
+      { id: 'task-a', workbenchLegacyRefs: [
+        { collection: 'promptAgentTasks', sourceId: 'agent-a', contentId: 'content-a' },
+        { collection: 'writingArticles', sourceId: 'writing-a', contentId: 'content-b' }
+      ] },
+      { id: 'task-b' }
+    ],
+    promptAgentTasks: [{ id: 'agent-a' }, { id: 'agent-b' }],
+    promptAgentSources: [{ id: 'source-a', taskId: 'agent-a' }, { id: 'source-b', taskId: 'agent-b' }],
+    writingArticles: [{ id: 'writing-a', article: { id: 'writing-a', title: '旧稿' } }, { id: 'writing-b', article: { id: 'writing-b', title: '其他稿' } }],
+    workbenchAttachments: [{ id: 'file-a', taskId: 'task-a' }, { id: 'file-b', taskId: 'task-b' }],
+    workbenchAnnotations: [{ id: 'note-a', taskId: 'task-a' }, { id: 'note-b', taskId: 'task-b' }]
+  }, 'task-a', { now: exportedAt });
+  validateBackup(backup);
+  assert.deepEqual(backup.data.projects.map(item => item.id), ['task-a']);
+  assert.deepEqual(backup.data.promptAgentTasks.map(item => item.id), ['agent-a']);
+  assert.deepEqual(backup.data.promptAgentSources, []);
+  assert.deepEqual(backup.data.writingArticles.map(item => item.id), ['writing-a']);
+  assert.deepEqual(backup.data.workbenchAttachments.map(item => item.id), ['file-a']);
+  assert.deepEqual(backup.data.workbenchAnnotations.map(item => item.id), ['note-a']);
+  assert.equal(backup.data.projects[0].workbenchLegacyRefs[0].contentId, 'content-a');
+  assert.deepEqual(backup.data.prompts, []);
+  assert.throws(() => createTaskBackup({ projects: [] }, 'missing'), /找不到要导出的任务/);
+});
 
 test('工作台任务冲突时重映射任务、附件、批注和任务清单引用', () => {
   const sourceAttachmentId = '550e8400-e29b-41d4-a716-446655440000';

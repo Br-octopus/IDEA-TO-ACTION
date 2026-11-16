@@ -12,7 +12,7 @@ function createWritingApp(options = {}) {
   const elements = new Map();
   const listeners = new Map();
   const clicks = [];
-  const makeElement = id => ({ id, value: '', textContent: '', innerHTML: '', hidden: false, checked: false, disabled: false, dataset: {}, style: {},
+  const makeElement = id => ({ id, value: '', textContent: '', innerHTML: '', hidden: false, checked: false, disabled: false, dataset: {}, style: { setProperty() {} },
     classList: { add() {}, remove() {}, toggle() {} },
     addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
     querySelectorAll() { return []; }, querySelector() { return element('send-risk-checkbox'); }, setAttribute() {}, scrollIntoView() {}, focus() {}, click() { clicks.push(id); }, select() {}, remove() {} });
@@ -46,6 +46,7 @@ function createWritingApp(options = {}) {
       return null;
     },
     querySelectorAll(selector) { return selector === '[data-agent-scene]' ? scenes : selector === '[data-view]' ? nav : []; },
+    addEventListener() {},
     createElement() { return makeElement('created'); }, body: { append() {} }, execCommand() { return true; }
   };
   let failSave = false;
@@ -65,6 +66,7 @@ function createWritingApp(options = {}) {
     ForwardStepPromptEngine: require('../../prototype/prompt-engine.js'),
     ForwardStepSendSafety: require('../../prototype/send-safety.js'),
     ForwardStepWorkspaceBackup: require('../../prototype/workspace-backup.js'),
+    ForwardStepWorkbenchLayout: require('../../prototype/workbench-layout.js'),
     ForwardStepKnowledgeSchema: require('../../prototype/knowledge-schema.js'),
     ForwardStepAcademicLiterature: require('../../prototype/academic-literature.js'),
     ForwardStepAcademicLiteratureUI: require('../../prototype/academic-literature-ui.js'),

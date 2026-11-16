@@ -101,7 +101,7 @@
 
   const taskDomainSignals = [
     { domain: "PPT", patterns: [/\bppt\b/i, /幻灯片/u, /演示文稿/u, /演示文档/u] },
-    { domain: "写作", patterns: [/文章/u, /文案/u, /写作/u, /润色/u, /改写/u, /改稿/u, /稿件/u, /博客/u] },
+    { domain: "写作", patterns: [/文章/u, /文案/u, /写作/u, /润色/u, /改写/u, /改稿/u, /稿件/u, /博客/u, /(?:学术|毕业|学位)?论文/u, /(?:研究|文献)综述/u] },
     { domain: "软件开发", patterns: [/开发/u, /编程/u, /程序/u, /软件/u, /网站/u, /\bapp\b/i, /应用程序/u] },
     { domain: "产品构想", patterns: [/产品发布/u, /产品规划/u, /产品构想/u, /产品需求/u, /创业/u, /商业模式/u, /用户需求/u] },
     { domain: "工作任务", patterns: [/周报/u, /工作流程/u, /工作任务/u, /团队流程/u, /交付流程/u, /项目推进/u] },

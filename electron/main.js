@@ -1145,9 +1145,15 @@ ipcMain.handle('search:request', async (_event, payload) => {
 ipcMain.handle('backup:export', async (_event, content) => {
   const archiveRequest = content && typeof content === 'object' && !Array.isArray(content)
     && content.format === 'workspace-archive';
-  if (archiveRequest && (Object.keys(content).some(key => !['format', 'content', 'attachmentIds'].includes(key))
+  if (archiveRequest && (Object.keys(content).some(key => !['format', 'content', 'attachmentIds', 'workbenchTaskIds'].includes(key))
     || typeof content.content !== 'string' || !Array.isArray(content.attachmentIds))) {
     throw Object.assign(new TypeError('工作区 ZIP 备份请求无效'), { code: 'BACKUP_EXPORT_INVALID_REQUEST' });
+  }
+  if (archiveRequest && content.workbenchTaskIds !== undefined
+    && (!Array.isArray(content.workbenchTaskIds) || content.workbenchTaskIds.length > 10_000
+      || content.workbenchTaskIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id))
+      || new Set(content.workbenchTaskIds).size !== content.workbenchTaskIds.length)) {
+    throw Object.assign(new TypeError('工作台任务清单范围无效'), { code: 'BACKUP_EXPORT_INVALID_REQUEST' });
   }
   const result = await showFileDialog('showSaveDialog', {
     title: '导出备份',
@@ -1173,12 +1179,21 @@ ipcMain.handle('backup:export', async (_event, content) => {
   if (backup?.scope !== 'workspace' || backup?.format !== 'forward-step-workspace') {
     throw Object.assign(new TypeError('完整工作区备份需要工作区 JSON'), { code: 'BACKUP_EXPORT_INVALID_JSON' });
   }
+  const scopedWorkbenchTaskIds = content.workbenchTaskIds === undefined ? null : new Set(content.workbenchTaskIds);
+  if (scopedWorkbenchTaskIds) {
+    const backupTaskIds = (backup.data?.projects || []).map(project => project?.id);
+    if (backupTaskIds.length !== scopedWorkbenchTaskIds.size || backupTaskIds.some(taskId => !scopedWorkbenchTaskIds.has(taskId))) {
+      throw Object.assign(new TypeError('任务导出范围必须与备份中的任务完全一致'), { code: 'BACKUP_EXPORT_INVALID_REQUEST' });
+    }
+  }
   const attachments = content.attachmentIds.map(id => {
     if (typeof id !== 'string') throw Object.assign(new TypeError('附件 ID 无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
     const metadata = backup.data?.researchAttachments?.find(item => item?.id === id);
     if (metadata) {
       const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32})\.(txt|pdf|png|jpg|webp)$/.exec(id);
-      if (!match) throw Object.assign(new TypeError('研究附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+      if (!match || scopedWorkbenchTaskIds && !scopedWorkbenchTaskIds.has(match[1])) {
+        throw Object.assign(new TypeError('研究附件索引不属于当前导出范围'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+      }
       return { id, taskId: match[1], type: metadata.type, size: metadata.size,
         openStream: () => getSocialAttachmentStore().createReadStream(id) };
     }
@@ -1191,10 +1206,19 @@ ipcMain.handle('backup:export', async (_event, content) => {
       || !typeByMime[workbench.mimeType] || !Number.isSafeInteger(workbench.size) || !/^[a-f0-9]{64}$/.test(workbench.sha256 || '')) {
       throw Object.assign(new TypeError('工作台附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
     }
+    if (scopedWorkbenchTaskIds && !scopedWorkbenchTaskIds.has(workbench.taskId)) {
+      throw Object.assign(new TypeError('工作台附件不属于当前导出范围'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+    }
     return { id, taskId: match[1], type: typeByMime[workbench.mimeType], size: workbench.size,
       openStream: () => getPptFeedbackAttachmentStore().createReadStream(workbench.id, { includeDeleted: workbench.deleted === true }) };
   });
-  const { manifests: workbenchManifests, errors: workbenchManifestErrors } = getPptFeedbackAttachmentStore().listTaskManifests();
+  const listedWorkbenchManifests = getPptFeedbackAttachmentStore().listTaskManifests();
+  const workbenchManifests = scopedWorkbenchTaskIds
+    ? listedWorkbenchManifests.manifests.filter(item => scopedWorkbenchTaskIds.has(item.taskId))
+    : listedWorkbenchManifests.manifests;
+  const workbenchManifestErrors = scopedWorkbenchTaskIds
+    ? listedWorkbenchManifests.errors.filter(item => scopedWorkbenchTaskIds.has(item.taskId))
+    : listedWorkbenchManifests.errors;
   if (workbenchManifestErrors.length) {
     throw Object.assign(new Error('存在无法读取的工作台任务清单，完整备份未导出'), { code: 'BACKUP_EXPORT_INVALID_WORKBENCH_MANIFEST' });
   }

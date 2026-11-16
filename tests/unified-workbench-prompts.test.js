@@ -1,6 +1,46 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const prompts = require('../prototype/unified-workbench-prompts.js');
+const agentPrompts = require('../prototype/prompt-agent-prompts.js');
+const writingPrompts = require('../prototype/writing-workbench-prompts.js');
+const writingSchema = require('../prototype/writing-workbench-schema.js');
+
+test('统一规则路由复用 Agent 步骤与写作规则，不依赖旧页面', () => {
+  const agent = prompts.buildTaskRulePrompt({
+    route: 'agent', stage: 'step-prompt', agentPrompts,
+    agentTask: { type: 'advance-idea', goal: '制作服务介绍页', target: '新用户' },
+    step: { id: 'step-1', title: '页面制作', goal: '制作服务介绍页', deliverable: '可执行提示词' }
+  });
+  assert.match(agent, /当前选定步骤/);
+  assert.match(agent, /制作服务介绍页/);
+  assert.match(agent, /不得直接完成目标任务/);
+
+  const writing = prompts.buildTaskRulePrompt({
+    route: 'writing', writingPrompts, writingSchema,
+    writingInput: { article: { id: 'task-writing', genre: 'article', goal: '写一篇植物介绍' }, round: { id: 'round-writing' } }
+  });
+  assert.match(writing, /普通文章规则来源ID：writing-workbench-article/);
+  assert.match(writing, /写一篇植物介绍/);
+  assert.doesNotMatch(writing, /制作服务介绍页/);
+});
+
+test('统一 Agent 路由将优化和结果诊断发送到原有专用规则', () => {
+  const optimization = prompts.buildTaskRulePrompt({
+    route: 'agent', agentPrompts,
+    agentTask: { type: 'optimize-prompt', goal: '优化这条提示词，用于周报整理' },
+    originalPrompt: '请整理本周进展'
+  });
+  assert.match(optimization, /【原提示词】\n请整理本周进展/);
+
+  const diagnosis = prompts.buildTaskRulePrompt({
+    route: 'agent', agentPrompts,
+    agentTask: { type: 'diagnose-ai-result', goal: '诊断外部 AI 结果' },
+    externalResult: '结果遗漏了数据来源', feedback: '请核对事实'
+  });
+  assert.match(diagnosis, /待复盘结果摘录与差异/);
+  assert.match(diagnosis, /结果遗漏了数据来源/);
+  assert.match(diagnosis, /请核对事实/);
+});
 
 test('统一提示词固定目标、素材版本、批注与本轮意见', () => {
   const prompt = prompts.buildUnifiedPrompt({

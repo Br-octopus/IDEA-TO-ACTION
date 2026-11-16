@@ -135,11 +135,26 @@
     const refs = new Map((Array.isArray(source.workbenchLegacyRefs) ? source.workbenchLegacyRefs : [])
       .filter(ref => isObject(ref) && text(ref.collection) && text(ref.sourceId))
       .map(ref => [JSON.stringify([ref.collection, ref.sourceId]), ref]));
+    const contents = new Map((Array.isArray(source.workbenchContents) ? source.workbenchContents : [])
+      .map(content => [content.id, content]));
     for (const record of legacyRecords) {
       if (!isObject(record) || !text(record.collection) || !text(record.sourceId)) throw new TypeError("旧记录须明确提供 collection 和 sourceId");
-      refs.set(JSON.stringify([record.collection, record.sourceId]), { collection: record.collection, sourceId: record.sourceId });
+      const key = JSON.stringify([record.collection, record.sourceId]);
+      const previous = refs.get(key) || {};
+      let contentId = text(record.contentId || previous.contentId);
+      if (record.content !== undefined) {
+        const content = normalizeWorkbenchContent(record.content);
+        if (!content.id) throw new TypeError("旧记录快照必须提供稳定内容 ID");
+        const existing = contents.get(content.id);
+        if (existing && JSON.stringify(existing.sourceRef) !== JSON.stringify(content.sourceRef)) {
+          throw new TypeError(`旧记录快照内容 ID 冲突：${content.id}`);
+        }
+        if (!existing) contents.set(content.id, content);
+        contentId = content.id;
+      }
+      refs.set(key, { ...previous, collection: record.collection, sourceId: record.sourceId, ...(contentId ? { contentId } : {}) });
     }
-    return normalizeWorkbenchProject({ ...source, workbenchLegacyRefs: [...refs.values()] });
+    return normalizeWorkbenchProject({ ...source, workbenchContents: [...contents.values()], workbenchLegacyRefs: [...refs.values()] });
   }
 
   return { WORKBENCH_SCHEMA_VERSION, normalizeWorkbenchProject, normalizeWorkbenchContent, normalizeWorkbenchContentVersion,

@@ -317,6 +317,11 @@
     workbenchAttachmentId: SCALAR,
     workbenchAttachmentIds: LIST,
     workbenchClosedAttachmentIds: LIST,
+    workbenchPersistenceEnabled: SCALAR,
+    workbenchOpenContentId: SCALAR,
+    workbenchActiveCanvasId: SCALAR,
+    workbenchMaterialPanel: SCALAR,
+    workbenchPreviewState: SCALAR,
     workbenchViewerState: { kind: "record", item: object(WORKBENCH_VIEWER_FIELDS) },
     workbenchGeneratedPrompt: SCALAR,
     workbenchPromptDraft: SCALAR,
@@ -329,7 +334,7 @@
     workbenchPromptRounds: array(object(WORKBENCH_PROMPT_ROUND_FIELDS)),
     workbenchDraft: object(WORKBENCH_DRAFT_FIELDS),
     workbenchSelection: object(WORKBENCH_SELECTION_FIELDS),
-    workbenchLegacyRefs: array(object({ collection: SCALAR, sourceId: SCALAR })),
+    workbenchLegacyRefs: array(object({ collection: SCALAR, sourceId: SCALAR, contentId: SCALAR })),
     workbenchDraftStatus: SCALAR,
     workbenchSaveError: SCALAR
   };
@@ -642,6 +647,40 @@
       counts: countData(data),
       data
     };
+    validateBackup(backup);
+    return backup;
+  }
+
+  function createTaskBackup(state, taskId, options = {}) {
+    const backup = createBackup(state, { ...options, scope: "workspace" });
+    const project = backup.data.projects.find(item => item.id === taskId);
+    if (!project) throw new TypeError("找不到要导出的任务");
+    const legacyRefs = Array.isArray(project.workbenchLegacyRefs) ? project.workbenchLegacyRefs : [];
+    const promptTaskIds = new Set(legacyRefs.filter(item => item.collection === "promptAgentTasks").map(item => item.sourceId));
+    const articleIds = new Set(legacyRefs.filter(item => item.collection === "writingArticles").map(item => item.sourceId));
+    backup.data.projects = [project];
+    backup.data.prompts = [];
+    backup.data.references = [];
+    backup.data.cases = [];
+    backup.data.knowledgeEntries = [];
+    backup.data.knowledgeSelection = [];
+    backup.data.knowledgeFilters = {};
+    backup.data.knowledgeMetadata = {};
+    backup.data.researchSelection = [];
+    backup.data.researchTasks = [];
+    backup.data.researchAttachments = [];
+    backup.data.platformConnections = {};
+    backup.data.promptAgentTasks = backup.data.promptAgentTasks.filter(item => promptTaskIds.has(item.id));
+    backup.data.promptAgentSources = [];
+    backup.data.writingArticles = backup.data.writingArticles.filter(item => articleIds.has(item.id));
+    backup.data.writingMemories = [];
+    backup.data.writingPacks = [];
+    backup.data.writingPackSettings = [];
+    backup.data.writingReviews = [];
+    backup.data.academicResponseProjects = [];
+    backup.data.workbenchAttachments = backup.data.workbenchAttachments.filter(item => item.taskId === taskId);
+    backup.data.workbenchAnnotations = backup.data.workbenchAnnotations.filter(item => item.taskId === taskId);
+    backup.counts = countData(backup.data);
     validateBackup(backup);
     return backup;
   }
@@ -1077,6 +1116,7 @@
   return {
     BackupSerializationError,
     createBackup,
+    createTaskBackup,
     validateBackup,
     getBackupSummary,
     replaceState,
