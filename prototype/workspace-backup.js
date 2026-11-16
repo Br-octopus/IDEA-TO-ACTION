@@ -170,6 +170,64 @@
     reassociatedFromId: SCALAR
   };
 
+  const WORKBENCH_SOURCE_REF_FIELDS = {
+    kind: SCALAR, url: SCALAR, title: SCALAR, attachmentId: SCALAR, contentHash: SCALAR, hash: SCALAR,
+    fetchedAt: SCALAR, pageIndex: SCALAR, excerpt: SCALAR, sourceId: SCALAR, versionId: SCALAR,
+    sourceKind: SCALAR, selector: SCALAR, start: SCALAR, end: SCALAR
+  };
+  const WORKBENCH_CONTENT_VERSION_FIELDS = {
+    id: SCALAR, text: SCALAR, attachmentId: SCALAR, hash: SCALAR, sourceRef: object(WORKBENCH_SOURCE_REF_FIELDS),
+    parseStatus: SCALAR, annotations: array(object(WORKBENCH_ANNOTATION_FIELDS)), parentVersionId: SCALAR,
+    roundId: SCALAR, deliveryId: SCALAR
+  };
+  const WORKBENCH_CONTENT_FIELDS = {
+    id: SCALAR, title: SCALAR, kind: SCALAR, purpose: SCALAR, purposeReason: SCALAR,
+    draft: object({ text: SCALAR, baseVersionId: SCALAR, updatedAt: SCALAR }),
+    versions: array(object(WORKBENCH_CONTENT_VERSION_FIELDS)), sourceRef: object(WORKBENCH_SOURCE_REF_FIELDS),
+    removedAt: SCALAR, archivedAt: SCALAR
+  };
+  const WORKBENCH_CANVAS_NODE_FIELDS = {
+    id: SCALAR, contentVersionId: SCALAR, position: object({ x: SCALAR, y: SCALAR }),
+    size: object({ width: SCALAR, height: SCALAR }), zIndex: SCALAR, groupId: SCALAR,
+    annotations: array(object(WORKBENCH_ANNOTATION_FIELDS)), removedAt: SCALAR
+  };
+  const WORKBENCH_CANVAS_FIELDS = {
+    id: SCALAR, title: SCALAR, purpose: SCALAR,
+    viewport: object({ x: SCALAR, y: SCALAR, zoom: SCALAR }),
+    groups: array(object({ id: SCALAR, title: SCALAR, label: SCALAR, color: SCALAR, removedAt: SCALAR })),
+    nodes: array(object(WORKBENCH_CANVAS_NODE_FIELDS)), removedAt: SCALAR
+  };
+  const WORKBENCH_DELIVERY_MATERIAL_FIELDS = {
+    contentVersionId: SCALAR, title: SCALAR, kind: SCALAR, purpose: SCALAR, attachmentId: SCALAR,
+    hash: SCALAR, sourceRef: object(WORKBENCH_SOURCE_REF_FIELDS), parseStatus: SCALAR,
+    pageIndex: SCALAR, region: object({ x: SCALAR, y: SCALAR, width: SCALAR, height: SCALAR }),
+    canvasId: SCALAR, nodeId: SCALAR, annotationIds: LIST
+  };
+  const WORKBENCH_LAYOUT_INTENT_FIELDS = {
+    enabled: SCALAR, canvasId: SCALAR, nodeIds: LIST,
+    bounds: object({ x: SCALAR, y: SCALAR, width: SCALAR, height: SCALAR })
+  };
+  const WORKBENCH_DELIVERY_FIELDS = {
+    id: SCALAR, text: SCALAR, materials: array(object(WORKBENCH_DELIVERY_MATERIAL_FIELDS)),
+    annotations: array(object(WORKBENCH_ANNOTATION_FIELDS)),
+    layoutIntent: object(WORKBENCH_LAYOUT_INTENT_FIELDS), createdAt: SCALAR
+  };
+  const WORKBENCH_PROMPT_ROUND_FIELDS = {
+    id: SCALAR, draftText: SCALAR, contentVersionIds: LIST,
+    deliveries: array(object(WORKBENCH_DELIVERY_FIELDS))
+  };
+  const WORKBENCH_SELECTION_ITEM_FIELDS = {
+    contentVersionId: SCALAR, canvasId: SCALAR, nodeId: SCALAR, pageIndex: SCALAR,
+    region: object({ x: SCALAR, y: SCALAR, width: SCALAR, height: SCALAR }), annotationIds: LIST
+  };
+  const WORKBENCH_SELECTION_FIELDS = {
+    items: array(object(WORKBENCH_SELECTION_ITEM_FIELDS)), layoutIntent: object(WORKBENCH_LAYOUT_INTENT_FIELDS)
+  };
+  const WORKBENCH_DRAFT_FIELDS = {
+    goal: SCALAR, opinion: SCALAR, promptText: SCALAR, annotations: array(object(WORKBENCH_ANNOTATION_FIELDS)),
+    updatedAt: SCALAR
+  };
+
   const PROMPT_METADATA_FIELDS = {
     status: SCALAR,
     note: SCALAR,
@@ -263,7 +321,17 @@
     workbenchGeneratedPrompt: SCALAR,
     workbenchPromptDraft: SCALAR,
     workbenchKnowledgeSources: array(object(WORKBENCH_KNOWLEDGE_SOURCE_FIELDS), 500),
-    workbenchPromptVersions: array(object(WORKBENCH_PROMPT_VERSION_FIELDS), 10)
+    workbenchPromptVersions: array(object(WORKBENCH_PROMPT_VERSION_FIELDS), 10),
+    workbenchSchemaVersion: SCALAR,
+    workbenchRevision: SCALAR,
+    workbenchContents: array(object(WORKBENCH_CONTENT_FIELDS)),
+    workbenchCanvases: array(object(WORKBENCH_CANVAS_FIELDS)),
+    workbenchPromptRounds: array(object(WORKBENCH_PROMPT_ROUND_FIELDS)),
+    workbenchDraft: object(WORKBENCH_DRAFT_FIELDS),
+    workbenchSelection: object(WORKBENCH_SELECTION_FIELDS),
+    workbenchLegacyRefs: array(object({ collection: SCALAR, sourceId: SCALAR })),
+    workbenchDraftStatus: SCALAR,
+    workbenchSaveError: SCALAR
   };
 
   const PROMPT_FIELDS = {
@@ -779,6 +847,118 @@
     return isObject(item) && Object.hasOwn(item, "id") ? item.id : null;
   }
 
+  function toWorkbenchIdMap(value, pattern, label) {
+    const entries = value instanceof Map ? [...value.entries()]
+      : Array.isArray(value) ? value.map(item => [item?.from, item?.to]) : null;
+    if (!entries) throw new TypeError(`${label}映射参数无效`);
+    const result = new Map();
+    for (const [from, to] of entries) {
+      if (typeof from !== "string" || !pattern.test(from) || typeof to !== "string" || !pattern.test(to)
+        || result.has(from) || [...result.values()].includes(to)) throw new TypeError(`${label}映射内容无效`);
+      result.set(from, to);
+    }
+    return result;
+  }
+
+  function rewriteWorkbenchTaskIds(data, manifests = [], taskIdMapping = [], attachmentIdMapping = []) {
+    if (!isObject(data) || !Array.isArray(manifests)) throw new TypeError("工作台任务 ID 重映射参数无效");
+    const taskMap = toWorkbenchIdMap(taskIdMapping, /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/, "任务 ID");
+    const attachmentMap = toWorkbenchIdMap(attachmentIdMapping,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "附件 ID");
+    const rewrite = value => {
+      if (Array.isArray(value)) return value.map(rewrite);
+      if (!isObject(value)) return value;
+      const result = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (["taskId", "projectId"].includes(key) && typeof item === "string") result[key] = taskMap.get(item) || item;
+        else if (["attachmentId", "workbenchAttachmentId"].includes(key) && typeof item === "string") result[key] = attachmentMap.get(item) || item;
+        else if (["attachmentIds", "workbenchAttachmentIds"].includes(key) && Array.isArray(item)) {
+          result[key] = item.map(id => attachmentMap.get(id) || id);
+        } else result[key] = rewrite(item);
+      }
+      return result;
+    };
+    const resultData = rewrite(data);
+    if (Array.isArray(data.projects)) resultData.projects = data.projects.map(project => ({
+      ...rewrite(project), id: taskMap.get(project.id) || project.id
+    }));
+    if (Array.isArray(data.workbenchAttachments)) resultData.workbenchAttachments = data.workbenchAttachments.map(item => {
+      const taskId = taskMap.get(item.taskId) || item.taskId;
+      const id = attachmentMap.get(item.id) || item.id;
+      const extension = typeof item.archiveId === "string" ? /\.(txt|md|pdf|png|jpg|webp|html|pptx|docx)$/i.exec(item.archiveId)?.[1] : "";
+      return { ...rewrite(item), taskId, id,
+        ...(extension ? { archiveId: `${taskId}_${id}.${extension.toLowerCase()}` } : {}) };
+    });
+    if (Array.isArray(data.workbenchAnnotations)) resultData.workbenchAnnotations = rewrite(data.workbenchAnnotations);
+    const resultManifests = manifests.map(manifest => {
+      const sourceTaskId = manifest.taskId;
+      const taskId = taskMap.get(sourceTaskId) || sourceTaskId;
+      const project = rewrite(manifest.project);
+      if (project && typeof project === "object") project.id = taskMap.get(project.id) || taskId;
+      return { ...rewrite(manifest), sourceTaskId, taskId, project };
+    });
+    return { data: resultData, workbenchManifests: resultManifests };
+  }
+
+  function remapWorkbenchTaskIds(data, manifests, unavailableTaskIds, unavailableAttachmentIds, createTaskId, createAttachmentId) {
+    if (!isObject(data) || !Array.isArray(manifests) || !Array.isArray(unavailableTaskIds)
+      || !Array.isArray(unavailableAttachmentIds) || typeof createTaskId !== "function" || typeof createAttachmentId !== "function") {
+      throw new TypeError("工作台任务冲突映射参数无效");
+    }
+    const taskPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+    const attachmentPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    const workbenchTasks = new Set();
+    const addTask = id => {
+      if (typeof id !== "string" || !taskPattern.test(id)) throw new TypeError("工作台任务 ID 无效");
+      workbenchTasks.add(id);
+    };
+    for (const project of data.projects || []) {
+      if (project?.workbenchPersistenceEnabled === true || ["workbenchDraft", "workbenchContents", "workbenchCanvases",
+        "workbenchPromptRounds", "workbenchAttachmentId", "workbenchAttachmentIds"].some(key => project?.[key] != null)) addTask(project.id);
+    }
+    for (const item of data.workbenchAttachments || []) addTask(item.taskId);
+    for (const item of data.workbenchAnnotations || []) addTask(item.taskId);
+    for (const item of manifests) addTask(item.taskId);
+
+    const usedTasks = new Set([...workbenchTasks, ...unavailableTaskIds.filter(id => typeof id === "string" && taskPattern.test(id))]);
+    const taskMap = new Map();
+    for (const id of workbenchTasks) {
+      if (!unavailableTaskIds.includes(id)) continue;
+      let target = "";
+      for (let attempt = 0; attempt < 100 && !target; attempt += 1) {
+        const candidate = createTaskId();
+        if (typeof candidate === "string" && taskPattern.test(candidate) && !usedTasks.has(candidate)) target = candidate;
+      }
+      if (!target) throw new TypeError("无法生成无冲突的任务 ID");
+      taskMap.set(id, target);
+      usedTasks.add(target);
+    }
+
+    const assets = data.workbenchAttachments || [];
+    const usedAttachments = new Set([...assets.map(item => item.id), ...unavailableAttachmentIds.filter(id => typeof id === "string" && attachmentPattern.test(id))]);
+    const attachmentMap = new Map();
+    for (const item of assets) {
+      if (!taskMap.has(item.taskId) && !unavailableAttachmentIds.includes(item.id)) continue;
+      if (attachmentMap.has(item.id)) continue;
+      let target = "";
+      for (let attempt = 0; attempt < 100 && !target; attempt += 1) {
+        const candidate = createAttachmentId();
+        if (typeof candidate === "string" && attachmentPattern.test(candidate) && !usedAttachments.has(candidate)) target = candidate;
+      }
+      if (!target) throw new TypeError("无法生成无冲突的工作台附件 ID");
+      attachmentMap.set(item.id, target);
+      usedAttachments.add(target);
+    }
+
+    const remapped = rewriteWorkbenchTaskIds(data, manifests, taskMap, attachmentMap);
+    const archiveIdMap = assets.map((item, index) => ({ from: item.archiveId, to: remapped.data.workbenchAttachments[index]?.archiveId }))
+      .filter(item => typeof item.from === "string" && typeof item.to === "string");
+    return {
+      ...remapped, taskIdMap: [...taskMap].map(([from, to]) => ({ from, to })),
+      attachmentIdMap: [...attachmentMap].map(([from, to]) => ({ from, to })), archiveIdMap
+    };
+  }
+
   function remapResearchAttachmentIds(data, attachments, unavailableIds, createId) {
     if (!isObject(data) || !Array.isArray(data.researchAttachments) || !Array.isArray(attachments)
       || !Array.isArray(unavailableIds) || typeof createId !== "function") {
@@ -901,6 +1081,8 @@
     getBackupSummary,
     replaceState,
     mergeState,
+    rewriteWorkbenchTaskIds,
+    remapWorkbenchTaskIds,
     remapResearchAttachmentIds,
     retainResearchAttachments
   };

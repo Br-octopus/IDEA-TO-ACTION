@@ -21,27 +21,24 @@ const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
 
-test('七板块导航使用独立键，高亮不再与共享视图绑定', () => {
+test('统一任务工作台是唯一的新任务入口，旧版入口收纳到更多菜单', () => {
   const nav = html.match(/<nav class="nav"[\s\S]*?<\/nav>/)?.[0] || "";
-  const keys = [...nav.matchAll(/data-nav-key="([^"]+)"/g)].map(match => match[1]);
-  assert.ok(keys.length >= 7);
-  assert.equal(new Set(keys).size, keys.length, "导航键唯一");
-  assert.deepEqual([...nav.matchAll(/class="nav-group">([^<]+)</g)].map(match => match[1]), ["工作台", "资料库", "提示词收藏", "写作", "研究", "记忆与偏好", "设置"]);
-  for (const [key, view] of Object.entries({
-    "workspace-new": "home", "workspace-plans": "plans", "workspace-prompts": "prompt-agent",
-    library: "references", favorites: "library", writing: "article", "research-academic": "academic-workbench",
-    "research-social": "social-research", memory: "article", settings: "settings"
-  })) assert.match(nav, new RegExp(`data-view="${view}"[^>]*data-nav-key="${key}"`));
-  assert.match(app, /\.nav \[data-nav-key\]/);
+  const primaryNav = nav.replace(/<details class="mobile-more legacy-tools">[\s\S]*?<\/details>/, "");
+  const legacyNav = nav.match(/<details class="mobile-more legacy-tools">([\s\S]*?)<\/details>/)?.[1] || "";
+  assert.match(primaryNav, /data-view="home" data-nav-key="workspace-new"/);
+  assert.doesNotMatch(primaryNav, /data-nav-key="workspace-prompts"|data-nav-key="writing"/);
+  assert.match(legacyNav, /data-view="prompt-agent" data-nav-key="workspace-prompts">旧版提示词 Agent/);
+  assert.match(legacyNav, /data-view="article" data-nav-key="writing">旧版写作工作台/);
+  const mobileNav = html.match(/<nav class="mobile-nav"[\s\S]*?<\/nav>/)?.[0] || "";
+  const mobilePrimary = mobileNav.replace(/<details class="mobile-more">[\s\S]*?<\/details>/, "");
+  assert.match(mobilePrimary, /data-view="home" data-nav-key="workspace-new"/);
+  assert.doesNotMatch(mobilePrimary, /data-nav-key="workspace-prompts"|data-nav-key="writing"/);
+  assert.match(app, /\.activity-rail \[data-nav-key\]/);
   assert.match(app, /\.mobile-nav \[data-nav-key\]/);
   assert.match(app, /node\.dataset\.navKey === navKey/);
-  assert.match(app, /node\.dataset\.navKey/);
   assert.match(app, /document\.querySelectorAll\("\[data-view\]"\)\.forEach\(node => node\.addEventListener\("click", \(\) => go\(node\.dataset\.view, node\.dataset\.navKey\)\)\)/);
   assert.match(app, /articleTitle\.textContent = navKey === "memory" \? "记忆与偏好" : "写作工作台"/);
-  assert.match(app, /articleDescription\.hidden = navKey === "memory"/);
-  assert.doesNotMatch(fs.readFileSync(path.join(root, 'prototype', 'writing-workbench-ui.js'), 'utf8'), /<h1>记忆与偏好<\/h1>/);
   assert.match(app, /function renderPlans\(\)[\s\S]*?data-open-project/);
-  assert.doesNotMatch(app, /querySelectorAll\("\[data-view\]"\)\.forEach\(node => node\.classList\.toggle\("active"/);
 });
 
 test('资料库旧详情容器被移除后不会中断 renderer 初始化', () => {

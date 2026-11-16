@@ -7,20 +7,24 @@ const { Transform, Writable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const yazl = require('yazl');
 const yauzl = require('yauzl');
+const workbenchSchema = require('../prototype/unified-workbench-schema.js');
 
 const FORMAT = 'forward-step-workspace-archive';
-const FORMAT_VERSION = 2;
+const FORMAT_VERSION = 3;
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10_000;
+const MAX_WORKBENCH_MANIFESTS = 10_000;
+const MAX_WORKBENCH_MANIFEST_BYTES = 50 * 1024 * 1024;
 const MAX_RESEARCH_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_WORKBENCH_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_TASK_ATTACHMENT_BYTES = 512 * 1024 * 1024;
 const TASK_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
-const ATTACHMENT_ID = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(txt|pdf|png|jpg|webp|html|pptx|docx)$/;
+const ATTACHMENT_ID = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(txt|md|pdf|png|jpg|webp|html|pptx|docx)$/;
 const WORKBENCH_ATTACHMENT_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MIME_EXTENSIONS = Object.freeze({
   'text/plain': 'txt',
+  'text/markdown': 'md',
   'application/pdf': 'pdf',
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -36,7 +40,8 @@ const LEGACY_MIME_EXTENSIONS = Object.freeze({
   'image/jpeg': 'jpg',
   'image/webp': 'webp'
 });
-const MANIFEST_KEYS = ['format', 'formatVersion', 'workspace', 'attachments'];
+const LEGACY_MANIFEST_KEYS = ['format', 'formatVersion', 'workspace', 'attachments'];
+const MANIFEST_KEYS = [...LEGACY_MANIFEST_KEYS, 'workbenchManifests'];
 
 class WorkspaceArchiveError extends Error {
   constructor(code, message, cause) {
@@ -115,11 +120,44 @@ function validateAttachment(item, seenIds, seenPaths, taskBytes, formatVersion) 
   taskBytes.set(item.taskId, sum);
 }
 
+function validateWorkbenchManifestDescriptor(item, seenTasks, seenPaths) {
+  if (!exactKeys(item, ['taskId', 'revision', 'size', 'sha256', 'path'])
+    || typeof item.taskId !== 'string' || !TASK_ID.test(item.taskId)
+    || !Number.isSafeInteger(item.revision) || item.revision < 1
+    || !Number.isSafeInteger(item.size) || item.size <= 0 || item.size > MAX_WORKBENCH_MANIFEST_BYTES
+    || typeof item.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(item.sha256)) {
+    throw fail('INVALID_MANIFEST', '工作台任务清单字段无效');
+  }
+  const expectedPath = `workbench/${item.taskId}/workbench.json`;
+  if (item.path !== expectedPath || seenTasks.has(item.taskId) || seenPaths.has(item.path)) {
+    throw fail('INVALID_WORKBENCH_MANIFEST', '工作台任务清单 ID 或归档路径无效');
+  }
+  seenTasks.add(item.taskId);
+  seenPaths.add(item.path);
+}
+
+function validateWorkbenchManifestContent(value, taskId, revision) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || value.schemaVersion !== workbenchSchema.WORKBENCH_SCHEMA_VERSION
+    || value.taskId !== taskId || value.revision !== revision
+    || !value.project || typeof value.project !== 'object' || Array.isArray(value.project)
+    || value.project.id !== taskId) {
+    throw fail('INVALID_WORKBENCH_MANIFEST', '工作台任务清单内容与归档描述不匹配');
+  }
+  try { workbenchSchema.normalizeWorkbenchProject(value.project); } catch (error) {
+    throw fail('INVALID_WORKBENCH_MANIFEST', '工作台任务清单内容无效', error);
+  }
+  return value;
+}
+
 function validateManifest(manifest) {
-  if (!exactKeys(manifest, MANIFEST_KEYS) || manifest.format !== FORMAT
-    || ![1, FORMAT_VERSION].includes(manifest.formatVersion) || !manifest.workspace
+  const latest = manifest?.formatVersion === FORMAT_VERSION;
+  if (!exactKeys(manifest, latest ? MANIFEST_KEYS : LEGACY_MANIFEST_KEYS) || manifest.format !== FORMAT
+    || ![1, 2, FORMAT_VERSION].includes(manifest.formatVersion) || !manifest.workspace
     || typeof manifest.workspace !== 'object' || Array.isArray(manifest.workspace)
-    || !Array.isArray(manifest.attachments) || manifest.attachments.length > MAX_ATTACHMENTS) {
+    || !Array.isArray(manifest.attachments) || manifest.attachments.length > MAX_ATTACHMENTS
+    || latest && (!Array.isArray(manifest.workbenchManifests)
+      || manifest.workbenchManifests.length > MAX_WORKBENCH_MANIFESTS)) {
     throw fail('INVALID_MANIFEST', '归档清单格式或版本无效');
   }
   const ids = new Set();
@@ -132,6 +170,12 @@ function validateManifest(manifest) {
     if (total > MAX_TOTAL_BYTES) {
       throw fail('TOTAL_SIZE_LIMIT', '归档声明的解压总量超过 2 GiB');
     }
+  }
+  const seenTasks = new Set();
+  for (const item of manifest.workbenchManifests || []) {
+    validateWorkbenchManifestDescriptor(item, seenTasks, paths);
+    total += item.size;
+    if (total > MAX_TOTAL_BYTES) throw fail('TOTAL_SIZE_LIMIT', '归档声明的解压总量超过 2 GiB');
   }
   return { paths, totalAttachmentBytes: total };
 }
@@ -151,6 +195,21 @@ function normalizeExportAttachment(item) {
   return { id, taskId, type, size, path: `attachments/${taskId}/${id}`, filePath, streamFactory };
 }
 
+function normalizeExportWorkbenchManifest(item) {
+  const manifest = item?.manifest || item;
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw fail('INVALID_WORKBENCH_MANIFEST', '导出工作台任务清单无效');
+  }
+  const { taskId, revision } = manifest;
+  validateWorkbenchManifestContent(manifest, taskId, revision);
+  const bytes = Buffer.from(JSON.stringify(manifest));
+  if (bytes.length > MAX_WORKBENCH_MANIFEST_BYTES) {
+    throw fail('WORKBENCH_MANIFEST_SIZE_LIMIT', '工作台任务清单超过 50 MiB');
+  }
+  return { taskId, revision, size: bytes.length, sha256: '0'.repeat(64),
+    path: `workbench/${taskId}/workbench.json`, bytes };
+}
+
 function writeArchive(output, zip) {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -168,22 +227,31 @@ function writeArchive(output, zip) {
   });
 }
 
-async function exportWorkspaceArchive({ output, workspace, attachments = [] } = {}) {
+async function exportWorkspaceArchive({ output, workspace, attachments = [], workbenchManifests = [] } = {}) {
   if (!output || typeof output.write !== 'function' || !workspace || typeof workspace !== 'object'
-    || Array.isArray(workspace) || !Array.isArray(attachments)) {
+    || Array.isArray(workspace) || !Array.isArray(attachments) || !Array.isArray(workbenchManifests)) {
     throw fail('INVALID_ARGUMENT', '导出参数无效');
   }
-  if (attachments.length > MAX_ATTACHMENTS) throw fail('ATTACHMENT_COUNT_LIMIT', '附件数量超过 10,000');
+  if (attachments.length > MAX_ATTACHMENTS || workbenchManifests.length > MAX_WORKBENCH_MANIFESTS) {
+    throw fail('ATTACHMENT_COUNT_LIMIT', '附件或任务清单数量超过限制');
+  }
   const normalized = attachments.map(normalizeExportAttachment);
+  const normalizedManifests = workbenchManifests.map(normalizeExportWorkbenchManifest);
   const manifest = {
     format: FORMAT,
     formatVersion: FORMAT_VERSION,
     workspace,
     attachments: normalized.map(({ id, taskId, type, size, path: archivePath }) => ({
       id, taskId, type, size, sha256: '0'.repeat(64), path: archivePath
+    })),
+    workbenchManifests: normalizedManifests.map(({ taskId, revision, size, sha256, path: archivePath }) => ({
+      taskId, revision, size, sha256, path: archivePath
     }))
   };
   validateManifest(manifest);
+  for (let index = 0; index < normalizedManifests.length; index += 1) {
+    manifest.workbenchManifests[index].sha256 = createHash('sha256').update(normalizedManifests[index].bytes).digest('hex');
+  }
   for (let index = 0; index < normalized.length; index += 1) {
     const attachment = normalized[index];
     const input = attachment.filePath
@@ -209,12 +277,14 @@ async function exportWorkspaceArchive({ output, workspace, attachments = [] } = 
   }
   const manifestBytes = Buffer.from(JSON.stringify(manifest));
   if (manifestBytes.length > MAX_MANIFEST_BYTES) throw fail('MANIFEST_SIZE_LIMIT', '清单超过 128 MiB');
-  if (manifestBytes.length + normalized.reduce((sum, item) => sum + item.size, 0) > MAX_TOTAL_BYTES) {
+  if (manifestBytes.length + normalized.reduce((sum, item) => sum + item.size, 0)
+    + normalizedManifests.reduce((sum, item) => sum + item.size, 0) > MAX_TOTAL_BYTES) {
     throw fail('TOTAL_SIZE_LIMIT', '归档声明的解压总量超过 2 GiB');
   }
   validateManifest(manifest);
   const zip = new yazl.ZipFile();
   zip.addBuffer(manifestBytes, 'manifest.json');
+  for (const item of normalizedManifests) zip.addBuffer(item.bytes, item.path);
   for (let index = 0; index < normalized.length; index += 1) {
     const attachment = normalized[index];
     const input = attachment.filePath
@@ -230,7 +300,9 @@ async function exportWorkspaceArchive({ output, workspace, attachments = [] } = 
     input.pipe(verified);
   }
   await writeArchive(output, zip);
-  return { format: FORMAT, formatVersion: FORMAT_VERSION, attachmentCount: normalized.length };
+  const result = { format: FORMAT, formatVersion: FORMAT_VERSION, attachmentCount: normalized.length };
+  if (normalizedManifests.length) result.workbenchManifestCount = normalizedManifests.length;
+  return result;
 }
 
 async function openSafeFile(filePath, expectedSize) {
@@ -290,10 +362,11 @@ async function ensureOutputDirectory(tempDirectory) {
   return await fs.promises.realpath(resolved);
 }
 
-async function ensureTaskDirectory(root, taskId, createdDirectories) {
-  const attachmentsRoot = path.join(root, 'attachments');
-  const taskDirectory = path.join(attachmentsRoot, taskId);
-  for (const directory of [attachmentsRoot, taskDirectory]) {
+async function ensureTaskDirectory(root, taskId, createdDirectories, category = 'attachments') {
+  if (!['attachments', 'workbench'].includes(category)) throw fail('UNSAFE_PATH', '归档目标目录无效');
+  const categoryRoot = path.join(root, category);
+  const taskDirectory = path.join(categoryRoot, taskId);
+  for (const directory of [categoryRoot, taskDirectory]) {
     try {
       const stats = await fs.promises.lstat(directory);
       if (!stats.isDirectory() || stats.isSymbolicLink()) throw fail('UNSAFE_PATH', '附件目标目录不安全');
@@ -328,7 +401,9 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
   const createdFiles = [];
   const createdDirectories = [];
   const validAttachmentIds = new Set();
+  const validWorkbenchManifests = new Map();
   const attachmentErrors = [];
+  const workbenchErrors = [];
   try {
     const first = await new Promise((resolve, reject) => {
       zip.once('error', error => reject(fail('INVALID_ARCHIVE', 'ZIP 目录读取失败', error)));
@@ -347,14 +422,20 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
       throw fail('INVALID_MANIFEST', 'manifest.json 不是有效 JSON', error);
     }
     const { paths } = validateManifest(manifest);
-    const requiredBytes = manifestBytes.length + manifest.attachments.reduce((sum, item) => sum + item.size, 0);
+    const workbenchDescriptors = manifest.workbenchManifests || [];
+    const requiredBytes = manifestBytes.length
+      + manifest.attachments.reduce((sum, item) => sum + item.size, 0)
+      + workbenchDescriptors.reduce((sum, item) => sum + item.size, 0);
     if (typeof fs.promises.statfs !== 'function') throw fail('DISK_SPACE_UNAVAILABLE', '无法检查目标磁盘剩余空间');
     let disk;
     try { disk = await fs.promises.statfs(root); } catch (error) {
       throw fail('DISK_SPACE_UNAVAILABLE', '无法检查目标磁盘剩余空间', error);
     }
     if (disk.bavail * disk.bsize < requiredBytes) throw fail('INSUFFICIENT_DISK_SPACE', '目标磁盘空间不足，未导入附件');
-    const expected = new Map(manifest.attachments.map(item => [item.path, item]));
+    const expected = new Map([
+      ...manifest.attachments.map(item => [item.path, { kind: 'attachment', descriptor: item }]),
+      ...workbenchDescriptors.map(item => [item.path, { kind: 'workbench', descriptor: item }])
+    ]);
     const seen = new Set(['manifest.json']);
     let actualTotal = manifestBytes.length;
     let compressedTotal = first.compressedSize;
@@ -370,26 +451,31 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
       });
       if (!entry) break;
       entryCount += 1;
-      if (entryCount > MAX_ATTACHMENTS + 1) throw fail('ATTACHMENT_COUNT_LIMIT', 'ZIP 条目数量超过限制');
+      if (entryCount > MAX_ATTACHMENTS + MAX_WORKBENCH_MANIFESTS + 1) throw fail('ATTACHMENT_COUNT_LIMIT', 'ZIP 条目数量超过限制');
       assertSafeArchivePath(entry.fileName);
       if (seen.has(entry.fileName)) throw fail('DUPLICATE_ENTRY', 'ZIP 中存在重复条目');
       seen.add(entry.fileName);
-      const descriptor = expected.get(entry.fileName);
-      if (!descriptor) throw fail('UNKNOWN_ENTRY', 'ZIP 包含未在清单声明的条目');
+      const expectedEntry = expected.get(entry.fileName);
+      if (!expectedEntry) throw fail('UNKNOWN_ENTRY', 'ZIP 包含未在清单声明的条目');
+      const { kind, descriptor } = expectedEntry;
+      const maximumBytes = kind === 'attachment'
+        ? attachmentLimits(descriptor.id, manifest.formatVersion).attachmentBytes
+        : MAX_WORKBENCH_MANIFEST_BYTES;
       const fileType = (entry.externalFileAttributes >>> 16) & 0o170000;
       if ((fileType !== 0 && fileType !== 0o100000)
-        || entry.uncompressedSize !== descriptor.size || entry.uncompressedSize > attachmentLimits(descriptor.id, manifest.formatVersion).attachmentBytes
+        || entry.uncompressedSize !== descriptor.size || entry.uncompressedSize > maximumBytes
         || !Number.isSafeInteger(entry.compressedSize) || entry.compressedSize < 0) {
-        throw fail('SIZE_MISMATCH', '附件 ZIP 声明大小无效');
+        throw fail('SIZE_MISMATCH', 'ZIP 条目声明大小无效');
       }
       compressedTotal += entry.compressedSize;
       if (!Number.isSafeInteger(compressedTotal) || compressedTotal > MAX_TOTAL_BYTES) {
         throw fail('ARCHIVE_SIZE_LIMIT', 'ZIP 条目压缩总量超过 2 GiB');
       }
       if (actualTotal + entry.uncompressedSize > MAX_TOTAL_BYTES) throw fail('TOTAL_SIZE_LIMIT', 'ZIP 解压总量超过 2 GiB');
-      const relative = entry.fileName.split('/');
-      const taskDirectory = await ensureTaskDirectory(root, relative[1], createdDirectories);
-      const destination = path.resolve(taskDirectory, relative[2]);
+      const taskDirectory = await ensureTaskDirectory(root, descriptor.taskId, createdDirectories,
+        kind === 'workbench' ? 'workbench' : 'attachments');
+      const fileName = kind === 'workbench' ? 'workbench.json' : descriptor.id;
+      const destination = path.resolve(taskDirectory, fileName);
       const relativeDestination = path.relative(root, destination);
       if (relativeDestination.startsWith('..') || path.isAbsolute(relativeDestination)) throw fail('UNSAFE_PATH', '附件目标路径越界');
       const hash = createHash('sha256');
@@ -398,7 +484,7 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
         transform(chunk, encoding, callback) {
           entryBytes += chunk.length;
           actualTotal += chunk.length;
-          if (entryBytes > descriptor.size || entryBytes > attachmentLimits(descriptor.id, manifest.formatVersion).attachmentBytes) {
+          if (entryBytes > descriptor.size || entryBytes > maximumBytes) {
             callback(fail('SIZE_MISMATCH', '附件实际大小超过清单声明'));
           } else if (actualTotal > MAX_TOTAL_BYTES) {
             callback(fail('TOTAL_SIZE_LIMIT', 'ZIP 实际解压总量超过 2 GiB'));
@@ -417,11 +503,25 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
       if (entryBytes !== descriptor.size || hash.digest('hex') !== descriptor.sha256) {
         await fs.promises.unlink(destination);
         createdFiles.splice(createdFiles.indexOf(destination), 1);
-        attachmentErrors.push({ id: descriptor.id, taskId: descriptor.taskId, code: 'CHECKSUM_MISMATCH' });
-      } else validAttachmentIds.add(descriptor.id);
+        if (kind === 'attachment') attachmentErrors.push({ id: descriptor.id, taskId: descriptor.taskId, code: 'CHECKSUM_MISMATCH' });
+        else workbenchErrors.push({ taskId: descriptor.taskId, code: 'CHECKSUM_MISMATCH' });
+      } else if (kind === 'attachment') validAttachmentIds.add(descriptor.id);
+      else {
+        try {
+          const value = JSON.parse(await fs.promises.readFile(destination, 'utf8'));
+          validWorkbenchManifests.set(descriptor.taskId, validateWorkbenchManifestContent(value, descriptor.taskId, descriptor.revision));
+        } catch (error) {
+          await fs.promises.unlink(destination);
+          createdFiles.splice(createdFiles.indexOf(destination), 1);
+          workbenchErrors.push({ taskId: descriptor.taskId, code: error.code || 'INVALID_WORKBENCH_MANIFEST' });
+        }
+      }
     }
     for (const descriptor of manifest.attachments) {
       if (!seen.has(descriptor.path)) attachmentErrors.push({ id: descriptor.id, taskId: descriptor.taskId, code: 'MISSING_ENTRY' });
+    }
+    for (const descriptor of workbenchDescriptors) {
+      if (!seen.has(descriptor.path)) workbenchErrors.push({ taskId: descriptor.taskId, code: 'MISSING_ENTRY' });
     }
     zip.close();
     for (const directory of createdDirectories.reverse()) await fs.promises.rmdir(directory).catch(() => {});
@@ -431,7 +531,9 @@ async function importWorkspaceArchive({ archivePath, tempDirectory } = {}) {
       workspace: manifest.workspace,
       attachments: manifest.attachments.filter(item => validAttachmentIds.has(item.id))
         .map(item => ({ ...item, path: path.resolve(root, ...item.path.split('/')) })),
-      attachmentErrors
+      workbenchManifests: workbenchDescriptors.filter(item => validWorkbenchManifests.has(item.taskId))
+        .map(item => validWorkbenchManifests.get(item.taskId)),
+      attachmentErrors, workbenchErrors
     };
   } catch (error) {
     try { zip.close(); } catch {}

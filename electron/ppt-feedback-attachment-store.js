@@ -1,9 +1,11 @@
 const fsDefault = require('node:fs');
 const pathDefault = require('node:path');
 const cryptoDefault = require('node:crypto');
+const workbenchSchema = require('../prototype/unified-workbench-schema.js');
 const yauzlDefault = require('yauzl');
 
 const DEFAULT_LIMITS = Object.freeze({
+  maxTextBytes: 5 * 1024 * 1024,
   maxHtmlBytes: 5 * 1024 * 1024,
   maxImageBytes: 20 * 1024 * 1024,
   maxPdfBytes: 50 * 1024 * 1024,
@@ -15,6 +17,8 @@ const DEFAULT_LIMITS = Object.freeze({
 });
 
 const FORMATS = Object.freeze({
+  '.txt': { mimeType: 'text/plain', kind: 'text' },
+  '.md': { mimeType: 'text/markdown', kind: 'markdown' },
   '.html': { mimeType: 'text/html', kind: 'html' },
   '.htm': { mimeType: 'text/html', kind: 'html' },
   '.png': { mimeType: 'image/png', kind: 'image' },
@@ -25,8 +29,10 @@ const FORMATS = Object.freeze({
   '.pptx': { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', kind: 'pptx' },
   '.docx': { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', kind: 'docx' }
 });
+const IMAGE_EXTENSIONS = Object.freeze({ 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' });
 
 function attachmentSizeLimit(format, limits) {
+  if (format.kind === 'text' || format.kind === 'markdown') return limits.maxTextBytes;
   if (format.kind === 'html') return limits.maxHtmlBytes;
   if (format.kind === 'pdf') return limits.maxPdfBytes;
   if (format.kind === 'pptx' || format.kind === 'docx') return limits.maxOfficeBytes;
@@ -122,6 +128,7 @@ function createPptFeedbackAttachmentStore({
   limits = {}
 } = {}) {
   if (!app || typeof app.getPath !== 'function') throw new TypeError('必须提供 Electron app');
+  const maxTextBytes = Number.isInteger(limits.maxTextBytes) ? limits.maxTextBytes : DEFAULT_LIMITS.maxTextBytes;
   const maxHtmlBytes = Number.isInteger(limits.maxHtmlBytes) ? limits.maxHtmlBytes : DEFAULT_LIMITS.maxHtmlBytes;
   const maxImageBytes = Number.isInteger(limits.maxImageBytes) ? limits.maxImageBytes : DEFAULT_LIMITS.maxImageBytes;
   const maxPdfBytes = Number.isInteger(limits.maxPdfBytes) ? limits.maxPdfBytes : DEFAULT_LIMITS.maxPdfBytes;
@@ -132,7 +139,7 @@ function createPptFeedbackAttachmentStore({
     maxOfficeExpandedBytes: Number.isInteger(limits.maxOfficeExpandedBytes) ? limits.maxOfficeExpandedBytes : DEFAULT_LIMITS.maxOfficeExpandedBytes,
     maxOfficeCompressionRatio: Number.isFinite(limits.maxOfficeCompressionRatio) ? limits.maxOfficeCompressionRatio : DEFAULT_LIMITS.maxOfficeCompressionRatio
   };
-  if (maxHtmlBytes < 1 || maxImageBytes < 1 || maxPdfBytes < 1
+  if (maxTextBytes < 1 || maxHtmlBytes < 1 || maxImageBytes < 1 || maxPdfBytes < 1
     || Object.values(officeLimits).some(value => !Number.isFinite(value) || value < 1)) throw new TypeError('附件大小限制必须为正数');
 
   const userDataPath = path.resolve(app.getPath('userData'));
@@ -158,6 +165,137 @@ function createPptFeedbackAttachmentStore({
     const stat = fs.lstatSync(target);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw createAttachmentError('ATTACHMENT_MOVE_FAILED', '附件目录无效。');
     return target;
+  }
+
+  function validateTaskId(taskId) {
+    if (!isSafeId(taskId)) throw createAttachmentError('INVALID_WORKBENCH_TASK_ID', '任务标识无效。');
+    return taskId;
+  }
+
+  function getTaskDirectory(taskId) {
+    validateTaskId(taskId);
+    const root = ensureSafeDirectory(path.join(userDataPath, 'ppt-feedback'));
+    return ensureSafeDirectory(path.join(root, taskId));
+  }
+
+  function findTaskDirectory(taskId) {
+    validateTaskId(taskId);
+    const root = path.join(userDataPath, 'ppt-feedback');
+    let rootStat;
+    try { rootStat = fs.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw createAttachmentError('INVALID_WORKBENCH_TASK_DIRECTORY', '任务目录无效。');
+    const directory = path.join(root, taskId);
+    let stat;
+    try { stat = fs.lstatSync(directory); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw createAttachmentError('INVALID_WORKBENCH_TASK_DIRECTORY', '任务目录无效。');
+    return directory;
+  }
+
+  function normalizeTaskManifest(taskId, value) {
+    const invalid = cause => {
+      const error = createAttachmentError('INVALID_WORKBENCH_MANIFEST', '工作台任务清单格式无效。');
+      if (cause) error.cause = cause;
+      return error;
+    };
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.schemaVersion !== workbenchSchema.WORKBENCH_SCHEMA_VERSION
+      || !Number.isSafeInteger(value.revision) || value.revision < 1 || value.taskId != null && value.taskId !== taskId
+      || !value.project || typeof value.project !== 'object' || Array.isArray(value.project) || value.project.id !== taskId) throw invalid();
+    let project;
+    try { project = workbenchSchema.normalizeWorkbenchProject(value.project); } catch (error) { throw invalid(error); }
+    return { schemaVersion: workbenchSchema.WORKBENCH_SCHEMA_VERSION, taskId, revision: value.revision, project };
+  }
+
+  function readTaskManifest(taskId) {
+    const directory = findTaskDirectory(taskId);
+    if (!directory) return null;
+    const manifestPath = path.join(directory, 'workbench.json');
+    let stat;
+    try { stat = fs.lstatSync(manifestPath); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+    if (!stat.isFile() || stat.isSymbolicLink()) throw createAttachmentError('INVALID_WORKBENCH_MANIFEST', '工作台任务清单文件无效。');
+    const realPath = fs.realpathSync(manifestPath);
+    const relative = path.relative(userDataPath, realPath);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw createAttachmentError('INVALID_WORKBENCH_MANIFEST', '工作台任务清单路径无效。');
+    let value;
+    try { value = JSON.parse(fs.readFileSync(realPath, 'utf8')); } catch (error) {
+      const invalid = createAttachmentError('INVALID_WORKBENCH_MANIFEST', '工作台任务清单无法读取或解析。');
+      invalid.cause = error;
+      throw invalid;
+    }
+    return normalizeTaskManifest(taskId, value);
+  }
+
+  function listTaskManifests() {
+    const root = path.join(userDataPath, 'ppt-feedback');
+    let entries;
+    try {
+      const stat = fs.lstatSync(root);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw createAttachmentError('INVALID_WORKBENCH_TASK_DIRECTORY', '任务目录无效。');
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === 'ENOENT') return { manifests: [], errors: [] };
+      throw error;
+    }
+    const manifests = [];
+    const errors = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !isSafeId(entry.name)) continue;
+      try {
+        const manifest = readTaskManifest(entry.name);
+        if (manifest) manifests.push(manifest);
+      } catch (error) {
+        errors.push({ taskId: entry.name, code: error.code || 'INVALID_WORKBENCH_MANIFEST', message: error.message });
+      }
+    }
+    manifests.sort((left, right) => left.taskId.localeCompare(right.taskId));
+    errors.sort((left, right) => left.taskId.localeCompare(right.taskId));
+    return { manifests, errors };
+  }
+
+  function writeTaskManifest(taskId, manifest) {
+    const directory = getTaskDirectory(taskId);
+    const manifestPath = path.join(directory, 'workbench.json');
+    const temporaryPath = path.join(directory, `.workbench-${createId()}.tmp`);
+    try {
+      fs.writeFileSync(temporaryPath, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
+      fs.renameSync(temporaryPath, manifestPath);
+      return manifest.revision;
+    } catch (error) {
+      try { fs.unlinkSync(temporaryPath); } catch {}
+      const failure = createAttachmentError('WORKBENCH_MANIFEST_WRITE_FAILED', '工作台任务清单写入失败；旧清单保持不变。');
+      failure.cause = error;
+      throw failure;
+    }
+  }
+
+  function saveTaskManifest(taskId, value) {
+    validateTaskId(taskId);
+    const manifest = normalizeTaskManifest(taskId, value);
+    const previous = readTaskManifest(taskId);
+    if (previous && manifest.revision <= previous.revision) {
+      throw createAttachmentError('STALE_WORKBENCH_REVISION', '任务清单版本已更新，请先重新读取。');
+    }
+    return writeTaskManifest(taskId, manifest);
+  }
+
+  function installTaskManifest(taskId, value) {
+    validateTaskId(taskId);
+    const manifest = normalizeTaskManifest(taskId, value);
+    if (readTaskManifest(taskId)) {
+      throw createAttachmentError('WORKBENCH_MANIFEST_CONFLICT', '目标任务已有清单，导入不会覆盖。');
+    }
+    return writeTaskManifest(taskId, manifest);
+  }
+
+  function deleteTaskManifest(taskId) {
+    const directory = findTaskDirectory(taskId);
+    if (!directory) return false;
+    try {
+      fs.unlinkSync(path.join(directory, 'workbench.json'));
+      return true;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return false;
+      throw error;
+    }
   }
 
   function loadStoredRecords() {
@@ -200,7 +338,7 @@ function createPptFeedbackAttachmentStore({
             const relativePath = path.relative(userDataPath, realPath);
             if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) continue;
             const content = fs.readFileSync(realPath);
-            if (content.length > attachmentSizeLimit(format, { maxHtmlBytes, maxImageBytes, maxPdfBytes, ...officeLimits })) continue;
+            if (content.length > attachmentSizeLimit(format, { maxTextBytes, maxHtmlBytes, maxImageBytes, maxPdfBytes, ...officeLimits })) continue;
             if (format.kind === 'image' && !matchesImageSignature(content, path.extname(fileName).toLowerCase())) continue;
             if ((format.kind === 'pptx' || format.kind === 'docx') && content.subarray(0, 2).toString('hex') !== '504b') continue;
             const sha256 = crypto.createHash('sha256').update(content).digest('hex');
@@ -228,33 +366,49 @@ function createPptFeedbackAttachmentStore({
     }
   }
 
-  async function saveAttachment({ taskId, sourcePath, mimeType, displayName: requestedDisplayName } = {}) {
+  async function saveAttachment({ taskId, sourcePath, bytes, mimeType, displayName: requestedDisplayName } = {}) {
     if (!isSafeId(taskId)) throw createAttachmentError('INVALID_TASK_ID', '任务标识无效。');
-    if (typeof sourcePath !== 'string' || !sourcePath) throw createAttachmentError('INVALID_ATTACHMENT', '附件来源路径无效。');
     loadStoredRecords();
 
-    let resolvedSource;
-    let stat;
-    try {
-      resolvedSource = fs.realpathSync(sourcePath);
-      stat = fs.statSync(resolvedSource);
-    } catch {
-      throw createAttachmentError('INVALID_ATTACHMENT', '附件来源不可读取。');
+    const formatLimits = { maxTextBytes, maxHtmlBytes, maxImageBytes, maxPdfBytes, ...officeLimits };
+    const fromBytes = bytes !== undefined;
+    let resolvedSource = '';
+    let extension;
+    let content;
+    if (fromBytes) {
+      if (sourcePath !== undefined || !ArrayBuffer.isView(bytes) || bytes.BYTES_PER_ELEMENT !== 1
+        || !IMAGE_EXTENSIONS[mimeType]) {
+        throw createAttachmentError('INVALID_ATTACHMENT', '图片字节或格式无效。');
+      }
+      extension = IMAGE_EXTENSIONS[mimeType];
+      if (bytes.byteLength > maxImageBytes) throw createAttachmentError('FILE_TOO_LARGE', '附件超过大小限制。');
+      content = Buffer.from(bytes);
+    } else {
+      if (typeof sourcePath !== 'string' || !sourcePath) throw createAttachmentError('INVALID_ATTACHMENT', '附件来源路径无效。');
+      let stat;
+      try {
+        resolvedSource = fs.realpathSync(sourcePath);
+        stat = fs.statSync(resolvedSource);
+      } catch {
+        throw createAttachmentError('INVALID_ATTACHMENT', '附件来源不可读取。');
+      }
+      if (!stat.isFile()) throw createAttachmentError('INVALID_ATTACHMENT', '附件来源必须是普通文件。');
+      extension = path.extname(resolvedSource).toLowerCase();
+      const sourceFormat = FORMATS[extension];
+      if (!sourceFormat || sourceFormat.mimeType !== mimeType || hasMisleadingDoubleExtension(path, resolvedSource)) {
+        throw createAttachmentError('INVALID_ATTACHMENT', '附件 MIME 类型与扩展名不匹配或不受支持。');
+      }
+      if (stat.size > attachmentSizeLimit(sourceFormat, formatLimits)) {
+        throw createAttachmentError('FILE_TOO_LARGE', '附件超过大小限制。');
+      }
+      try { content = fs.readFileSync(resolvedSource); }
+      catch { throw createAttachmentError('INVALID_ATTACHMENT', '附件来源不可读取。'); }
     }
-    if (!stat.isFile()) throw createAttachmentError('INVALID_ATTACHMENT', '附件来源必须是普通文件。');
-
-    const extension = path.extname(resolvedSource).toLowerCase();
     const format = FORMATS[extension];
-    if (!format || format.mimeType !== mimeType || hasMisleadingDoubleExtension(path, resolvedSource)) {
+    if (!format || format.mimeType !== mimeType) {
       throw createAttachmentError('INVALID_ATTACHMENT', '附件 MIME 类型与扩展名不匹配或不受支持。');
     }
-    const formatLimits = { maxHtmlBytes, maxImageBytes, maxPdfBytes, ...officeLimits };
     const sizeLimit = attachmentSizeLimit(format, formatLimits);
-    if (stat.size > sizeLimit) throw createAttachmentError('FILE_TOO_LARGE', '附件超过大小限制。');
-
-    let content;
-    try { content = fs.readFileSync(resolvedSource); }
-    catch { throw createAttachmentError('INVALID_ATTACHMENT', '附件来源不可读取。'); }
     if (content.length > sizeLimit) throw createAttachmentError('FILE_TOO_LARGE', '附件超过大小限制。');
     if (format.kind === 'image' && !matchesImageSignature(content, extension)) {
       throw createAttachmentError('INVALID_ATTACHMENT', '图片内容与声明的格式不匹配。');
@@ -272,7 +426,7 @@ function createPptFeedbackAttachmentStore({
     const targetPath = path.join(directory, fileName);
     const sha256 = crypto.createHash('sha256').update(content).digest('hex');
     const createdAt = now();
-    const displayName = path.basename(String(requestedDisplayName || resolvedSource))
+    const displayName = path.basename(String(requestedDisplayName || resolvedSource || `图片${extension}`))
       .replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 180) || `资料${extension}`;
     let createdDirectory = false;
 
@@ -410,7 +564,7 @@ function createPptFeedbackAttachmentStore({
     const formatEntry = Object.entries(FORMATS).find(([, format]) => format.mimeType === mimeType);
     if (!formatEntry) throw createAttachmentError('INVALID_ATTACHMENT', '导入附件类型不受支持。');
     const [extension, format] = formatEntry;
-    const formatLimits = { maxHtmlBytes, maxImageBytes, maxPdfBytes, ...officeLimits };
+    const formatLimits = { maxTextBytes, maxHtmlBytes, maxImageBytes, maxPdfBytes, ...officeLimits };
     const sizeLimit = attachmentSizeLimit(format, formatLimits);
     if (size > sizeLimit) throw createAttachmentError('FILE_TOO_LARGE', '附件超过大小限制。');
     loadStoredRecords();
@@ -522,6 +676,21 @@ function createPptFeedbackAttachmentStore({
   function readImageDataUrl(attachmentId) { return readPreviewDataUrl(attachmentId, 'image'); }
   function readPdfDataUrl(attachmentId) { return readPreviewDataUrl(attachmentId, 'pdf'); }
 
+  function readText(attachmentId) {
+    const metadata = getAttachment(attachmentId);
+    if (!['text', 'markdown'].includes(metadata.kind)) throw createAttachmentError('UNSUPPORTED_PREVIEW', '附件类型与文本预览请求不匹配。');
+    const content = fs.readFileSync(getRecordPath(records.get(attachmentId)));
+    if (content.length !== metadata.size || crypto.createHash('sha256').update(content).digest('hex') !== metadata.sha256) {
+      throw createAttachmentError('ATTACHMENT_VERSION_MISMATCH', '文本资料版本已变化，请刷新资料后重试。');
+    }
+    try { return { attachmentId, sha256: metadata.sha256, text: new TextDecoder('utf-8', { fatal: true }).decode(content) }; }
+    catch (error) {
+      const invalid = createAttachmentError('INVALID_TEXT_ENCODING', 'TXT/MD 文件不是有效 UTF-8 文本。');
+      invalid.cause = error;
+      throw invalid;
+    }
+  }
+
   function readOfficeBuffer(attachmentId, expectedHash) {
     const metadata = getAttachment(attachmentId);
     if (!['pptx', 'docx'].includes(metadata.kind)) throw createAttachmentError('UNSUPPORTED_PREVIEW', '附件类型与 Office 预览请求不匹配。');
@@ -598,7 +767,7 @@ function createPptFeedbackAttachmentStore({
     return { ...record.metadata };
   }
 
-  return Object.freeze({ saveAttachment, saveHtmlSnapshot, importAttachment, removeImportedAttachment, getAttachment, getAttachmentPath, createReadStream, readImageDataUrl, readPdfDataUrl, readOfficeBuffer, listAttachments, listDeletedAttachments, listBackupAttachments, deleteAttachment, restoreAttachment });
+  return Object.freeze({ saveTaskManifest, installTaskManifest, deleteTaskManifest, readTaskManifest, listTaskManifests, getTaskDirectory, saveAttachment, saveHtmlSnapshot, importAttachment, removeImportedAttachment, getAttachment, getAttachmentPath, createReadStream, readImageDataUrl, readPdfDataUrl, readText, readOfficeBuffer, listAttachments, listDeletedAttachments, listBackupAttachments, deleteAttachment, restoreAttachment });
 }
 
 module.exports = { createPptFeedbackAttachmentStore };

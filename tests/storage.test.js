@@ -874,16 +874,24 @@ test('应用读取异常后仍可继续使用，但提交计划不会调用保�
   const materialScroll = { scrollLeft: 0, scrollTop: 0 };
   const makeElement = id => ({
     id,
+    clientWidth: 0,
     value: id === 'idea' ? '保留原数据' : '',
     checked: false,
     dataset: {},
     classList: { add() {}, remove() {}, toggle() {} },
-    style: {},
+    style: { setProperty() {} },
     addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
     append() {},
+    replaceChildren() {},
     setAttribute(name, value) { this[name] = String(value); },
     querySelector(selector) {
-      return id === 'workbench-material-view' && selector === '.workbench-material-scroll' ? materialScroll : null;
+      if (id === 'workbench-material-view') {
+        if (selector === '.workbench-material-scroll') return materialScroll;
+      }
+      if (id === 'idea-form') {
+        if (selector === '[data-start-with-material]') return makeElement('start-with-material');
+      }
+      return null;
     },
     querySelectorAll() { return []; },
     scrollIntoView() {}
@@ -893,9 +901,15 @@ test('应用读取异常后仍可继续使用，但提交计划不会调用保�
       if (!elements.has(id)) elements.set(id, makeElement(id));
       return elements.get(id);
     },
-    querySelector() { return null; },
+    querySelector(selector) {
+      if (selector === '.main') return makeElement('main');
+      if (selector === '[data-workbench-next-prompt-batch]') return makeElement('next-prompt-batch');
+      return null;
+    },
     querySelectorAll() { return []; },
-    createElement() { return makeElement('created'); }
+    addEventListener() {},
+    createElement() { return makeElement('created'); },
+    createTextNode(text) { return { textContent: String(text) }; }
   };
   let saveCalls = 0;
   const memoryState = createEmptyState();
@@ -903,12 +917,8 @@ test('应用读取异常后仍可继续使用，但提交计划不会调用保�
     ForwardStepPromptEngine: require('../prototype/prompt-engine.js'),
     ForwardStepResearchCatalog: require('../prototype/research-catalog.js'),
     ForwardStepWorkbenchDialogue: require('../prototype/workbench-dialogue.js'),
-    ForwardStepPptFeedback: {
-      createAnnotationHistory() { return require('../prototype/ppt-feedback.js').createAnnotationHistory(); },
-      buildSelectedAnnotationPrompt() { return ''; },
-      buildSelectedAnnotationPrompts() { return ''; },
-      findSelectedAnnotationConflicts() { return []; }
-    },
+    ForwardStepUnifiedWorkbenchSchema: require('../prototype/unified-workbench-schema.js'),
+    ForwardStepPptFeedback: require('../prototype/ppt-feedback.js'),
     ForwardStepStorage: {
       STORAGE_KEY,
       createEmptyState() { return memoryState; },
@@ -1195,4 +1205,42 @@ test('写作浏览器 VM 缺 schema 时空集合兼容，非空拒绝且不覆�
     assert.throws(() => api.saveState(store, data), error => error.name === 'StorageWriteError');
     assert.equal(store.getItem(STORAGE_KEY), raw);
   }
+});
+
+test("统一工作台字段与旧任务、未发送草稿和提示词版本保存重载", () => {
+  const store = memoryStorage();
+  const project = {
+    id: "legacy-task",
+    idea: "保留旧任务字段",
+    conversationDraft: "尚未发送的消息",
+    workbenchAttachmentIds: ["attachment-1"],
+    workbenchPromptVersions: [{ version: 3, text: "旧提示词版本正文" }]
+  };
+  const saved = saveState(store, { projects: [project] }).projects[0];
+  const loaded = loadState(store).state.projects[0];
+  assert.equal(loaded.id, project.id);
+  assert.equal(loaded.idea, project.idea);
+  assert.equal(loaded.conversationDraft, project.conversationDraft);
+  assert.deepEqual(loaded.workbenchAttachmentIds, project.workbenchAttachmentIds);
+  assert.deepEqual(loaded.workbenchPromptVersions, project.workbenchPromptVersions);
+  assert.equal(loaded.workbenchSchemaVersion, 1);
+  assert.deepEqual(loaded.workbenchContents, []);
+  assert.deepEqual(loaded.workbenchSelection.items, []);
+  assert.deepEqual(loaded, saved);
+});
+
+test("统一工作台 schema 在浏览器端先于 storage 加载", () => {
+  const html = fs.readFileSync(require.resolve("../prototype/index.html"), "utf8");
+  const schemaIndex = html.indexOf("unified-workbench-schema.js");
+  const storageIndex = html.indexOf("/prototype/storage.js");
+  assert.ok(schemaIndex >= 0 && schemaIndex < storageIndex);
+});
+
+test("浏览器缺少统一工作台 schema 时拒绝迁移且不覆盖原数据", () => {
+  const context = {};
+  vm.runInNewContext(fs.readFileSync(require.resolve("../prototype/storage.js"), "utf8"), context);
+  const raw = JSON.stringify({ projects: [{ id: "p1" }] });
+  const store = memoryStorage({ [STORAGE_KEY]: raw });
+  assert.throws(() => context.ForwardStepStorage.loadState(store), error => error.code === "UNIFIED_WORKBENCH_SCHEMA_UNAVAILABLE");
+  assert.equal(store.getItem(STORAGE_KEY), raw);
 });

@@ -44,7 +44,7 @@
     button, input, textarea, select { font: inherit; }
     button { cursor: pointer; }
     .shell { min-height: 100vh; display: grid; grid-template-columns: 56px var(--task-sidebar-width,260px) minmax(0, 1fr); }
-    .activity-rail { position: sticky; top: 0; display:flex; flex-direction:column; align-items:center; gap:9px; height:100vh; padding:10px 7px; border-right:1px solid var(--line); background:#f7f8f7; }
+    .activity-rail { position: sticky; top: 0; z-index:20; display:flex; flex-direction:column; align-items:center; gap:9px; height:100vh; padding:10px 7px; border-right:1px solid var(--line); background:#f7f8f7; }
     .activity-rail button { display:grid; place-items:center; width:38px; height:38px; flex:none; padding:0; border:0; border-radius:10px; background:transparent; color:#64716c; }
     .activity-rail button:hover { background:#e9eeea; color:var(--ink); }
     .activity-rail button.active { background:#e4ebe6; color:var(--green-dark); }
@@ -106,6 +106,12 @@
     .mobile-more summary::-webkit-details-marker { display: none; }
     .mobile-more-menu { position: absolute; right: 0; bottom: 45px; display: grid; min-width: 140px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow); }
     .mobile-more-menu button { padding: 9px 10px; text-align: left; }
+    .activity-rail .legacy-tools { position: relative; }
+    .activity-rail .legacy-tools > summary { display:grid; place-items:center; width:38px; height:38px; border-radius:10px; color:#64716c; cursor:pointer; list-style:none; }
+    .activity-rail .legacy-tools > summary::-webkit-details-marker { display:none; }
+    .activity-rail .legacy-tools > summary:hover { background:#e9eeea; color:var(--ink); }
+    .activity-rail .legacy-tools .mobile-more-menu { left:45px; right:auto; bottom:0; z-index:30; min-width:180px; }
+    .activity-rail .legacy-tools .mobile-more-menu button { display:block; width:100%; height:auto; min-height:34px; padding:9px 10px; text-align:left; white-space:nowrap; }
     .nav button { appearance: none; background: transparent; border: 0; color: #52615e; border-radius: 9px; display: flex; align-items: center; gap: 11px; text-align: left; padding: 10px 11px; font-size: 13px; transition: background .16s, color .16s; }
     .nav button:hover { background: #f4f7f4; color: var(--ink); }
     .nav button.active { color: var(--green-dark); background: var(--green-soft); font-weight: 650; }
@@ -707,6 +713,7 @@
     .workbench-material-note-edit textarea { width:100%; min-height:64px; resize:vertical; font-size:12px; }
     .workbench-material-note-edit p { margin:0; color:var(--muted); font-size:12px; }
     .workbench-material-hint { display:grid; place-items:center; min-height:220px; padding:20px; color:var(--muted); text-align:center; }
+    .workbench-text-preview { max-width:100%; margin:0; padding:18px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#fff; font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace; }
     .workbench-prompt-editor { flex:1; min-height:0; width:100%; resize:none; border:0; border-radius:0; padding:16px; background:#fbfcfa; font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace; }
     .workbench-task-preview dl { display:grid; gap:14px; margin:0 0 18px; }
     .workbench-task-preview dl div { padding-bottom:10px; border-bottom:1px solid #edf0ec; }
@@ -744,6 +751,44 @@
     .workbench-home-preview p { max-width:34ch; margin:0; font-size:12px; line-height:1.65; }
     .workbench-home-preview button { min-height:36px; margin-top:3px; }
     .workbench-material-view[hidden] { display:none; }
+    .workbench-panel-nav { display:flex; gap:6px; padding:7px 10px; border-bottom:1px solid var(--line); background:#fbfcfa; }
+    .workbench-panel-nav button[aria-pressed=true] { border-color:#c4d6c8; background:#edf4ee; color:var(--green-dark); }
+    .workbench-content-panel { display:flex; flex:1; flex-direction:column; min-height:0; overflow:auto; padding:14px; gap:12px; }
+    .workbench-content-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+    .workbench-content-toolbar select { width:auto; min-width:130px; }
+    .workbench-content-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),1fr)); align-content:start; gap:10px; }
+    .workbench-content-card { display:grid; gap:8px; min-width:0; padding:12px; border:1px solid var(--line); border-radius:9px; background:#fff; }
+    .workbench-content-card h3 { margin:0; font-size:14px; overflow-wrap:anywhere; }
+    .workbench-content-meta { margin:0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+    .workbench-content-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+    .workbench-export-dialog { width:min(680px,calc(100vw - 24px)); max-height:min(84vh,760px); padding:0; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:#fff; box-shadow:0 18px 60px #17231d35; }
+    .workbench-export-dialog::backdrop { background:#14201978; }
+    .workbench-export-form { display:grid; gap:14px; max-height:inherit; padding:18px; }
+    .workbench-export-form h2 { margin:0; font-size:18px; }
+    .workbench-export-items { display:grid; gap:8px; overflow:auto; }
+    .workbench-export-item { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:9px; padding:10px; border:1px solid var(--line); border-radius:6px; }
+    .workbench-export-item small { display:block; margin-top:3px; color:var(--muted); line-height:1.5; }
+    .workbench-export-form footer { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
+    .workbench-content-purpose { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; }
+    .workbench-content-purpose select { width:auto; padding:5px 7px; }
+    .workbench-document-editor { display:flex; flex:1; flex-direction:column; min-height:0; gap:10px; padding:12px; }
+    .workbench-document-editor input { max-width:480px; }
+    .workbench-document-editor textarea { flex:1; min-height:220px; width:100%; resize:vertical; font:14px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .workbench-document-editor footer { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .workbench-document-editor [role=status] { margin-right:auto; color:var(--muted); font-size:12px; }
+    .workbench-canvas-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:7px; }
+    .workbench-canvas-toolbar select { width:auto; min-width:160px; }
+    .workbench-canvas-stage { position:relative; flex:1; min-height:480px; overflow:auto; border:1px solid var(--line); border-radius:8px; background-color:#fbfcfa; background-image:radial-gradient(#dfe7df 1px,transparent 1px); background-size:18px 18px; }
+    .workbench-canvas-drop-hint { position:absolute; right:12px; bottom:10px; margin:0; padding:6px 9px; border:1px dashed #b9cbbd; border-radius:6px; background:#fffffff0; color:var(--muted); font-size:12px; pointer-events:none; }
+    .workbench-canvas-node { position:absolute; display:flex; flex-direction:column; gap:6px; min-width:170px; min-height:120px; max-width:80%; padding:8px; overflow:auto; border:1px solid #b9cbbd; border-radius:8px; background:#fff; box-shadow:0 4px 14px #24372b18; touch-action:none; resize:both; }
+    .workbench-canvas-node[aria-selected=true] { outline:2px solid var(--green); outline-offset:1px; }
+    .workbench-canvas-node img { display:block; max-width:100%; max-height:180px; object-fit:contain; pointer-events:none; }
+    .workbench-canvas-node header { display:flex; align-items:center; gap:6px; cursor:grab; }
+    .workbench-canvas-node header strong { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .workbench-canvas-node small { color:var(--muted); }
+    .workbench-canvas-node textarea { min-height:42px; width:100%; resize:vertical; font-size:11px; }
+    .workbench-canvas-empty { display:grid; place-items:center; min-height:260px; padding:24px; color:var(--muted); text-align:center; }
+    .workbench-save-error { color:var(--orange); }
     .workbench-material-empty { display:grid; place-content:center; justify-items:center; gap:8px; flex:1; min-height:0; padding:24px; text-align:center; }
     .workbench-material-empty p { margin:0; color:var(--muted); }
     .workbench-material-empty [role="alert"] { max-width:520px; color:var(--orange); }
@@ -762,14 +807,13 @@
       <nav class="nav" aria-label="主导航">
         <button class="active" type="button" data-view="home" data-nav-key="workspace-new" data-tooltip="新任务" aria-label="新任务"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></button>
         <button type="button" data-view="plans" data-nav-key="workspace-plans" data-tooltip="我的计划" aria-label="我的计划"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg></span></button>
-        <button type="button" data-view="prompt-agent" data-nav-key="workspace-prompts" data-tooltip="提示词工作台" aria-label="提示词工作台"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg></span></button>
         <span class="rail-separator" aria-hidden="true"></span>
         <button type="button" data-view="references" data-nav-key="library" data-tooltip="资料库" aria-label="资料库"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span></button>
         <button type="button" data-view="library" data-nav-key="favorites" data-tooltip="提示词收藏" aria-label="提示词收藏"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17M10 7h6M10 11h6"/></svg></span></button>
-        <button type="button" data-view="article" data-nav-key="writing" data-tooltip="写作工作台" aria-label="写作工作台"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span></button>
         <button type="button" data-view="academic-workbench" data-nav-key="research-academic" data-tooltip="学术研究" aria-label="学术研究"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16M6 5v14m12-14v14M4 19h16M9 9h6M9 13h6"/></svg></span></button>
         <button type="button" data-view="social-research" data-nav-key="research-social" data-tooltip="社媒研究" aria-label="社媒研究"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg></span></button>
         <button type="button" data-view="article" data-nav-key="memory" data-open-memory="true" data-tooltip="记忆与偏好" aria-label="记忆与偏好"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V19h8v-3.3A7 7 0 0 0 12 3Z"/><path d="M9 22h6M9 9h.01M15 9h.01M9 13h6"/></svg></span></button>
+        <details class="mobile-more legacy-tools"><summary aria-label="旧版工作台" data-tooltip="旧版工作台">•••</summary><div class="mobile-more-menu"><button type="button" data-view="prompt-agent" data-nav-key="workspace-prompts">旧版提示词 Agent</button><button type="button" data-view="article" data-nav-key="writing">旧版写作工作台</button></div></details>
       </nav>
       <span class="rail-spacer"></span>
       <button type="button" data-view="settings" data-nav-key="settings" data-tooltip="设置" aria-label="设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1-2.1M7.7 16.3l-2.1-2.1"/><circle cx="12" cy="12" r="3.5"/></svg></span></button>
@@ -827,6 +871,7 @@
               <div class="workbench-messages" id="workbench-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
               <form class="workbench-composer" id="workbench-message-form">
                 <textarea id="workbench-message-input" rows="2" aria-label="继续对话、回答 Agent 或补充批注意见" placeholder="直接回复 Agent：确认建议、回答问题或补充想法…"></textarea>
+                <button class="button-secondary" type="button" data-workbench-convert-paste hidden>转为文档</button>
                 <div class="workbench-agent-status" id="workbench-agent-status" aria-live="polite"></div>
                 <div class="workbench-composer-footer"><span>Enter 发送 · Shift+Enter 换行</span><button class="button-primary" type="submit">发送</button></div>
               </form>
@@ -843,7 +888,7 @@
               <div class="workbench-prompt-actions" id="workbench-prompt-actions" hidden><button type="button" class="button-secondary" id="workbench-regenerate-prompt">按当前来源更新</button><button type="button" class="button-secondary" data-workbench-next-prompt-batch hidden>下一批</button><button type="button" class="button-secondary" data-workbench-carry-writing>带入写作工作台</button><details class="workbench-prompt-sources" id="workbench-prompt-sources"><summary>查看引用来源</summary><div id="workbench-prompt-source-list"></div></details></div>
               <details class="workbench-prompt-history" id="workbench-prompt-history" hidden><summary>提示词历史版本（最近 10 版）</summary><div id="workbench-prompt-history-list"></div></details>
               <div class="workbench-task-preview" id="workbench-task-preview" role="tabpanel" hidden><dl><div><dt>任务目标</dt><dd id="workbench-task-goal"></dd></div><div><dt>领域</dt><dd id="workbench-task-domain"></dd></div><div><dt>现有材料</dt><dd id="workbench-task-materials"></dd></div><div><dt>修改意见</dt><dd id="workbench-task-feedback-count"></dd></div></dl><button type="button" class="button-secondary" id="workbench-details-link">查看计划、步骤与复盘</button></div>
-              <div class="workbench-preview-footer"><span class="local-dot"></span><span>提示词仅在本地生成；复制后由你决定交给哪个 AI 执行。</span></div>
+              <div class="workbench-preview-footer"><span class="local-dot"></span><span>提示词仅在本地生成；复制后由你决定交给哪个 AI 执行。</span><span id="workbench-save-status" role="status" aria-live="polite"></span><button class="button-quiet" id="workbench-open-folder" type="button" hidden>打开保存位置</button></div>
             </aside>
           </section>
           <details class="workbench-details" id="project-details">
@@ -1208,9 +1253,7 @@
   <nav class="mobile-nav" aria-label="移动端主导航">
       <button class="active" data-view="home" data-nav-key="workspace-new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新建</span></button>
       <button data-view="social-research" data-nav-key="research-social"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg><span>研究</span></button>
-      <button data-view="prompt-agent" data-nav-key="workspace-prompts"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg><span>Agent</span></button>
-      <button data-view="article" data-nav-key="writing"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span>写作</span></button>
-      <details class="mobile-more"><summary aria-label="更多页面">•••<span>更多</span></summary><div class="mobile-more-menu"><button data-view="academic-workbench" data-nav-key="research-academic">学术论文</button><button data-view="plans" data-nav-key="workspace-plans">我的计划</button><button data-view="library" data-nav-key="favorites">提示词库</button><button data-view="references" data-nav-key="library">资料库</button><button data-view="article" data-nav-key="memory">记忆与偏好</button><button data-view="settings" data-nav-key="settings">设置</button></div></details>
+      <details class="mobile-more"><summary aria-label="更多页面">•••<span>更多</span></summary><div class="mobile-more-menu"><button data-view="academic-workbench" data-nav-key="research-academic">学术论文</button><button data-view="plans" data-nav-key="workspace-plans">我的计划</button><button data-view="library" data-nav-key="favorites">提示词库</button><button data-view="references" data-nav-key="library">资料库</button><button data-view="article" data-nav-key="memory">记忆与偏好</button><button data-view="settings" data-nav-key="settings">设置</button><button data-view="prompt-agent" data-nav-key="workspace-prompts">旧版提示词 Agent</button><button data-view="article" data-nav-key="writing">旧版写作工作台</button></div></details>
   </nav>
   <dialog id="settings-backup-import-dialog" aria-labelledby="settings-backup-import-title">
     <h2 id="settings-backup-import-title">备份影响预览</h2>
@@ -1253,6 +1296,9 @@
   <script src="/prototype/academic-publishing.js"></script>
   <script src="/prototype/writing-pack-catalog.js"></script>
   <script src="/prototype/writing-workbench-prompts.js"></script>
+  <script src="/prototype/unified-workbench-schema.js"></script>
+  <script src="/prototype/unified-workbench-prompts.js"></script>
+  <script src="/prototype/workbench-canvas.js"></script>
   <script src="/prototype/storage.js"></script>
   <script src="/prototype/social-research-ui.js"></script>
   <script src="/prototype/workspace-backup.js"></script>
@@ -1284,6 +1330,14 @@
   <script src="/prototype/workbench-layout.js"></script>
   <script src="/prototype/pdfjs-loader.js"></script>
   <script src="/prototype/pdf-text-anchor.js"></script>
+  <dialog class="workbench-export-dialog" id="workbench-export-dialog" aria-labelledby="workbench-export-title">
+    <form class="workbench-export-form" method="dialog">
+      <header><h2 id="workbench-export-title">导出本轮素材包</h2><p class="workbench-content-meta" id="workbench-export-description"></p></header>
+      <div class="workbench-export-items" id="workbench-export-items"></div>
+      <p class="workbench-content-meta" id="workbench-export-scope-note" role="status" aria-live="polite"></p>
+      <footer><button class="button-quiet" type="submit" value="cancel">取消</button><button class="button-primary" id="workbench-export-confirm" type="button">生成 ZIP</button></footer>
+    </form>
+  </dialog>
   <script src="/prototype/app.js"></script>
 </body>
 </html>

@@ -18,6 +18,44 @@ const homeImportStart = source.indexOf('  let pendingHomeImport = null;');
 const homeImportEnd = source.indexOf('  const ideaForm =', homeImportStart);
 assert.ok(homeImportStart >= 0 && homeImportEnd > homeImportStart);
 const homeImportSource = source.slice(homeImportStart, homeImportEnd);
+const restoreStart = source.indexOf('  async function restoreWorkbenchManifests() {');
+const restoreEnd = source.indexOf('  function getWorkbenchSessionLayout(', restoreStart);
+assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
+const restoreSource = source.slice(restoreStart, restoreEnd);
+
+test('桌面启动时恢复未进入本地索引的工作台任务', async () => {
+  const project = { id: 'task-restored', title: '恢复任务', workbenchPersistenceEnabled: true, workbenchDraft: { goal: '继续整理' } };
+  const context = {
+    state: { projects: [] }, localStorage: {}, recentRenders: 0, toasts: [],
+    desktopApi: { workbench: { listManifests: async () => ({
+      manifests: [{ taskId: project.id, revision: 4, project }], errors: []
+    }) } },
+    window: { ForwardStepStorage: { migrateState: value => ({ projects: value.projects.map(item => ({ ...item })) }) } },
+    workbenchManifestRevisions: new Map(), workbenchManifestSignatures: new Map(),
+    isUnifiedWorkbenchProject: item => item.workbenchPersistenceEnabled === true,
+    getWorkbenchManifestSignature: item => JSON.stringify(item),
+    prepareWorkbenchManifestState: value => ({ state: value, signatures: [] }),
+    saveState: (_storage, value) => { context.state = value; return value; },
+    scheduleWorkbenchManifestSave: () => assert.fail('已恢复的 manifest 不应立即重复保存'),
+    toast: message => context.toasts.push(message),
+    renderRecent: () => { context.recentRenders++; },
+    getActiveProject: () => context.state.projects[0],
+    renderWorkbench: item => { context.renderedProject = item; }
+  };
+  const restore = vm.runInNewContext(`(function(){ ${restoreSource}; return restoreWorkbenchManifests; })()`, context);
+  await restore();
+
+  assert.equal(context.state.projects[0].id, project.id);
+  assert.equal(context.state.projects[0].workbenchRevision, 4);
+  assert.equal(context.state.projects[0].workbenchDraft.goal, '继续整理');
+  assert.equal(context.state.projects[0].workbenchDraftStatus, 'saved');
+  assert.equal(context.recentRenders, 1);
+  assert.equal(context.renderedProject.id, project.id);
+  const bootStart = source.indexOf('  renderCaseProjectOptions();');
+  const bootEnd = source.indexOf('  const academicLiteratureRoot', bootStart);
+  assert.ok(bootStart >= 0 && bootEnd > bootStart);
+  assert.ok(source.slice(bootStart, bootEnd).includes('void restoreWorkbenchManifests()'));
+});
 
 for (const mode of ['success', 'failure']) {
   test(`工作台异步模型${mode === 'success' ? '成功' : '失败'}回复写入保存后的当前任务`, async () => {
@@ -103,6 +141,7 @@ test('首页添加资料保留未发送草稿，保存重试不重复导入或�
   const calls = { chooseFile: 0, chooseFileTaskId: '', persist: 0, render: 0, request: 0 };
   const context = {
     state: { projects: [] },
+    persistenceBlocked: false,
     activeView: 'home',
     methodCardsApi: null,
     workbenchSessionLayouts: new Map(),
@@ -134,7 +173,7 @@ test('首页添加资料保留未发送草稿，保存重试不重复导入或�
     refreshWorkbenchMaterials: async () => {},
     requestWorkbenchAgent() { calls.request++; }
   };
-  const beginImport = vm.runInNewContext(`(function(){ ${homeImportSource}; return beginHomeMaterialImport; })()`, context);
+  const beginImport = vm.runInNewContext(`(function(){ let homeWorkbenchGoalDraftId = ""; ${homeImportSource}; return beginHomeMaterialImport; })()`, context);
 
   await beginImport();
   assert.equal(context.state.projects.length, 0);
@@ -145,7 +184,7 @@ test('首页添加资料保留未发送草稿，保存重试不重复导入或�
   const project = context.state.projects[0];
   assert.equal(calls.chooseFile, 1);
   assert.equal(project.id, calls.chooseFileTaskId);
-  assert.equal(project.title, '方案.pdf');
+  assert.equal(project.title, input.value.trim());
   assert.equal(project.idea, '');
   assert.deepEqual(Array.from(project.conversation), []);
   assert.equal(project.conversationDraft, input.value);
@@ -247,5 +286,50 @@ test('工作区备份往返保留对话选项和已访问的预览标签', () =>
   assert.equal(restored.projects[0].conversation[1].skipped, true);
   assert.equal(restored.projects[0].conversation[1].replyToMessageId, 'q1');
   assert.equal(restored.projects[0].conversation[2].retryable, true);
+});
+
+test('桌面 manifest 已写入但本地缓存失败时，重试只补缓存', async () => {
+  const start = source.indexOf('  function saveWorkbenchManifest(taskId) {');
+  const end = source.indexOf('  function renderWorkbenchSaveStatus(', start);
+  assert.ok(start >= 0 && end > start);
+  const saveSource = source.slice(start, end);
+  const project = { id: 'task-cache-retry', workbenchPersistenceEnabled: true, workbenchRevision: 1, workbenchDraftStatus: 'dirty' };
+  const manifestWrites = [];
+  let cacheAttempts = 0;
+  const context = {
+    state: { projects: [project] }, localStorage: {}, activeProjectId: project.id,
+    desktopApi: { workbench: { async saveManifest(taskId, manifest) {
+      manifestWrites.push({ taskId, revision: manifest.revision });
+      return { status: 'ok', revision: manifest.revision };
+    } } },
+    workbenchManifestTimers: new Map(), workbenchManifestTimerStartedAt: new Map(),
+    workbenchManifestQueues: new Map(), workbenchManifestRevisions: new Map([[project.id, 1]]),
+    workbenchManifestSignatures: new Map(),
+    workbenchManifestCacheRetryRevisions: new Map(),
+    isUnifiedWorkbenchProject: item => item?.workbenchPersistenceEnabled === true,
+    getWorkbenchManifestSignature(item) {
+      const { workbenchRevision, workbenchDraftStatus, workbenchSaveError, ...snapshot } = item;
+      return JSON.stringify(snapshot);
+    },
+    saveState(_storage, value) {
+      cacheAttempts += 1;
+      if (cacheAttempts === 1) throw new Error('本地缓存写入失败');
+      return value;
+    },
+    renderWorkbenchSaveStatus() {}, toast() {}, clearTimeout, structuredClone
+  };
+  const save = vm.runInNewContext(`(function(){ ${saveSource}; return saveWorkbenchManifest; })()`, context);
+
+  assert.equal(await save(project.id), false);
+  assert.equal(project.workbenchDraftStatus, 'error');
+  assert.equal(await save(project.id), true);
+  assert.deepEqual(manifestWrites, [{ taskId: project.id, revision: 1 }]);
+  assert.equal(cacheAttempts, 2);
+  assert.equal(project.workbenchDraftStatus, 'saved');
+
+  project.workbenchRevision = 2;
+  project.workbenchDraftStatus = 'dirty';
+  assert.equal(await save(project.id), true);
+  assert.deepEqual(manifestWrites, [{ taskId: project.id, revision: 1 }, { taskId: project.id, revision: 2 }]);
 });
 

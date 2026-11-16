@@ -41,6 +41,9 @@
   const academicPublishingSchema = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./academic-publishing.js")
     : typeof globalThis === "undefined" ? null : globalThis.ForwardStepAcademicPublishing;
+  const unifiedWorkbenchSchema = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./unified-workbench-schema.js")
+    : typeof globalThis === "undefined" ? null : globalThis.ForwardStepUnifiedWorkbenchSchema;
   const LEGACY_STORAGE_KEY = "forward-step.workspace.v1";
   const CASE_FIELDS = [
     "id", "projectId", "domain", "taskType", "goal", "preserveItems", "before", "after",
@@ -109,6 +112,14 @@
     }
   }
 
+  class UnifiedWorkbenchSchemaUnavailableError extends Error {
+    constructor() {
+      super("统一工作台 schema 未加载，无法安全规范化项目数据");
+      this.name = "UnifiedWorkbenchSchemaUnavailableError";
+      this.code = "UNIFIED_WORKBENCH_SCHEMA_UNAVAILABLE";
+    }
+  }
+
   class StorageWriteError extends Error {
     constructor(message, cause) {
       super(message, { cause });
@@ -152,13 +163,17 @@
 
   function withProjectDefaults(project) {
     const source = project && typeof project === "object" ? project : {};
+    if (!unifiedWorkbenchSchema || typeof unifiedWorkbenchSchema.normalizeWorkbenchProject !== "function") {
+      throw new UnifiedWorkbenchSchemaUnavailableError();
+    }
+    const normalized = unifiedWorkbenchSchema.normalizeWorkbenchProject(source);
     const legacySuccess = Array.isArray(source.success)
       ? source.success
       : typeof source.success === "string" && source.success.trim()
         ? [source.success]
         : [];
     return {
-      ...source,
+      ...normalized,
       methodId: source.methodId ?? "",
       methodTemporary: source.methodTemporary ?? source.domain === "其他",
       goalSummary: source.goalSummary ?? source.idea ?? "",
@@ -541,7 +556,7 @@
     try {
       migrated = migrateState(JSON.parse(raw));
     } catch (error) {
-      if (error && ["KNOWLEDGE_SCHEMA_UNAVAILABLE", "WRITING_SCHEMA_UNAVAILABLE"].includes(error.code)) throw error;
+      if (error && ["KNOWLEDGE_SCHEMA_UNAVAILABLE", "WRITING_SCHEMA_UNAVAILABLE", "UNIFIED_WORKBENCH_SCHEMA_UNAVAILABLE"].includes(error.code)) throw error;
       throw new StorageReadError("本地数据格式无效，未加载任何数据", error, "STORAGE_PARSE_FAILED");
     }
 

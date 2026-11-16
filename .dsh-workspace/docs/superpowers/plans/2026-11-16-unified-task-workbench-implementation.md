@@ -66,7 +66,7 @@
 - Test: `tests/unified-workbench-schema.test.js`
 - Test: `tests/storage.test.js`
 
-- [ ] **Step 1: 写迁移失败测试和边界测试**
+- [x] **Step 1: 写迁移失败测试和边界测试**
 
 在 `tests/unified-workbench-schema.test.js` 中加入以下最小契约：
 
@@ -98,11 +98,11 @@ test('内容、版本、画布节点和提示词轮次使用稳定 ID', () => {
 });
 ```
 
-- [ ] **Step 2: 核对迁移样本与备份字段**
+- [x] **Step 2: 核对迁移样本与备份字段**
 
 同一个迁移用例补入旧稿轮次、独立提示词任务与一次重复迁移；断言来源关联不重复、旧 ID 和正文保留。相关测试在 Step 5 一次运行，不单独执行缺模块检查。
 
-- [ ] **Step 3: 实现最小数据契约**
+- [x] **Step 3: 实现最小数据契约**
 
 新模块导出 `WORKBENCH_SCHEMA_VERSION = 1`，以及以下有明确输入输出的接口；不将空函数体视为实现：
 
@@ -116,7 +116,7 @@ test('内容、版本、画布节点和提示词轮次使用稳定 ID', () => {
 
 规范化结果按共同契约补齐，`workbenchSelection` 默认 `{ items: [], layoutIntent: { enabled: false } }`。用途属于内容当前状态，交付时写入快照；节点不保存另一份 `selectedForPrompt`。未知字段保留在项目对象中，敏感模型字段继续由现有 `stripModelKeys` 处理。模块沿用现有 UMD 写法，在 Node 导出 `module.exports`，浏览器暴露 `ForwardStepUnifiedWorkbenchSchema`，避免浏览器直接执行裸 `module.exports`。
 
-- [ ] **Step 4: 接入存储迁移并补充旧状态往返测试**
+- [x] **Step 4: 接入存储迁移并补充旧状态往返测试**
 
 在 `prototype/storage.js` 的 `withProjectDefaults` 中调用一次 `normalizeWorkbenchProject`，`migrateState` 沿用该调用路径，不重复规范化、不提升现有顶层 schema 版本。规范化保持纯函数，不在每次读取时创建新 ID 或执行迁移写入；显式接入旧内容时再创建映射。将新模块的 `<script>` 放在 `storage.js` 前，Node 分支使用 `require`。
 
@@ -148,13 +148,13 @@ git commit -m "feat: 增加统一工作台数据契约"
 - Test: `tests/electron-workbench-backup.test.js`
 - Test: `tests/electron-ppt-main-annotation.test.js`
 
-- [ ] **Step 1: 先写任务清单原子写入与恢复测试**
+- [x] **Step 1: 先写任务清单原子写入与恢复测试**
 
 在 `tests/electron-workbench-backup.test.js` 增加一个临时 `userData` 用例，验证：写入任务清单后可读；写入失败时旧清单仍可读；备份导出包含清单和附件；导入 ID 冲突时生成独立任务映射，不覆盖原目录。
 
 测试调用现有 `loadMain({ userData, archivePath })` harness，不启动真实窗口；不要新增第二套 Electron mock。
 
-- [ ] **Step 2: 实现 manifest 和目录操作**
+- [x] **Step 2: 实现 manifest 和目录操作**
 
 在 `electron/ppt-feedback-attachment-store.js` 增加 `saveTaskManifest(taskId, manifest)`（写入后返回 revision）、`readTaskManifest(taskId)`（返回校验后的记录）、`listTaskManifests()`（枚举合法任务目录并分别报告损坏记录）和 `getTaskDirectory(taskId)`（校验 ID 后返回受控目录）。
 
@@ -162,7 +162,7 @@ manifest 写入 `userData/ppt-feedback/<taskId>/workbench.json`，先写同目�
 
 同任务写入串行，旧 revision 不得覆盖新 revision。主进程写入成功后，渲染端才通过已有 `persistWorkbenchState(nextState, options)` 更新 localStorage 兼容缓存，两者完成才显示“已保存”。磁盘成功而缓存失败时保留明确失败提示，重试只补缓存；启动时列出任务 manifest，按 revision 补齐落后的缓存，恢复未进入索引的新任务。坏文件不替换可读缓存，保留文件和恢复提示。任务被删除/归档时同步其 manifest 状态，避免下次扫描复活。新建附件但关联失败时保留待关联附件 ID，重试不重复导入。
 
-- [ ] **Step 3: 暴露最小 IPC 并接入备份**
+- [x] **Step 3: 暴露最小 IPC 并接入备份**
 
 在 `electron/main.js` 注册 `workbench:list-manifests`、`workbench:read-manifest`、`workbench:save-manifest`、`workbench:open-task-folder`，并在 `electron/preload.js` 的 `desktopApi.workbench` 暴露 `listManifests/readManifest/saveManifest/openTaskFolder`。校验任务 ID、revision 和结构；目录由主进程根据任务 ID 计算，渲染端不传任意目录。保存成功返回 `{ status: 'ok', revision }`，失败返回明确错误。打开目录使用现有 Electron shell API；浏览器开发模式不伪造成功。
 
@@ -172,7 +172,7 @@ manifest 写入 `userData/ppt-feedback/<taskId>/workbench.json`，先写同目�
 
 “导出任务”复用归档机制但只收集当前任务和其引用闭包，不能直接导出整个工作区。恢复沿用已有事务，失败回滚本次安装；素材包另走任务 6 的所选素材范围。一次备份往返同时断言正文、未命名草稿、两画布、独立批注、交付快照和来源映射，避免按格式重复往返。
 
-- [ ] **Step 4: 补充写入中断恢复用例并运行**
+- [x] **Step 4: 补充写入中断恢复用例并运行**
 
 运行：
 
@@ -199,7 +199,7 @@ git commit -m "feat: 持久化统一工作台任务清单"
 - Test: `tests/unified-workbench-prompts.test.js`
 - Test: `tests/writing-workbench-prompts.test.js`
 
-- [ ] **Step 1: 写提示词快照测试**
+- [x] **Step 1: 写提示词快照测试**
 
 在 `tests/unified-workbench-prompts.test.js` 验证同一输入产生稳定快照：
 
@@ -219,13 +219,13 @@ assert.equal(prompt.layoutIntent.enabled, false);
 
 另测：未选素材显示“本轮未附素材”；启用“按此构图”时快照包含相对位置/比例；未读取文件只写状态，不写成已理解正文。
 
-- [ ] **Step 2: 实现统一提示词构建器**
+- [x] **Step 2: 实现统一提示词构建器**
 
 实现并导出 `buildUnifiedPrompt(input)`，返回 `{ text, contentVersionIds, layoutIntent }`；`buildMaterialManifest(selectedContents)` 返回固定版本、哈希、来源定位和可读状态的素材清单；`snapshotPromptRound(input)` 根据共同契约创建包含实际正文与素材/批注副本的交付记录，追加到轮次的 `deliveries`，不保留对可变编辑对象的引用。
 
 构建器只组合任务目标、已确认要求、用户补充、所选内容版本、来源定位、批注和构图意图；不执行外部模型、不把导入资料当系统指令。复制/导出时由 `snapshotPromptRound` 固定正文和素材版本。
 
-- [ ] **Step 3: 接入现有对话和写作规则**
+- [x] **Step 3: 接入现有对话和写作规则**
 
 让 `workbench-dialogue.js` 的现有建议/追问结果继续进入统一上下文；`app.js` 的 `buildWorkbenchPrompt` 调用新构建器，再把领域规则和现有批注批次作为输入。保留 `buildModificationPrompt` 的旧调用路径，旧项目没有新画布字段时仍生成旧格式提示词。
 
@@ -264,25 +264,25 @@ git commit -m "feat: 统一工作台提示词轮次"
 - Test: `tests/workbench-agent-persistence.test.js`
 - Test: `tests/workbench-view-state.test.js`
 
-- [ ] **Step 1: 写连续工作区行为测试**
+- [x] **Step 1: 写连续工作区行为测试**
 
 在现有 UI/状态测试中补最小断言：非空目标在首次发送前写入未命名任务草稿；长粘贴提供“转为文档”且不覆盖意见；前轮折叠后可展开；引用文本带来源/版本；保存失败保持编辑内容和 `workbenchSaveError`。
 
-- [ ] **Step 2: 实现任务草稿与保存指示**
+- [x] **Step 2: 实现任务草稿与保存指示**
 
 在 `app.js` 维护共同契约中的草稿和保存状态。输入后 500 ms 合并保存，连续输入最长 2 s 提交一次，使用按任务串行的保存队列和任务 2 的落盘顺序；不把现有仅写 localStorage 的 `persistWorkbenchState` 返回视为桌面保存完成。失败保留内存/编辑内容，停止自动重试并提供重试、导出。切任务、关闭编辑器、正常退出前提交待保存内容；失败可留在当前编辑、导出或明确放弃，不静默清空。退出接入主进程窗口关闭事件及 preload 确认，不依赖异步 `beforeunload` 写入必定完成。空白新任务不创建记录，首次非空目标创建未命名项目。
 
-- [ ] **Step 3: 实现连续消息与预览策略**
+- [x] **Step 3: 实现连续消息与预览策略**
 
 保留同一 composer 接收短回复/修改意见；长正文通过“添加内容 → 新建粘贴文档”编辑。前轮消息使用 `<details>` 或现有折叠模式保存，不删除内容。实现预览规则：已展开且未固定时导入/准备完成自动切换；固定、主动关闭或窄屏输入时不抢占；内容卡片显式点击可重新打开。
 
 未保存/正在编辑的旧轮次不折叠；批量导入只打开首份可预览内容。显式点击可替换固定内容并保持固定；窄屏返回恢复草稿、滚动与焦点。文稿/PPT/PDF/网页回填独立预览；图片结果推荐当前结果画布，用户可改选或新建。异步解析捕获发起任务及内容版本，迟到结果不写入当前别的任务。
 
-- [ ] **Step 4: 实现双入口内容目录**
+- [x] **Step 4: 实现双入口内容目录**
 
 在 `renderWorkbench` 中增加“本任务内容”目录，按文档、文件、画布、提示词筛选；对话内卡片和目录都只引用同一稳定 ID。移除重复“你的任务/计划工作台/从第一步开始”说明，已有任务显示任务名，布局切换保持工具栏最右侧；空预览只保留一个说明和“添加内容”。浏览器批注蓝色编号不渲染为产品控件。
 
-- [ ] **Step 5: 实现独立粘贴文档和用途切换**
+- [x] **Step 5: 实现独立粘贴文档和用途切换**
 
 文档编辑器在首次输入时创建可恢复未命名文档，支持命名、选文批注、取消/保存和关闭后恢复；正文不混入修改意见。导入后卡片显示“参考资料/外部结果”及默认原因，一键切换只改变用途字段；原件、正文、批注、版本不变。直接长粘贴到 composer 时提供转文档操作，成功后才移除转移文本。
 
@@ -314,11 +314,11 @@ git commit -m "feat: 合并任务对话与内容预览"
 - Test: `tests/workbench-canvas.test.js`
 - Test: `tests/workbench-drawing.test.js`
 
-- [ ] **Step 1: 写画布操作测试**
+- [x] **Step 1: 写画布操作测试**
 
 覆盖以下纯函数行为：新建空画布会保存；同一内容版本可被两张画布引用；移动/缩放/分组只改变当前画布；移除节点不删除任务内容；复制画布复制排列和批注但保持原件/版本 ID；`captureLayoutIntent` 只在显式启用时返回相对位置、比例和叠放顺序。
 
-- [ ] **Step 2: 实现 `workbench-canvas.js`**
+- [x] **Step 2: 实现 `workbench-canvas.js`**
 
 导出以下无 DOM 操作，返回新对象供既有保存入口提交：
 
@@ -335,11 +335,11 @@ git commit -m "feat: 合并任务对话与内容预览"
 
 `setPromptSelection` 的输入输出是 `workbenchSelection`，不是临时节点选中状态。原件在任务内共用，跨画布同原件去重导出；来自不同节点的局部意见仍各自保留。删除内容/画布采用保留历史引用的移除标记，已交付版本仍可回看；升级素材版本必须显式替换节点引用。
 
-- [ ] **Step 3: 接入画布 UI**
+- [x] **Step 3: 接入画布 UI**
 
 在右侧预览中增加画布切换、新建、重命名、复制、拖入/文件选择、移动缩放、框选批注、分组、对比和本轮素材选择。画布不铺成永久页签；选中素材进入“本轮使用”清单，普通点击/拖动/切换画布不改变清单。加入撤销/重做、移除节点、取消分组和键盘操作；触屏或窄屏提供放大查看与返回对话入口。
 
-- [ ] **Step 4: 接入构图和跨画布引用**
+- [x] **Step 4: 接入构图和跨画布引用**
 
 实现“按此构图”开关；只对选定分组/选区写入提示词。画布普通缩放为视角变化，节点尺寸调整为内容变化；区域批注使用内容坐标，缩放后重新渲染不漂移。跨画布引用只复用原件，不删除其他画布节点。
 
@@ -371,27 +371,27 @@ git commit -m "feat: 增加统一工作台多画布"
 - Test: `tests/electron-workbench-backup.test.js`
 - Test: `tests/workbench-viewer-layout.test.js`
 
-- [ ] **Step 1: 接入类型状态与预览入口**
+- [x] **Step 1: 接入类型状态与预览入口**
 
 沿用现有 HTML、PDF、DOCX、PPTX、PNG/JPG/JPEG/WebP 预览和批注逻辑。内容卡片显示 `已读正文 / 仅预览 / 仅原件 / 解析失败`，解析失败保留原件和重试。网址生成静态快照并显示来源；不把静态 HTML 当成可运行 APP。PPT 使用页缩略图/当前页，PDF 使用文字层或区域批注，图片/截图使用单图或画布。
 
 现有附件 `FORMATS` 尚无 TXT/MD；本任务明确补文件选择、类型/大小限制、UTF-8 文本读取和正文预览，原字节仍保留。图片拖放/粘贴复用受控导入流程，新增接收字节 IPC 必须同步 preload，主进程校验长度与真实图片类型，不接受任意源路径。PPT/PDF 页与文字片段放入画布时保存版本/页码/片段并可返回原内容。扫描 PDF 保留图像引用；网址抓取失败保留 URL 和可重试状态。
 
-- [ ] **Step 2: 实现素材包导出**
+- [x] **Step 2: 实现素材包导出**
 
 在任务内容菜单增加“导出本轮素材包”。导出包括：已固定的提示词正文、文件对应表、实际选中的原件/页面区域图、构图参考图（启用时）和来源版本；不写入本机绝对路径或模型凭证。若当前能力只能导出完整原件，导出前明确范围并允许排除，不悄悄扩大材料范围。
 
 主进程导出入口与 `desktopApi.workbench` 同步添加。构图参考图由本轮选区的内容坐标渲染，文件以稳定编号区分同名素材，清单对应提示词中的编号。缺原件或构图图生成失败时停止完整成功提示，保留已准备快照并允许只重试失败导出；排除素材会形成新的交付快照，不能改变旧清单。
 
-- [ ] **Step 3: 接入保存位置和导出状态**
+- [x] **Step 3: 接入保存位置和导出状态**
 
 对桌面环境调用 `workbench:open-task-folder`，浏览器/草图显示“临时演示，未接入桌面保存”而不是伪造成功。任务导出沿用现有 workspace backup；文件、画布、批注和提示词清单都在同一稳定 ID 图中。
 
-- [ ] **Step 4: 运行唯一连续界面复核**
+- [x] **Step 4: 运行唯一连续界面复核**
 
 只启动一次现有开发桌面/浏览器入口，完成：输入目标但不发送 → 新建未命名文档 → 导入一张图片 → 新建两张画布并跨画布引用 → 生成/复制提示词 → 导入外部结果 → 切换用途 → 关闭并重启恢复。顺手检查固定预览、窄屏返回和键盘撤销；不重新走全部历史业务、不重新测试每种文件格式。
 
-- [ ] **Step 5: 运行受影响测试并提交**
+- [ ] **Step 5: 运行受影响测试并提交**（定向测试与差异检查已完成；提交暂缓）
 
 运行：
 
@@ -417,12 +417,13 @@ git commit -m "feat: 完成统一任务工作台交付"
 
 ## 执行交接
 
-Plan complete and saved to `.dsh-workspace/docs/superpowers/plans/2026-11-16-unified-task-workbench-implementation.md`. Two execution options:
+实现已在 D:/VScode/项目/提示词工具接入统一数据契约、任务内容/草稿持久化、附件 manifest、提示词快照、多画布、预览和备份桥接。
+本轮最终定向验证：`node --test tests/electron-ppt-main-annotation.test.js tests/workbench-viewer-layout.test.js` 通过，17 项通过、0 失败；`git diff --check` 通过。先前记录的 14 个相关测试文件及页面布局结果未重复运行。
+连续桌面流程已完成并在 D 盘 4175 实例重启后恢复：保存文档、导入一张测试 PNG、建立两张共享内容版本的画布、生成并复制提示词、保存外部结果版本并切换用途；恢复后任务为 saved、revision 36，含 3 项内容、2 张画布、1 轮提示词。此流程未覆盖真实系统文件选择器。
+未覆盖：真实文件选择器路径、外部模型实际执行（桌面模型未配置）、复杂 Office 格式保真；云同步、协作、专业绘图和完整 PPT 编辑仍不属于本次范围。
+未提交：D 盘目标工作树位于 main 且已有未提交改动，未执行 add/commit，避免混入既有修改。C 盘 task-workbench-merge 是不同工作树，`prototype/app.js` 与 D 盘版本不同，本次不做跨树覆盖或同步。
 
-1. **Subagent-Driven (recommended)** - dispatch a fresh subagent per task, review between tasks.
-2. **Inline Execution** - execute tasks in this session with checkpoints.
-
-当前交付为计划及定向修订，尚未开始实现。用户要求实施时按任务依赖继续，不必先增加一次执行方式确认。
+入口复核补记（2026-11-16）：统一任务首页已存在，但桌面与窄屏主导航仍把“提示词 Agent”和“写作工作台”作为并列入口，未满足三入口融合。现将二者从主导航收起并放入“旧版工作台/更多”作为兼容访问，不删除旧页面或数据。旧版页面内容迁入统一任务目录、旧建任务事件全部重接到统一工作区仍未完成，不能据此标记融合工作全部完成。
 
 ## 最新批注核对（545e9bd0-c249-4998-8f32-d91866b2a57e）
 
@@ -435,4 +436,4 @@ Plan complete and saved to `.dsh-workspace/docs/superpowers/plans/2026-11-16-uni
 | 重复标题、布局靠右、任务名、侧栏空态 | 3 | Task 4 Step 4：保留；无需新增视觉验收关卡 |
 | 精简测试与验收 | 7 | 验证预算、Task 1/2/6：去掉缺模块失败检查和最终重复备份往返，保留一次连续桌面操作 |
 
-设计要求已有文字落点；本次修正的是实施遗漏与契约歧义，不代表功能已经完成。代码证据：`electron/preload.js` 负责桥接，`prototype/workspace-backup.js` 使用显式白名单，`persistWorkbenchState` 仅写本地状态，附件格式表当前未含 TXT/MD。后续实现据此更新对应文件及调用者。
+续跑复核更新（2026-11-16）：`electron/preload.js` 已桥接工作台任务清单与素材包 API，`prototype/workspace-backup.js` 使用显式字段白名单；桌面任务清单按 revision 串行写入，确认 manifest 后回写本地缓存并更新保存状态。TXT/MD 已接入附件类型与大小校验、桌面文件选择导入、UTF-8 版本校验和正文预览；`node --test tests/electron-ppt-preview.test.js tests/electron-workbench-backup.test.js` 33 项通过。回归曾发现长粘贴转换按钮缺失时工作台初始化崩溃，`prototype/app.js` 已改为可选监听；`node --test tests/storage.test.js tests/workbench-long-paste.test.js` 51 项通过。真实系统文件选择器、外部模型实际执行与复杂 Office 格式保真仍未验证；本轮未提交，保留 D 盘工作树既有改动。
