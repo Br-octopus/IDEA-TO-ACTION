@@ -120,6 +120,10 @@
     .service-status { color: #52615e; font-size: 12px; }
     .service-status.ready { color: #287253; }
     .service-status.offline { color: #9b6c3c; }
+    .mobile-task-list-toggle { display:none; place-items:center; width:32px; height:32px; flex:none; padding:0; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--green-dark); }
+    .mobile-task-list-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.8; }
+    .mobile-task-list-toggle:focus-visible { outline:2px solid #4b8b74; outline-offset:2px; }
+    .mobile-task-list-backdrop { display:none; }
     .privacy { display: flex; align-items: center; gap: 7px; }
     .privacy svg { width: 15px; height: 15px; stroke: #6d897a; fill: none; stroke-width: 1.7; }
     .content { width: min(1160px, 100%); margin: 0 auto; padding: 42px 42px 70px; }
@@ -213,7 +217,7 @@
     .notice { border: 1px solid #e4ebe3; border-radius: 10px; background: #f2f6f1; padding: 12px 14px; color: #53645d; display: flex; gap: 10px; align-items: flex-start; font-size: 12px; margin: 18px 0 25px; }
     .notice svg { width: 16px; height: 16px; flex: none; stroke: #67856e; fill: none; stroke-width: 1.8; }
     .social-layout { display: grid; gap: 18px; }
-    #view-prompt-agent [hidden] { display: none !important; }
+    .view[hidden] { display: none !important; }
     #writing-workbench-root, #writing-workbench-root .field { min-width: 0; }
     #writing-workbench-root { overflow-wrap: anywhere; }
     #writing-workbench-root input, #writing-workbench-root select, #writing-workbench-root textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
@@ -566,6 +570,10 @@
     @media (max-width:1100px) { .workbench-preview-pane .workbench-pane-heading p { display:none; } }
     .workbench-messages { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; align-items:flex-start; gap:12px; padding:18px; background:#fafbf9; }
     .workbench-message { max-width:min(88%,680px); padding:11px 14px; border:1px solid var(--line); border-radius:12px 12px 12px 3px; background:#fff; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .workbench-old-turn { width:min(88%,680px); }
+    .workbench-old-turn > summary { padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:#f4f7f4; color:var(--muted); cursor:pointer; font-size:12px; }
+    .workbench-old-turn[open] > summary { margin-bottom:10px; }
+    .workbench-old-turn-body { display:flex; flex-direction:column; align-items:flex-start; gap:12px; }
     .workbench-message.user { align-self:flex-end; border-color:#d5e4d8; border-radius:12px 12px 3px 12px; background:var(--green-soft); }
     .workbench-message-label { display:block; margin-bottom:4px; color:var(--muted); font-size:11px; font-weight:650; }
     .workbench-message p { margin:0; }
@@ -707,6 +715,7 @@
     .workbench-material-note-edit textarea { width:100%; min-height:64px; resize:vertical; font-size:12px; }
     .workbench-material-note-edit p { margin:0; color:var(--muted); font-size:12px; }
     .workbench-material-hint { display:grid; place-items:center; min-height:220px; padding:20px; color:var(--muted); text-align:center; }
+    .workbench-text-preview { max-width:100%; margin:0; padding:18px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#fff; font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace; }
     .workbench-prompt-editor { flex:1; min-height:0; width:100%; resize:none; border:0; border-radius:0; padding:16px; background:#fbfcfa; font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace; }
     .workbench-task-preview dl { display:grid; gap:14px; margin:0 0 18px; }
     .workbench-task-preview dl div { padding-bottom:10px; border-bottom:1px solid #edf0ec; }
@@ -744,6 +753,44 @@
     .workbench-home-preview p { max-width:34ch; margin:0; font-size:12px; line-height:1.65; }
     .workbench-home-preview button { min-height:36px; margin-top:3px; }
     .workbench-material-view[hidden] { display:none; }
+    .workbench-panel-nav { display:flex; gap:6px; padding:7px 10px; border-bottom:1px solid var(--line); background:#fbfcfa; }
+    .workbench-panel-nav button[aria-pressed=true] { border-color:#c4d6c8; background:#edf4ee; color:var(--green-dark); }
+    .workbench-content-panel { display:flex; flex:1; flex-direction:column; min-height:0; overflow:auto; padding:14px; gap:12px; }
+    .workbench-content-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+    .workbench-content-toolbar select { width:auto; min-width:130px; }
+    .workbench-content-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),1fr)); align-content:start; gap:10px; }
+    .workbench-content-card { display:grid; gap:8px; min-width:0; padding:12px; border:1px solid var(--line); border-radius:9px; background:#fff; }
+    .workbench-content-card h3 { margin:0; font-size:14px; overflow-wrap:anywhere; }
+    .workbench-content-meta { margin:0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+    .workbench-content-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+    .workbench-export-dialog { width:min(680px,calc(100vw - 24px)); max-height:min(84vh,760px); padding:0; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:#fff; box-shadow:0 18px 60px #17231d35; }
+    .workbench-export-dialog::backdrop { background:#14201978; }
+    .workbench-export-form { display:grid; gap:14px; max-height:inherit; padding:18px; }
+    .workbench-export-form h2 { margin:0; font-size:18px; }
+    .workbench-export-items { display:grid; gap:8px; overflow:auto; }
+    .workbench-export-item { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:9px; padding:10px; border:1px solid var(--line); border-radius:6px; }
+    .workbench-export-item small { display:block; margin-top:3px; color:var(--muted); line-height:1.5; }
+    .workbench-export-form footer { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
+    .workbench-content-purpose { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; }
+    .workbench-content-purpose select { width:auto; padding:5px 7px; }
+    .workbench-document-editor { display:flex; flex:1; flex-direction:column; min-height:0; gap:10px; padding:12px; }
+    .workbench-document-editor input { max-width:480px; }
+    .workbench-document-editor textarea { flex:1; min-height:220px; width:100%; resize:vertical; font:14px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .workbench-document-editor footer { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .workbench-document-editor [role=status] { margin-right:auto; color:var(--muted); font-size:12px; }
+    .workbench-canvas-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:7px; }
+    .workbench-canvas-toolbar select { width:auto; min-width:160px; }
+    .workbench-canvas-stage { position:relative; flex:1; min-height:480px; overflow:auto; border:1px solid var(--line); border-radius:8px; background-color:#fbfcfa; background-image:radial-gradient(#dfe7df 1px,transparent 1px); background-size:18px 18px; }
+    .workbench-canvas-drop-hint { position:absolute; right:12px; bottom:10px; margin:0; padding:6px 9px; border:1px dashed #b9cbbd; border-radius:6px; background:#fffffff0; color:var(--muted); font-size:12px; pointer-events:none; }
+    .workbench-canvas-node { position:absolute; display:flex; flex-direction:column; gap:6px; min-width:170px; min-height:120px; max-width:80%; padding:8px; overflow:auto; border:1px solid #b9cbbd; border-radius:8px; background:#fff; box-shadow:0 4px 14px #24372b18; touch-action:none; resize:both; }
+    .workbench-canvas-node[aria-selected=true] { outline:2px solid var(--green); outline-offset:1px; }
+    .workbench-canvas-node img { display:block; max-width:100%; max-height:180px; object-fit:contain; pointer-events:none; }
+    .workbench-canvas-node header { display:flex; align-items:center; gap:6px; cursor:grab; }
+    .workbench-canvas-node header strong { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .workbench-canvas-node small { color:var(--muted); }
+    .workbench-canvas-node textarea { min-height:42px; width:100%; resize:vertical; font-size:11px; }
+    .workbench-canvas-empty { display:grid; place-items:center; min-height:260px; padding:24px; color:var(--muted); text-align:center; }
+    .workbench-save-error { color:var(--orange); }
     .workbench-material-empty { display:grid; place-content:center; justify-items:center; gap:8px; flex:1; min-height:0; padding:24px; text-align:center; }
     .workbench-material-empty p { margin:0; color:var(--muted); }
     .workbench-material-empty [role="alert"] { max-width:520px; color:var(--orange); }
@@ -752,6 +799,17 @@
     @media (max-width:680px) { .workbench-annotation-editor { grid-template-columns:minmax(0,1fr); } .workbench-annotation-options, .workbench-annotation-help { grid-column:1; } .workbench-annotation-option-grid { grid-template-columns:minmax(0,1fr); } }
     @media (max-width:680px) { .workbench-annotation-editor { grid-template-columns:minmax(0,1fr); } .workbench-annotation-options, .workbench-annotation-help { grid-column:1; } .workbench-annotation-option-grid { grid-template-columns:minmax(0,1fr); } .workbench-toolbar { padding:5px 8px; } .workbench-toolbar-actions { gap:3px; } .workbench-layout-switch button { width:31px; height:32px; } .main.workbench-active #view-home { padding:20px 16px; } }
     @media (max-width:760px) { .main.workbench-active { height:calc(100dvh - 67px); } .workbench-details[open] { padding:10px 12px 18px; } }
+    @media (max-width:760px) {
+      .mobile-task-list-toggle { display:grid; }
+      .topbar { gap:8px; padding:0 10px; }
+      .breadcrumb { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .top-right { max-width:108px; flex:none; overflow:hidden; }
+      .top-right .privacy { display:none; }
+      .service-status { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .mobile-task-list-backdrop:not([hidden]) { display:block; position:fixed; z-index:29; inset:54px 0 67px; width:100%; padding:0; border:0; background:rgba(24,43,44,.18); }
+      .shell.mobile-tasks-open .task-sidebar { display:flex; visibility:visible; position:fixed; inset:62px 12px 75px; z-index:30; width:auto; height:auto; min-height:0; border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 28px rgba(24,43,44,.18); }
+      .shell.mobile-tasks-open #task-sidebar-divider { display:none; }
+    }
   </style>
 </head>
 <body>
@@ -762,11 +820,9 @@
       <nav class="nav" aria-label="主导航">
         <button class="active" type="button" data-view="home" data-nav-key="workspace-new" data-tooltip="新任务" aria-label="新任务"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span></button>
         <button type="button" data-view="plans" data-nav-key="workspace-plans" data-tooltip="我的计划" aria-label="我的计划"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 10h11M8 15h7M4 5h.01M4 10h.01M4 15h.01M5 20h14"/></svg></span></button>
-        <button type="button" data-view="prompt-agent" data-nav-key="workspace-prompts" data-tooltip="提示词工作台" aria-label="提示词工作台"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg></span></button>
         <span class="rail-separator" aria-hidden="true"></span>
         <button type="button" data-view="references" data-nav-key="library" data-tooltip="资料库" aria-label="资料库"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 3.5 7.5 12 12l8.5-4.5L12 3ZM3.5 12 12 16.5l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></svg></span></button>
         <button type="button" data-view="library" data-nav-key="favorites" data-tooltip="提示词收藏" aria-label="提示词收藏"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 4.5A2.5 2.5 0 0 1 8.5 2H20v17H8.5A2.5 2.5 0 0 0 6 21.5zM6 4.5v17M10 7h6M10 11h6"/></svg></span></button>
-        <button type="button" data-view="article" data-nav-key="writing" data-tooltip="写作工作台" aria-label="写作工作台"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span></button>
         <button type="button" data-view="academic-workbench" data-nav-key="research-academic" data-tooltip="学术研究" aria-label="学术研究"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16M6 5v14m12-14v14M4 19h16M9 9h6M9 13h6"/></svg></span></button>
         <button type="button" data-view="social-research" data-nav-key="research-social" data-tooltip="社媒研究" aria-label="社媒研究"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg></span></button>
         <button type="button" data-view="article" data-nav-key="memory" data-open-memory="true" data-tooltip="记忆与偏好" aria-label="记忆与偏好"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V19h8v-3.3A7 7 0 0 0 12 3Z"/><path d="M9 22h6M9 9h.01M15 9h.01M9 13h6"/></svg></span></button>
@@ -788,6 +844,7 @@
     </aside>
     <main class="main workbench-active">
       <header class="topbar">
+        <button class="mobile-task-list-toggle" type="button" id="mobile-task-list-toggle" aria-label="展开任务列表" aria-expanded="false" title="展开任务列表"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
         <div class="breadcrumb" id="breadcrumb">工作台　/　新建规划</div>
         <div class="top-right"><div class="privacy"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.7 2.9 8 7 10 4.1-2 7-5.3 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>本机保存 · 调用 Agent 时发送至已配置模型服务</span></div><span class="service-status" id="service-status">检查服务中…</span></div>
       </header>
@@ -828,22 +885,22 @@
               <form class="workbench-composer" id="workbench-message-form">
                 <textarea id="workbench-message-input" rows="2" aria-label="继续对话、回答 Agent 或补充批注意见" placeholder="直接回复 Agent：确认建议、回答问题或补充想法…"></textarea>
                 <div class="workbench-agent-status" id="workbench-agent-status" aria-live="polite"></div>
-                <div class="workbench-composer-footer"><span>Enter 发送 · Shift+Enter 换行</span><button class="button-primary" type="submit">发送</button></div>
+                <div class="workbench-composer-footer"><span>Enter 发送 · Shift+Enter 换行</span><button class="button-secondary" id="workbench-promote-to-document" type="button" hidden>转为独立文档</button><button class="button-primary" type="submit">发送</button></div>
               </form>
               </div>
             </section>
             <div id="workbench-divider" role="separator" tabindex="0" aria-orientation="vertical" aria-label="调整对话与预览宽度" title="拖动调宽；向两端拖动切换专注模式"></div>
             <aside class="workbench-preview-pane" aria-label="当前任务内容预览">
-              <div class="workbench-preview-bar"><div class="workbench-preview-tabs" role="tablist" aria-label="工作区预览内容"><button type="button" role="tab" data-workbench-preview="material" aria-selected="true">资料</button><button type="button" role="tab" data-workbench-preview="prompt" aria-selected="false">修改提示词</button><button type="button" role="tab" data-workbench-preview="task" aria-selected="false">任务摘要</button></div><div class="workbench-preview-actions"><span class="sr-only" id="workbench-preview-heading">资料</span><button type="button" class="workbench-icon-button" id="workbench-add-material" title="添加资料" aria-label="添加资料"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button type="button" class="workbench-icon-button" id="workbench-copy-prompt" title="复制提示词" aria-label="复制提示词"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></div></div>
+              <div class="workbench-preview-bar"><div class="workbench-preview-tabs" role="tablist" aria-label="工作区预览内容"><button type="button" role="tab" data-workbench-preview="material" aria-selected="true">资料</button><button type="button" role="tab" data-workbench-preview="prompt" aria-selected="false">修改提示词</button><button type="button" role="tab" data-workbench-preview="task" aria-selected="false">任务摘要</button></div><div class="workbench-preview-actions"><span class="sr-only" id="workbench-preview-heading">资料</span><button type="button" class="workbench-icon-button" id="workbench-preview-pin" aria-pressed="false" title="固定当前预览" aria-label="固定当前预览"><svg viewBox="0 0 24 24"><path d="M8 4h8l-1.5 5 3.5 3v2H6v-2l3.5-3L8 4Zm4 10v7"/></svg></button><button type="button" class="workbench-icon-button" id="workbench-preview-close" title="关闭预览" aria-label="关闭预览"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button><button type="button" class="workbench-icon-button" id="workbench-add-material" title="添加资料" aria-label="添加资料"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button type="button" class="workbench-icon-button" id="workbench-copy-prompt" title="复制提示词" aria-label="复制提示词"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></div></div>
               <span class="sr-only" id="workbench-preview-description">查看图片、文档、PPT 与网页，在内容上标记修改意见。</span>
               <div class="workbench-home-preview" id="workbench-home-preview" hidden></div>
               <div class="workbench-material-view" id="workbench-material-view" role="tabpanel" aria-label="资料查看与批注" tabindex="-1"></div>
               <div class="workbench-prompt-status" id="workbench-prompt-status" role="status" hidden></div>
               <textarea class="workbench-prompt-editor" id="workbench-prompt-preview" role="tabpanel" aria-label="可编辑的修改提示词" hidden></textarea>
-              <div class="workbench-prompt-actions" id="workbench-prompt-actions" hidden><button type="button" class="button-secondary" id="workbench-regenerate-prompt">按当前来源更新</button><button type="button" class="button-secondary" data-workbench-next-prompt-batch hidden>下一批</button><button type="button" class="button-secondary" data-workbench-carry-writing>带入写作工作台</button><details class="workbench-prompt-sources" id="workbench-prompt-sources"><summary>查看引用来源</summary><div id="workbench-prompt-source-list"></div></details></div>
+              <div class="workbench-prompt-actions" id="workbench-prompt-actions" hidden><button type="button" class="button-secondary" id="workbench-regenerate-prompt">按当前来源更新</button><button type="button" class="button-secondary" data-workbench-next-prompt-batch hidden>下一批</button><details class="workbench-prompt-sources" id="workbench-prompt-sources"><summary>查看引用来源</summary><div id="workbench-prompt-source-list"></div></details></div>
               <details class="workbench-prompt-history" id="workbench-prompt-history" hidden><summary>提示词历史版本（最近 10 版）</summary><div id="workbench-prompt-history-list"></div></details>
               <div class="workbench-task-preview" id="workbench-task-preview" role="tabpanel" hidden><dl><div><dt>任务目标</dt><dd id="workbench-task-goal"></dd></div><div><dt>领域</dt><dd id="workbench-task-domain"></dd></div><div><dt>现有材料</dt><dd id="workbench-task-materials"></dd></div><div><dt>修改意见</dt><dd id="workbench-task-feedback-count"></dd></div></dl><button type="button" class="button-secondary" id="workbench-details-link">查看计划、步骤与复盘</button></div>
-              <div class="workbench-preview-footer"><span class="local-dot"></span><span>提示词仅在本地生成；复制后由你决定交给哪个 AI 执行。</span></div>
+              <div class="workbench-preview-footer"><span class="local-dot"></span><span>提示词仅在本地生成；复制后由你决定交给哪个 AI 执行。</span><span id="workbench-save-status" role="status" aria-live="polite"></span><button class="button-quiet" id="workbench-open-folder" type="button" hidden>打开保存位置</button><button class="button-quiet" id="workbench-export-task" type="button" hidden title="导出当前任务及其附件"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3h16v-3"/></svg>导出本任务</button></div>
             </aside>
           </section>
           <details class="workbench-details" id="project-details">
@@ -953,7 +1010,7 @@
           </div>
         </section>
 
-        <section class="view" id="view-prompt-agent">
+        <section class="view" id="view-prompt-agent" hidden>
           <div class="eyebrow">提示词 Agent</div><h1>把想法变成下一步</h1>
           <p class="lede">梳理目标、检查遗漏、规划步骤，并生成可交给其他 AI 的提示词。</p>
           <div class="social-tools" role="group" aria-label="Agent 场景"><button type="button" class="button-secondary" data-agent-scene="task">任务梳理</button><button type="button" class="button-secondary" data-agent-scene="ppt">PPT 规划</button></div>
@@ -981,7 +1038,7 @@
           <section class="academic-panel" id="academic-publishing-panel" data-academic-panel="publishing" role="tabpanel" hidden><div id="academic-publishing-root"></div></section>
         </section>
 
-        <section class="view" id="view-prompt-optimize">
+        <section class="view" id="view-prompt-optimize" hidden>
           <div class="eyebrow">提示词工作台</div><h1>让现有提示词更清楚、更可靠</h1><p class="lede">粘贴你正在用的提示词，告诉 AI 检查遗漏、矛盾、多余要求和可能的错误，并用例子验证改动。</p>
           <form class="form-panel prompt-form" id="optimize-form">
             <div class="field"><label class="field-label" for="old-prompt">你现在的提示词</label><textarea id="old-prompt" required placeholder="把你正在使用的提示词粘贴到这里……"></textarea></div>
@@ -1121,7 +1178,7 @@
           <div class="section-heading"><div><h2>中文写作诊断与改写</h2><p>参考编辑边界和测试案例，不把“像不像 AI”当作可精确检测的标签</p></div></div>
           <div class="reference-grid">
             <article class="reference"><h3>Humanizer-zh</h3><p>中文写作改写 Skill，提供常见表达问题、改写边界和短案例，可作为编辑流程参考。</p><div class="borrow">本工具借鉴：先引用具体句子说明问题，再做最小修改；事实与作者语气优先保留。项目为 MIT；此处保留来源链接，只提炼通用规则，没有复制整套 Skill 或仓库内容。</div><a href="https://github.com/op7418/Humanizer-zh" target="_blank" rel="noreferrer">查看 GitHub ↗</a></article>
-            <article class="reference"><h3>本地精简写作规则</h3><p>文章助手只把与本次任务相关的少量检查规则放进生成的提示词。</p><div class="borrow">包含：空泛铺垫、重复解释、助手式客套、过度总结、翻译腔，以及事实保留、不得编造和“没必要就不改”。不自动把整仓库内容发送给 AI。</div><button class="button-quiet" type="button" data-view="article">打开写作工作台</button></article>
+            <article class="reference"><h3>本地精简写作规则</h3><p>文章助手只把与本次任务相关的少量检查规则放进生成的提示词。</p><div class="borrow">包含：空泛铺垫、重复解释、助手式客套、过度总结、翻译腔，以及事实保留、不得编造和“没必要就不改”。不自动把整仓库内容发送给 AI。</div><button class="button-quiet" type="button" data-view="home">在统一工作台开始任务</button></article>
           </div>
           <div class="notice" style="max-width:900px;margin-top:18px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span><strong>省 token 的资料用法：</strong>默认只在本地保存仓库名称、用途分类、简短摘要和原始链接，不发送给模型。接入模型后，先在本地按任务筛选，再只把少量必要片段放入本轮上下文；这不等于模型被永久训练。导入任何仓库内容前，要逐项核对许可证、作者和来源；不要把提示词仓库里的文字直接当成可信指令执行。</span></div>
           <div class="section-heading"><div><h2>规划、评测与版本管理案例</h2><p>参考这些项目如何澄清任务、推进步骤和比较结果</p></div></div>
@@ -1205,11 +1262,10 @@
       </div>
     </main>
   </div>
+  <button class="mobile-task-list-backdrop" id="mobile-task-list-backdrop" type="button" aria-label="关闭任务列表" hidden></button>
   <nav class="mobile-nav" aria-label="移动端主导航">
       <button class="active" data-view="home" data-nav-key="workspace-new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新建</span></button>
       <button data-view="social-research" data-nav-key="research-social"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M8 11h6M11 8v6"/></svg><span>研究</span></button>
-      <button data-view="prompt-agent" data-nav-key="workspace-prompts"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM8 9h8M8 12h5"/></svg><span>Agent</span></button>
-      <button data-view="article" data-nav-key="writing"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span>写作</span></button>
       <details class="mobile-more"><summary aria-label="更多页面">•••<span>更多</span></summary><div class="mobile-more-menu"><button data-view="academic-workbench" data-nav-key="research-academic">学术论文</button><button data-view="plans" data-nav-key="workspace-plans">我的计划</button><button data-view="library" data-nav-key="favorites">提示词库</button><button data-view="references" data-nav-key="library">资料库</button><button data-view="article" data-nav-key="memory">记忆与偏好</button><button data-view="settings" data-nav-key="settings">设置</button></div></details>
   </nav>
   <dialog id="settings-backup-import-dialog" aria-labelledby="settings-backup-import-title">
@@ -1253,6 +1309,9 @@
   <script src="/prototype/academic-publishing.js"></script>
   <script src="/prototype/writing-pack-catalog.js"></script>
   <script src="/prototype/writing-workbench-prompts.js"></script>
+  <script src="/prototype/unified-workbench-schema.js"></script>
+  <script src="/prototype/unified-workbench-prompts.js"></script>
+  <script src="/prototype/workbench-canvas.js"></script>
   <script src="/prototype/storage.js"></script>
   <script src="/prototype/social-research-ui.js"></script>
   <script src="/prototype/workspace-backup.js"></script>
@@ -1284,6 +1343,14 @@
   <script src="/prototype/workbench-layout.js"></script>
   <script src="/prototype/pdfjs-loader.js"></script>
   <script src="/prototype/pdf-text-anchor.js"></script>
+  <dialog class="workbench-export-dialog" id="workbench-export-dialog" aria-labelledby="workbench-export-title">
+    <form class="workbench-export-form" method="dialog">
+      <header><h2 id="workbench-export-title">导出本轮素材包</h2><p class="workbench-content-meta" id="workbench-export-description"></p></header>
+      <div class="workbench-export-items" id="workbench-export-items"></div>
+      <p class="workbench-content-meta" id="workbench-export-scope-note" role="status" aria-live="polite"></p>
+      <footer><button class="button-quiet" type="submit" value="cancel">取消</button><button class="button-primary" id="workbench-export-confirm" type="button">生成 ZIP</button></footer>
+    </form>
+  </dialog>
   <script src="/prototype/app.js"></script>
 </body>
 </html>

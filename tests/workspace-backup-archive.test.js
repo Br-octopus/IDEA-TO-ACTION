@@ -250,7 +250,7 @@ async function createZip(filePath, entries) {
 }
 
 function manifestFor(item, overrides = {}, digest = createHash('sha256').update('saved text').digest('hex')) {
-  return JSON.stringify({
+  const manifest = {
     format: FORMAT,
     formatVersion: FORMAT_VERSION,
     workspace: { projects: [{ id: 'p1' }] },
@@ -263,7 +263,11 @@ function manifestFor(item, overrides = {}, digest = createHash('sha256').update(
       path: `attachments/${item.taskId}/${item.id}`
     }] : [],
     ...overrides
-  });
+  };
+  if (manifest.formatVersion === FORMAT_VERSION) {
+    if (!Object.hasOwn(overrides, 'workbenchManifests')) manifest.workbenchManifests = [];
+  }
+  return JSON.stringify(manifest);
 }
 
 test('流式导出和导入保留工作区与已保存附件', async () => {
@@ -300,7 +304,32 @@ test('流式导出和导入保留工作区与已保存附件', async () => {
   });
 });
 
-test('归档 v2 保存工作台 HTML 原始附件 ID，并继续读取 v1 归档', async () => {
+test('工作区 ZIP 往返保留任务 manifest 文件', async () => {
+  await withTemp(async directory => {
+    const taskId = 'task-manifest';
+    const workbenchManifest = {
+      schemaVersion: 1, taskId, revision: 4,
+      project: { id: taskId, goalSummary: '恢复工作台正文' }
+    };
+    const archivePath = path.join(directory, 'manifest.zip');
+    const output = fs.createWriteStream(archivePath);
+    await exportWorkspaceArchive({
+      output, workspace: { projects: [workbenchManifest.project] },
+      workbenchManifests: [workbenchManifest]
+    });
+
+    const extraction = path.join(directory, 'extract-manifest');
+    await fs.promises.mkdir(extraction);
+    const imported = await importWorkspaceArchive({ archivePath, tempDirectory: extraction });
+    assert.deepEqual(imported.workbenchManifests, [workbenchManifest]);
+    assert.deepEqual(
+      JSON.parse(await fs.promises.readFile(path.join(extraction, 'workbench', taskId, 'workbench.json'), 'utf8')),
+      workbenchManifest
+    );
+  });
+});
+
+test('当前归档保存工作台 HTML 原始附件 ID，并继续读取 v1 归档', async () => {
   await withTemp(async directory => {
     const bytes = '<!doctype html><title>工作台</title>';
     const id = 'task-html_550e8400-e29b-41d4-a716-446655440000.html';
@@ -311,7 +340,7 @@ test('归档 v2 保存工作台 HTML 原始附件 ID，并继续读取 v1 归档
     const archivePath = path.join(directory, 'workbench-html.zip');
     const output = fs.createWriteStream(archivePath);
     const exported = await exportWorkspaceArchive({ output, workspace: { projects: [{ id: 'task-html' }] }, attachments: [source] });
-    assert.equal(exported.formatVersion, 2);
+    assert.equal(exported.formatVersion, FORMAT_VERSION);
     const v2Stage = path.join(directory, 'v2-stage');
     await fs.promises.mkdir(v2Stage);
     const imported = await importWorkspaceArchive({ archivePath, tempDirectory: v2Stage });

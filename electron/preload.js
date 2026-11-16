@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
   recoverBackupImports: attachmentIds => ipcRenderer.invoke('backup:recover-imports', attachmentIds),
   listBackups: () => ipcRenderer.invoke('backup:list'),
   readBackup: filename => ipcRenderer.invoke('backup:read', filename),
+  workbench: Object.freeze({
+    listManifests: () => ipcRenderer.invoke('workbench:list-manifests'),
+    readManifest: taskId => ipcRenderer.invoke('workbench:read-manifest', { taskId }),
+    saveManifest: (taskId, manifest) => ipcRenderer.invoke('workbench:save-manifest', { taskId, manifest }),
+    openTaskFolder: taskId => ipcRenderer.invoke('workbench:open-task-folder', { taskId }),
+    exportMaterials: (taskId, roundId, deliveryId) => ipcRenderer.invoke('workbench:export-materials', { taskId, roundId, deliveryId })
+  }),
   social: Object.freeze({
     listPlatforms: () => ipcRenderer.invoke('social:list-platforms'),
     getStatus: platform => ipcRenderer.invoke('social:get-status', platform),
@@ -71,6 +78,7 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
   }),
   pptFeedback: Object.freeze({
     chooseFile: taskId => ipcRenderer.invoke('ppt-feedback:choose-file', { taskId }),
+    saveImage: (taskId, bytes, mimeType, displayName) => ipcRenderer.invoke('ppt-feedback:save-image', { taskId, bytes, mimeType, displayName }),
     saveWebSnapshot: (taskId, snapshot) => ipcRenderer.invoke('ppt-feedback:save-web-snapshot', { taskId, snapshot }),
     listAttachments: taskId => ipcRenderer.invoke('ppt-feedback:list-attachments', { taskId }),
     listDeletedAttachments: taskId => ipcRenderer.invoke('ppt-feedback:list-deleted-attachments', { taskId }),
@@ -78,6 +86,7 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
     listAnnotations: taskId => ipcRenderer.invoke('ppt-feedback:list-annotations', { taskId }),
     readImage: attachmentId => ipcRenderer.invoke('ppt-feedback:read-image', { attachmentId }),
     readPdf: attachmentId => ipcRenderer.invoke('ppt-feedback:read-pdf', { attachmentId }),
+    readText: attachmentId => ipcRenderer.invoke('ppt-feedback:read-text', { attachmentId }),
     readOffice: (attachmentId, expectedHash) => ipcRenderer.invoke('ppt-feedback:read-office', { attachmentId, expectedHash }),
     openPreview: (attachmentId, target, expectedHash, embedded = false) => ipcRenderer.invoke('ppt-feedback:open-preview', {
       attachmentId, ...(target ? { target } : {}), ...(expectedHash ? { expectedHash } : {}), ...(embedded ? { embedded: true } : {})

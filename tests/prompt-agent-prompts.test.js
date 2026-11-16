@@ -47,6 +47,13 @@ test('步骤提示词只包含当前步骤详细要求，不展开其他步骤�
   assert.match(prompt, /不得直接完成目标任务/);
 });
 
+test('提示词优化规则复用原提示词引擎并保留输入正文', () => {
+  const prompt = prompts.buildOptimizationPrompt({ goal: '优化这条提示词，用于周报整理' }, '请整理本周进展');
+  assert.match(prompt, /【用途\/目标】优化这条提示词，用于周报整理/);
+  assert.match(prompt, /【原提示词】\n请整理本周进展/);
+  assert.match(prompt, /可复制提示词/);
+});
+
 test('复盘引用具体差异，提出成功失败待验证建议和证据', () => {
   const prompt = prompts.buildResultReviewPrompt(baseTask,
     { excerpt: '结果没有安排试讲', differences: ['缺少试讲环节'] }, '请重点看可执行性');

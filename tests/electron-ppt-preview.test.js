@@ -134,18 +134,21 @@ function makePreviewHarness(userData, attachmentStore) {
   return { manager, windows, views, sessions, sent };
 }
 
-test('preload 仅暴露 pptFeedback 窄接口并映射到命名 IPC 通道', () => {
+test('preload 仅暴露工作台和 pptFeedback 窄接口并映射到命名 IPC 通道', () => {
   const { name, api, invocations, listeners, sends } = loadPreloadApi();
 
   assert.equal(name, 'desktopApi');
+  assert.deepEqual(Object.keys(api.workbench), ['listManifests', 'readManifest', 'saveManifest', 'openTaskFolder', 'exportMaterials']);
   assert.deepEqual(Object.keys(api.pptFeedback), [
-    'chooseFile', 'saveWebSnapshot', 'listAttachments', 'listDeletedAttachments', 'listBackupAttachments', 'listAnnotations', 'readImage', 'readPdf', 'readOffice', 'openPreview', 'setPreviewBounds', 'closePreview', 'onPreviewTarget', 'deleteAttachment', 'restoreAttachment', 'saveAnnotation'
+    'chooseFile', 'saveImage', 'saveWebSnapshot', 'listAttachments', 'listDeletedAttachments', 'listBackupAttachments', 'listAnnotations', 'readImage', 'readPdf', 'readText', 'readOffice', 'openPreview', 'setPreviewBounds', 'closePreview', 'onPreviewTarget', 'deleteAttachment', 'restoreAttachment', 'saveAnnotation'
   ]);
   assert.equal(api.fs, undefined);
   assert.equal(api.path, undefined);
   assert.equal(api.ipcRenderer, undefined);
 
   api.pptFeedback.chooseFile('task-1');
+  const imageBytes = new Uint8Array([1, 2, 3]);
+  api.pptFeedback.saveImage('task-1', imageBytes, 'image/png', 'image.png');
   const snapshot = { title: 'Title', finalUrl: 'https://example.com/', fetchedAt: '2026-11-12T01:02:03.000Z', contentHash: `sha256:${'a'.repeat(64)}`, html: '<main>Page text</main>', text: 'Page text', incomplete: false };
   api.pptFeedback.saveWebSnapshot('task-1', snapshot);
   api.pptFeedback.listAttachments('task-1');
@@ -154,6 +157,7 @@ test('preload 仅暴露 pptFeedback 窄接口并映射到命名 IPC 通道', () 
   api.pptFeedback.listAnnotations('task-1');
   api.pptFeedback.readImage('attachment-1');
   api.pptFeedback.readPdf('attachment-1');
+  api.pptFeedback.readText('attachment-1');
   const locateTarget = { kind: 'text', selector: 'main > p', exact: 'safe text', prefix: '', suffix: '', start: 0, end: 9 };
   api.pptFeedback.openPreview('attachment-1', locateTarget, 'a'.repeat(64));
   api.pptFeedback.openPreview('attachment-2', undefined, 'b'.repeat(64), true);
@@ -170,9 +174,15 @@ test('preload 仅暴露 pptFeedback 窄接口并映射到命名 IPC 通道', () 
   api.pptFeedback.deleteAttachment('task-1', 'attachment-1');
   api.pptFeedback.restoreAttachment('task-1', 'attachment-1');
   api.pptFeedback.saveAnnotation({ taskId: 'task-1', attachmentId: 'attachment-1' });
+  api.workbench.listManifests();
+  api.workbench.readManifest('task-1');
+  api.workbench.saveManifest('task-1', { schemaVersion: 1 });
+  api.workbench.openTaskFolder('task-1');
+  api.workbench.exportMaterials('task-1', 'round-1', 'delivery-1');
 
   assert.deepEqual(JSON.parse(JSON.stringify(invocations)), [
     ['ppt-feedback:choose-file', { taskId: 'task-1' }],
+    ['ppt-feedback:save-image', { taskId: 'task-1', bytes: { 0: 1, 1: 2, 2: 3 }, mimeType: 'image/png', displayName: 'image.png' }],
     ['ppt-feedback:save-web-snapshot', { taskId: 'task-1', snapshot }],
     ['ppt-feedback:list-attachments', { taskId: 'task-1' }],
     ['ppt-feedback:list-deleted-attachments', { taskId: 'task-1' }],
@@ -180,12 +190,18 @@ test('preload 仅暴露 pptFeedback 窄接口并映射到命名 IPC 通道', () 
     ['ppt-feedback:list-annotations', { taskId: 'task-1' }],
     ['ppt-feedback:read-image', { attachmentId: 'attachment-1' }],
     ['ppt-feedback:read-pdf', { attachmentId: 'attachment-1' }],
+    ['ppt-feedback:read-text', { attachmentId: 'attachment-1' }],
     ['ppt-feedback:open-preview', { attachmentId: 'attachment-1', target: locateTarget, expectedHash: 'a'.repeat(64) }],
     ['ppt-feedback:open-preview', { attachmentId: 'attachment-2', expectedHash: 'b'.repeat(64), embedded: true }],
     ['ppt-feedback:close-preview', { attachmentId: 'attachment-1' }],
     ['ppt-feedback:delete-attachment', { taskId: 'task-1', attachmentId: 'attachment-1' }],
     ['ppt-feedback:restore-attachment', { taskId: 'task-1', attachmentId: 'attachment-1' }],
-    ['ppt-feedback:save-annotation', { taskId: 'task-1', attachmentId: 'attachment-1' }]
+    ['ppt-feedback:save-annotation', { taskId: 'task-1', attachmentId: 'attachment-1' }],
+    ['workbench:list-manifests'],
+    ['workbench:read-manifest', { taskId: 'task-1' }],
+    ['workbench:save-manifest', { taskId: 'task-1', manifest: { schemaVersion: 1 } }],
+    ['workbench:open-task-folder', { taskId: 'task-1' }],
+    ['workbench:export-materials', { taskId: 'task-1', roundId: 'round-1', deliveryId: 'delivery-1' }]
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(sends)), [
     ['ppt-feedback:set-preview-bounds', { attachmentId: 'attachment-2', bounds: { x: 10, y: 20, width: 300, height: 400, visible: true } }]
@@ -235,6 +251,35 @@ test('保存 HTML 和图片到任务隔离目录，只返回安全元数据并�
   assert.match(pdfDataUrl, /^data:application\/pdf;base64,/);
   assert.deepEqual(Buffer.from(pdfDataUrl.split(',')[1], 'base64'), PDF);
   assert.throws(() => store.readImageDataUrl(pdf.id), error => error.code === 'UNSUPPORTED_PREVIEW');
+});
+
+test('TXT/MD 保留原字节，按附件版本校验后仅以 UTF-8 文本预览', async t => {
+  const root = makeTempDirectory();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const userData = path.join(root, 'user-data');
+  const txtPath = path.join(root, 'notes.txt');
+  const mdPath = path.join(root, 'brief.md');
+  const invalidPath = path.join(root, 'invalid.txt');
+  const imagePath = path.join(root, 'image.png');
+  const txt = Buffer.from('目标：整理素材\n先保留原文', 'utf8');
+  const md = Buffer.from('# 页面参考\n\n- 保留导航', 'utf8');
+  fs.writeFileSync(txtPath, txt);
+  fs.writeFileSync(mdPath, md);
+  fs.writeFileSync(invalidPath, Buffer.from([0xc3, 0x28]));
+  fs.writeFileSync(imagePath, PNG);
+  const store = makeStore(userData);
+  const textAttachment = await store.saveAttachment({ taskId: 'task-text', sourcePath: txtPath, mimeType: 'text/plain' });
+  const markdownAttachment = await store.saveAttachment({ taskId: 'task-text', sourcePath: mdPath, mimeType: 'text/markdown' });
+  const invalidAttachment = await store.saveAttachment({ taskId: 'task-text', sourcePath: invalidPath, mimeType: 'text/plain' });
+
+  assert.deepEqual(store.readText(textAttachment.id), {
+    attachmentId: textAttachment.id, sha256: textAttachment.sha256, text: txt.toString('utf8')
+  });
+  assert.equal(store.readText(markdownAttachment.id).text, md.toString('utf8'));
+  assert.deepEqual(fs.readFileSync(store.getAttachmentPath(textAttachment.id)), txt);
+  assert.throws(() => store.readText(invalidAttachment.id), error => error.code === 'INVALID_TEXT_ENCODING');
+  const imageAttachment = await store.saveAttachment({ taskId: 'task-text', sourcePath: imagePath, mimeType: 'image/png' });
+  assert.throws(() => store.readText(imageAttachment.id), error => error.code === 'UNSUPPORTED_PREVIEW');
 });
 
 test('应用重启后按任务恢复附件 ID 和内容版本，同名新版本不覆盖旧批注目标', async t => {

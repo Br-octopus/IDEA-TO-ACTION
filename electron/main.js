@@ -1,5 +1,5 @@
-const { app, BrowserWindow, WebContentsView, dialog, ipcMain, safeStorage, session } = require('electron');
-const { randomUUID } = require('node:crypto');
+const { app, BrowserWindow, WebContentsView, dialog, ipcMain, safeStorage, session, shell } = require('electron');
+const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createBackupStore } = require(path.join(__dirname, 'backup-store.js'));
@@ -19,6 +19,9 @@ const workspaceArchive = require(path.join(__dirname, 'workspace-backup-archive.
 const { createPromptAgentSources } = require(path.join(__dirname, 'prompt-agent-sources.js'));
 const { createPptSourceReader } = require(path.join(__dirname, 'ppt-source-reader.js'));
 const { createPptFeedbackAttachmentStore } = require(path.join(__dirname, 'ppt-feedback-attachment-store.js'));
+const workbenchMaterialExport = require(path.join(__dirname, 'workbench-material-export.js'));
+const workbenchSchema = require(path.join(__dirname, '..', 'prototype', 'unified-workbench-schema.js'));
+const workspaceBackup = require(path.join(__dirname, '..', 'prototype', 'workspace-backup.js'));
 const { createPptPreviewManager } = require(path.join(__dirname, 'ppt-preview-manager.js'));
 const { readSavedPort, savePort, selectWorkspacePort } = require(path.join(__dirname, 'workspace-origin.js'));
 
@@ -141,6 +144,31 @@ function getPptFeedbackAttachmentStore() {
     pptFeedbackAttachmentStore = createPptFeedbackAttachmentStore({ app, fs, path });
   }
   return pptFeedbackAttachmentStore;
+}
+
+function workbenchManifestSignature(manifest) {
+  const normalized = {
+    schemaVersion: workbenchSchema.WORKBENCH_SCHEMA_VERSION,
+    taskId: manifest.taskId,
+    revision: manifest.revision,
+    project: workbenchSchema.normalizeWorkbenchProject(manifest.project)
+  };
+  return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function removeImportedWorkbenchManifests(store, entries = []) {
+  for (const entry of entries) {
+    const current = store.readTaskManifest(entry.taskId);
+    if (current && workbenchManifestSignature(current) === entry.sha256) store.deleteTaskManifest(entry.taskId);
+  }
 }
 
 function getPptPreviewManager() {
@@ -374,6 +402,71 @@ function savePptAnnotations(taskId, annotations) {
 }
 
 function registerPptFeedbackHandlers() {
+  ipcMain.handle('workbench:list-manifests', async () => getPptFeedbackAttachmentStore().listTaskManifests());
+  ipcMain.handle('workbench:read-manifest', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['taskId']);
+    const taskId = validatePptFeedbackId(request.taskId, 'INVALID_WORKBENCH_TASK_ID', '任务标识');
+    return { status: 'ok', manifest: getPptFeedbackAttachmentStore().readTaskManifest(taskId) };
+  });
+  ipcMain.handle('workbench:save-manifest', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['taskId', 'manifest']);
+    const taskId = validatePptFeedbackId(request.taskId, 'INVALID_WORKBENCH_TASK_ID', '任务标识');
+    const revision = getPptFeedbackAttachmentStore().saveTaskManifest(taskId, request.manifest);
+    return { status: 'ok', revision };
+  });
+  ipcMain.handle('workbench:open-task-folder', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['taskId']);
+    const taskId = validatePptFeedbackId(request.taskId, 'INVALID_WORKBENCH_TASK_ID', '任务标识');
+    const message = await shell.openPath(getPptFeedbackAttachmentStore().getTaskDirectory(taskId));
+    if (message) throw createPptFeedbackError('WORKBENCH_FOLDER_OPEN_FAILED', message);
+    return { status: 'ok' };
+  });
+  ipcMain.handle('workbench:export-materials', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['taskId', 'roundId', 'deliveryId']);
+    const taskId = validatePptFeedbackId(request.taskId, 'INVALID_WORKBENCH_TASK_ID', '任务标识');
+    const roundId = validatePptFeedbackId(request.roundId, 'INVALID_WORKBENCH_ROUND_ID', '提示词轮次标识');
+    const deliveryId = validatePptFeedbackId(request.deliveryId, 'INVALID_WORKBENCH_DELIVERY_ID', '提示词交付标识');
+    const store = getPptFeedbackAttachmentStore();
+    const manifest = store.readTaskManifest(taskId);
+    if (!manifest) throw createPptFeedbackError('WORKBENCH_EXPORT_INVALID_SNAPSHOT', '找不到已保存的工作台任务清单');
+    const snapshot = workbenchMaterialExport.preparePackage({ taskId, manifest, roundId, deliveryId, attachmentStore: store });
+    if (snapshot.scopeWarnings.length) {
+      const confirmationOptions = {
+        type: 'warning', title: '素材包包含完整原件',
+        message: '部分素材无法生成所选页面或区域图，继续将附带完整原件。',
+        detail: `${snapshot.scopeWarnings.map(item => `${item.title}：${item.scopeNote}`).join('\n')}\n取消后可返回工作台排除这些素材，再重新导出。`,
+        buttons: ['继续并附带完整原件', '取消并返回排除素材'], defaultId: 1, cancelId: 1
+      };
+      const confirmation = mainWindow
+        ? await dialog.showMessageBox(mainWindow, confirmationOptions)
+        : await dialog.showMessageBox(confirmationOptions);
+      if (confirmation.response !== 0) return { canceled: true, reason: 'full-original-scope' };
+    }
+    const result = await showFileDialog('showSaveDialog', {
+      title: '导出本轮素材包',
+      defaultPath: path.join(app.getPath('documents'), `workbench-materials-${taskId}.zip`),
+      filters: [{ name: '工作台本轮素材包', extensions: ['zip'] }],
+      showOverwriteConfirmation: true
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    if (path.extname(result.filePath).toLowerCase() !== '.zip') {
+      throw createPptFeedbackError('WORKBENCH_EXPORT_INVALID_EXTENSION', '本轮素材包必须导出为 ZIP 文件');
+    }
+    const tempPath = `${result.filePath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      const summary = await workbenchMaterialExport.writeWorkbenchMaterialArchive({
+        outputPath: tempPath, taskId, manifest, roundId, deliveryId, attachmentStore: store
+      });
+      fs.renameSync(tempPath, result.filePath);
+      return { status: 'ok', canceled: false, filePath: result.filePath, summary };
+    } catch (error) {
+      try { fs.unlinkSync(tempPath); } catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
+      const wrapped = createPptFeedbackError(error.code || 'WORKBENCH_EXPORT_FAILED', error.message || '本轮素材包导出失败');
+      wrapped.cause = error;
+      throw wrapped;
+    }
+  });
+
   ipcMain.on('ppt-feedback:preview-target', (event, value) => {
     if (!event.sender?.mainFrame || event.senderFrame !== event.sender.mainFrame) return;
     const selection = pptPreviewManager?.acceptSelection(event, value);
@@ -394,7 +487,7 @@ function registerPptFeedbackHandlers() {
       title: '选择工作台资料',
       properties: ['openFile'],
       filters: [
-        { name: '可预览的网页、PDF、Office 与图片', extensions: ['html', 'htm', 'pdf', 'pptx', 'docx', 'png', 'jpg', 'jpeg', 'webp'] },
+        { name: '可预览的网页、PDF、Office、文稿与图片', extensions: ['html', 'htm', 'pdf', 'pptx', 'docx', 'txt', 'md', 'png', 'jpg', 'jpeg', 'webp'] },
         { name: '旧版 Office 文件（预览暂不可用）', extensions: ['ppt', 'doc'] }
       ]
     });
@@ -405,6 +498,7 @@ function registerPptFeedbackHandlers() {
       return { canceled: false, status: 'unsupported-preview', format: extension.slice(1) };
     }
     const mimeType = {
+      '.txt': 'text/plain', '.md': 'text/markdown',
       '.html': 'text/html', '.htm': 'text/html', '.png': 'image/png',
       '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.pdf': 'application/pdf',
       '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -412,6 +506,26 @@ function registerPptFeedbackHandlers() {
     }[extension];
     if (!mimeType) throw createPptFeedbackError('INVALID_ATTACHMENT', '附件格式不受支持。');
     const attachment = await getPptFeedbackAttachmentStore().saveAttachment({ taskId, sourcePath, mimeType });
+    return { canceled: false, attachment };
+  });
+
+  ipcMain.handle('ppt-feedback:save-image', async (_event, request) => {
+    validatePptFeedbackRequest(request, ['taskId', 'bytes', 'mimeType', 'displayName']);
+    const taskId = validatePptFeedbackId(request.taskId, 'INVALID_TASK_ID', '任务标识');
+    const bytes = request.bytes;
+    const isByteArray = ArrayBuffer.isView(bytes) && bytes.BYTES_PER_ELEMENT === 1
+      && Object.prototype.toString.call(bytes) === '[object Uint8Array]';
+    if (!isByteArray || bytes.byteLength === 0 || typeof request.displayName !== 'string'
+      || !request.displayName.trim() || request.displayName.length > 180
+      || !['image/png', 'image/jpeg', 'image/webp'].includes(request.mimeType)) {
+      throw createPptFeedbackError('INVALID_ATTACHMENT', '图片字节或格式无效。');
+    }
+    if (bytes.byteLength > 20 * 1024 * 1024) {
+      throw createPptFeedbackError('FILE_TOO_LARGE', '图片超过 20 MB 限制。');
+    }
+    const attachment = await getPptFeedbackAttachmentStore().saveAttachment({
+      taskId, bytes, mimeType: request.mimeType, displayName: request.displayName
+    });
     return { canceled: false, attachment };
   });
 
@@ -463,6 +577,11 @@ function registerPptFeedbackHandlers() {
   ipcMain.handle('ppt-feedback:read-pdf', async (_event, request) => {
     const attachmentId = validatePptFeedbackAttachmentRequest(request);
     return { status: 'ok', attachmentId, dataUrl: getPptFeedbackAttachmentStore().readPdfDataUrl(attachmentId) };
+  });
+
+  ipcMain.handle('ppt-feedback:read-text', async (_event, request) => {
+    const attachmentId = validatePptFeedbackAttachmentRequest(request);
+    return { status: 'ok', ...getPptFeedbackAttachmentStore().readText(attachmentId) };
   });
 
   ipcMain.handle('ppt-feedback:read-office', async (_event, request) => {
@@ -1026,9 +1145,15 @@ ipcMain.handle('search:request', async (_event, payload) => {
 ipcMain.handle('backup:export', async (_event, content) => {
   const archiveRequest = content && typeof content === 'object' && !Array.isArray(content)
     && content.format === 'workspace-archive';
-  if (archiveRequest && (Object.keys(content).some(key => !['format', 'content', 'attachmentIds'].includes(key))
+  if (archiveRequest && (Object.keys(content).some(key => !['format', 'content', 'attachmentIds', 'workbenchTaskIds'].includes(key))
     || typeof content.content !== 'string' || !Array.isArray(content.attachmentIds))) {
     throw Object.assign(new TypeError('工作区 ZIP 备份请求无效'), { code: 'BACKUP_EXPORT_INVALID_REQUEST' });
+  }
+  if (archiveRequest && content.workbenchTaskIds !== undefined
+    && (!Array.isArray(content.workbenchTaskIds) || content.workbenchTaskIds.length > 10_000
+      || content.workbenchTaskIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id))
+      || new Set(content.workbenchTaskIds).size !== content.workbenchTaskIds.length)) {
+    throw Object.assign(new TypeError('工作台任务清单范围无效'), { code: 'BACKUP_EXPORT_INVALID_REQUEST' });
   }
   const result = await showFileDialog('showSaveDialog', {
     title: '导出备份',
@@ -1054,31 +1179,53 @@ ipcMain.handle('backup:export', async (_event, content) => {
   if (backup?.scope !== 'workspace' || backup?.format !== 'forward-step-workspace') {
     throw Object.assign(new TypeError('完整工作区备份需要工作区 JSON'), { code: 'BACKUP_EXPORT_INVALID_JSON' });
   }
+  const scopedWorkbenchTaskIds = content.workbenchTaskIds === undefined ? null : new Set(content.workbenchTaskIds);
+  if (scopedWorkbenchTaskIds) {
+    const backupTaskIds = (backup.data?.projects || []).map(project => project?.id);
+    if (backupTaskIds.length !== scopedWorkbenchTaskIds.size || backupTaskIds.some(taskId => !scopedWorkbenchTaskIds.has(taskId))) {
+      throw Object.assign(new TypeError('任务导出范围必须与备份中的任务完全一致'), { code: 'BACKUP_EXPORT_INVALID_REQUEST' });
+    }
+  }
   const attachments = content.attachmentIds.map(id => {
     if (typeof id !== 'string') throw Object.assign(new TypeError('附件 ID 无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
     const metadata = backup.data?.researchAttachments?.find(item => item?.id === id);
     if (metadata) {
       const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([a-f0-9]{32})\.(txt|pdf|png|jpg|webp)$/.exec(id);
-      if (!match) throw Object.assign(new TypeError('研究附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+      if (!match || scopedWorkbenchTaskIds && !scopedWorkbenchTaskIds.has(match[1])) {
+        throw Object.assign(new TypeError('研究附件索引不属于当前导出范围'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+      }
       return { id, taskId: match[1], type: metadata.type, size: metadata.size,
         openStream: () => getSocialAttachmentStore().createReadStream(id) };
     }
     const workbench = backup.data?.workbenchAttachments?.find(item => item?.archiveId === id);
-    const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(pdf|png|jpg|webp|html|pptx|docx)$/.exec(id);
-    const typeByMime = { 'application/pdf': 'application/pdf', 'image/png': 'image/png', 'image/jpeg': 'image/jpeg', 'image/webp': 'image/webp', 'text/html': 'text/html',
+    const match = /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(pdf|png|jpg|webp|html|txt|md|pptx|docx)$/.exec(id);
+    const typeByMime = { 'text/plain': 'text/plain', 'text/markdown': 'text/markdown', 'application/pdf': 'application/pdf', 'image/png': 'image/png', 'image/jpeg': 'image/jpeg', 'image/webp': 'image/webp', 'text/html': 'text/html',
       'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
     if (!workbench || !match || workbench.id !== match[2] || workbench.taskId !== match[1]
       || !typeByMime[workbench.mimeType] || !Number.isSafeInteger(workbench.size) || !/^[a-f0-9]{64}$/.test(workbench.sha256 || '')) {
       throw Object.assign(new TypeError('工作台附件索引无效'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
     }
+    if (scopedWorkbenchTaskIds && !scopedWorkbenchTaskIds.has(workbench.taskId)) {
+      throw Object.assign(new TypeError('工作台附件不属于当前导出范围'), { code: 'BACKUP_EXPORT_INVALID_ATTACHMENT' });
+    }
     return { id, taskId: match[1], type: typeByMime[workbench.mimeType], size: workbench.size,
       openStream: () => getPptFeedbackAttachmentStore().createReadStream(workbench.id, { includeDeleted: workbench.deleted === true }) };
   });
+  const listedWorkbenchManifests = getPptFeedbackAttachmentStore().listTaskManifests();
+  const workbenchManifests = scopedWorkbenchTaskIds
+    ? listedWorkbenchManifests.manifests.filter(item => scopedWorkbenchTaskIds.has(item.taskId))
+    : listedWorkbenchManifests.manifests;
+  const workbenchManifestErrors = scopedWorkbenchTaskIds
+    ? listedWorkbenchManifests.errors.filter(item => scopedWorkbenchTaskIds.has(item.taskId))
+    : listedWorkbenchManifests.errors;
+  if (workbenchManifestErrors.length) {
+    throw Object.assign(new Error('存在无法读取的工作台任务清单，完整备份未导出'), { code: 'BACKUP_EXPORT_INVALID_WORKBENCH_MANIFEST' });
+  }
   const tempPath = result.filePath + `.tmp-${process.pid}-${Date.now()}`;
   try {
     const output = fs.createWriteStream(tempPath, { flags: 'wx', mode: 0o600 });
-    await workspaceArchive.exportWorkspaceArchive({ output, workspace: backup, attachments });
+    await workspaceArchive.exportWorkspaceArchive({ output, workspace: backup, attachments, workbenchManifests });
     fs.renameSync(tempPath, result.filePath);
   } catch (error) {
     try { fs.unlinkSync(tempPath); } catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
@@ -1107,7 +1254,9 @@ ipcMain.handle('backup:import', async () => {
         canceled: false, format: 'workspace-archive', stageId,
         content: JSON.stringify(archive.workspace),
         attachments: archive.attachments.map(({ id, taskId, type, size, sha256 }) => ({ id, taskId, type, size, sha256 })),
-        attachmentErrors: archive.attachmentErrors
+        attachmentErrors: archive.attachmentErrors,
+        workbenchManifests: archive.workbenchManifests,
+        workbenchErrors: archive.workbenchErrors
       };
     } catch (error) {
       fs.rmSync(stageDirectory, { recursive: true, force: true });
@@ -1148,15 +1297,130 @@ ipcMain.handle('backup:commit-import', async (_event, payload) => {
   const descriptors = new Map(stage.archive.attachments.map(item => [item.id, item]));
   if (selected.some(id => !descriptors.has(id))) throw Object.assign(new TypeError('导入附件不在已校验清单中'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
   const workbenchAssets = payload.workbenchAssets || { mode: 'merge', attachments: [], annotations: [] };
+  const workbenchAssetKeys = ['mode', 'attachments', 'annotations', 'taskIds', 'manifests', 'taskIdMap', 'attachmentIdMap'];
   if (!workbenchAssets || !['merge', 'replace'].includes(workbenchAssets.mode)
+    || Object.keys(workbenchAssets).some(key => !workbenchAssetKeys.includes(key))
     || !Array.isArray(workbenchAssets.attachments) || !Array.isArray(workbenchAssets.annotations)
     || workbenchAssets.taskIds !== undefined && (!Array.isArray(workbenchAssets.taskIds)
       || workbenchAssets.taskIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id))
-      || new Set(workbenchAssets.taskIds).size !== workbenchAssets.taskIds.length)) {
+      || new Set(workbenchAssets.taskIds).size !== workbenchAssets.taskIds.length)
+    || workbenchAssets.manifests !== undefined && !Array.isArray(workbenchAssets.manifests)
+    || workbenchAssets.taskIdMap !== undefined && !Array.isArray(workbenchAssets.taskIdMap)
+    || workbenchAssets.attachmentIdMap !== undefined && !Array.isArray(workbenchAssets.attachmentIdMap)) {
     throw Object.assign(new TypeError('工作台批注导入数据无效'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
   }
-  const workbenchByArchiveId = new Map(workbenchAssets.attachments.map(item => [item.archiveId, item]));
+  const readIdMap = (entries, pattern, label) => {
+    const result = new Map();
+    const targets = new Set();
+    for (const item of entries || []) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)
+        || Object.keys(item).some(key => !['from', 'to'].includes(key))
+        || typeof item.from !== 'string' || !pattern.test(item.from)
+        || typeof item.to !== 'string' || !pattern.test(item.to)
+        || result.has(item.from) || targets.has(item.to)) {
+        throw Object.assign(new TypeError(label + '映射无效'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+      }
+      result.set(item.from, item.to);
+      targets.add(item.to);
+    }
+    return result;
+  };
+  const safeTaskId = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+  const safeAttachmentId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const taskIdMap = readIdMap(workbenchAssets.taskIdMap, safeTaskId, '任务 ID');
+  const attachmentIdMap = readIdMap(workbenchAssets.attachmentIdMap, safeAttachmentId, '附件 ID');
+  const archiveWorkspace = stage.archive.workspace || {};
+  const archiveData = archiveWorkspace.data || archiveWorkspace;
+  const sourceProjects = Array.isArray(archiveData.projects) ? archiveData.projects : [];
+  const sourceWorkbenchAttachments = Array.isArray(archiveData.workbenchAttachments) ? archiveData.workbenchAttachments : [];
+  const sourceWorkbenchAnnotations = Array.isArray(archiveData.workbenchAnnotations) ? archiveData.workbenchAnnotations : [];
+  const sourceWorkbenchTasks = new Set(sourceProjects.filter(project => project && (
+    project.workbenchPersistenceEnabled === true || project.workbenchDraft || project.workbenchContents
+      || project.workbenchCanvases || project.workbenchPromptRounds || project.workbenchAttachmentId || project.workbenchAttachmentIds
+  )).map(project => project.id));
+  for (const item of sourceWorkbenchAttachments) sourceWorkbenchTasks.add(item.taskId);
+  for (const item of sourceWorkbenchAnnotations) sourceWorkbenchTasks.add(item.taskId);
+  for (const item of stage.archive.workbenchManifests || []) sourceWorkbenchTasks.add(item.taskId);
+  const taskIds = new Set(workbenchAssets.taskIds || []);
+  const sourceByTargetTask = new Map();
+  for (const [sourceTaskId, targetTaskId] of taskIdMap) {
+    if (!sourceWorkbenchTasks.has(sourceTaskId) || !taskIds.has(targetTaskId)) {
+      throw Object.assign(new TypeError('任务 ID 映射与已校验 ZIP 或实际导入任务不一致'), { code: 'BACKUP_IMPORT_INVALID_MANIFEST' });
+    }
+    sourceByTargetTask.set(targetTaskId, sourceTaskId);
+  }
+  for (const taskId of taskIds) {
+    const sourceTaskId = sourceByTargetTask.get(taskId) || taskId;
+    if (!sourceWorkbenchTasks.has(sourceTaskId)) {
+      throw Object.assign(new TypeError('导入任务没有对应的已校验工作台数据'), { code: 'BACKUP_IMPORT_INVALID_MANIFEST' });
+    }
+  }
+  const sourceAttachmentsById = new Map(sourceWorkbenchAttachments.map(item => [item.id, item]));
+  const importedSourceAttachmentIds = new Set(workbenchAssets.attachments.map(item => {
+    const archiveId = item?.sourceArchiveId || item?.archiveId;
+    const match = typeof archiveId === 'string' && /^([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(txt|md|pdf|png|jpg|webp|html|pptx|docx)$/i.exec(archiveId);
+    return match?.[2] || '';
+  }));
+  for (const [sourceAttachmentId, targetAttachmentId] of attachmentIdMap) {
+    if (!importedSourceAttachmentIds.has(sourceAttachmentId)
+      || !workbenchAssets.attachments.some(item => item.id === targetAttachmentId)) {
+      throw Object.assign(new TypeError('附件 ID 映射与实际导入工作台附件不一致'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
+    }
+  }
+  const workbenchManifests = workbenchAssets.manifests || [];
+  const sourceManifestTaskIds = new Set((stage.archive.workbenchManifests || []).map(item => item.taskId));
+  const manifestTasks = new Set();
+  const manifestJournalEntries = [];
+  for (const manifest of workbenchManifests) {
+    const sourceTaskId = manifest?.sourceTaskId || manifest?.taskId;
+    const sourceManifest = (stage.archive.workbenchManifests || []).find(item => item.taskId === sourceTaskId);
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+      || Object.keys(manifest).some(key => !['schemaVersion', 'taskId', 'revision', 'project', 'sourceTaskId'].includes(key))
+      || manifest.schemaVersion !== workbenchSchema.WORKBENCH_SCHEMA_VERSION
+      || typeof manifest.taskId !== 'string' || !safeTaskId.test(manifest.taskId)
+      || !Number.isSafeInteger(manifest.revision) || manifest.revision < 1
+      || !manifest.project || typeof manifest.project !== 'object' || Array.isArray(manifest.project)
+      || manifest.project.id !== manifest.taskId || !taskIds.has(manifest.taskId)
+      || typeof sourceTaskId !== 'string' || !safeTaskId.test(sourceTaskId)
+      || !sourceManifestTaskIds.has(sourceTaskId)
+      || (sourceByTargetTask.get(manifest.taskId) || manifest.taskId) !== sourceTaskId
+      || (taskIdMap.get(sourceTaskId) || sourceTaskId) !== manifest.taskId
+      || manifestTasks.has(manifest.taskId)) {
+      throw Object.assign(new TypeError('工作台任务清单与 ZIP 或任务 ID 映射不一致'), { code: 'BACKUP_IMPORT_INVALID_MANIFEST' });
+    }
+    const backupProject = sourceProjects.find(item => item.id === sourceTaskId);
+    const backupRevision = Number.isSafeInteger(backupProject?.workbenchRevision) ? backupProject.workbenchRevision : 0;
+    const sourceProject = backupRevision > sourceManifest.revision ? backupProject : sourceManifest.project;
+    const sourceRevision = backupRevision > sourceManifest.revision ? backupRevision : sourceManifest.revision;
+    let expectedManifest;
+    try {
+      expectedManifest = workspaceBackup.rewriteWorkbenchTaskIds(
+        { projects: [sourceProject] },
+        [{ ...sourceManifest, revision: sourceRevision, project: sourceProject }],
+        workbenchAssets.taskIdMap || [], workbenchAssets.attachmentIdMap || []
+      ).workbenchManifests[0];
+    } catch (error) {
+      throw Object.assign(new TypeError('工作台任务清单的 ZIP 来源无法映射', { cause: error }), { code: 'BACKUP_IMPORT_INVALID_MANIFEST' });
+    }
+    const importedAttachmentIds = workbenchAssets.attachments.filter(item => item.taskId === manifest.taskId).map(item => item.id);
+    expectedManifest.project.workbenchAttachmentIds = importedAttachmentIds;
+    expectedManifest.project.workbenchAttachmentId = importedAttachmentIds.includes(expectedManifest.project.workbenchAttachmentId)
+      ? expectedManifest.project.workbenchAttachmentId : importedAttachmentIds[0] || null;
+    if (manifest.revision !== sourceRevision
+      || stableJson(workbenchSchema.normalizeWorkbenchProject(manifest.project))
+        !== stableJson(workbenchSchema.normalizeWorkbenchProject(expectedManifest.project))) {
+      throw Object.assign(new TypeError('工作台任务清单正文或 revision 与已校验 ZIP 不一致'), { code: 'BACKUP_IMPORT_INVALID_MANIFEST' });
+    }
+    try { manifestJournalEntries.push({ taskId: manifest.taskId, sha256: workbenchManifestSignature(manifest) }); }
+    catch (error) {
+      throw Object.assign(new TypeError('工作台任务清单内容无效', { cause: error }), { code: 'BACKUP_IMPORT_INVALID_MANIFEST' });
+    }
+    manifestTasks.add(manifest.taskId);
+  }
+  const workbenchByArchiveId = new Map(workbenchAssets.attachments.map(item => [item?.sourceArchiveId || item?.archiveId, item]));
   if (workbenchByArchiveId.size !== workbenchAssets.attachments.length
+    || workbenchAssets.attachments.some(item => !item || typeof item !== 'object' || Array.isArray(item)
+      || typeof item.archiveId !== 'string' || item.sourceArchiveId !== undefined && typeof item.sourceArchiveId !== 'string')
     || new Set(workbenchAssets.attachments.map(item => item.id)).size !== workbenchAssets.attachments.length) {
     throw Object.assign(new TypeError('工作台附件归档 ID 重复'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
   }
@@ -1169,11 +1433,25 @@ ipcMain.handle('backup:commit-import', async (_event, payload) => {
     const targetId = targetIds[index];
     const workbench = workbenchByArchiveId.get(sourceId);
     if (workbench) {
-      const mimeType = { 'application/pdf': 'application/pdf', 'image/png': 'image/png', 'image/jpeg': 'image/jpeg', 'image/webp': 'image/webp', 'text/html': 'text/html',
+      const mimeType = { 'text/plain': 'text/plain', 'text/markdown': 'text/markdown', 'application/pdf': 'application/pdf', 'image/png': 'image/png', 'image/jpeg': 'image/jpeg', 'image/webp': 'image/webp', 'text/html': 'text/html',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }[workbench.mimeType];
+      const extension = { 'text/plain': 'txt', 'text/markdown': 'md', 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'text/html': 'html',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx' }[workbench.mimeType];
+      const sourceTaskId = item.taskId;
+      const targetTaskId = taskIdMap.get(sourceTaskId) || sourceTaskId;
+      const sourcePrefix = sourceTaskId + '_';
+      const sourceAttachment = sourceId.startsWith(sourcePrefix) ? sourceId.slice(sourcePrefix.length) : '';
+      const sourceAttachmentId = sourceAttachment.replace(/\.(txt|md|pdf|png|jpg|webp|html|pptx|docx)$/i, '');
+      const sourceAsset = sourceAttachmentsById.get(sourceAttachmentId);
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(targetId)
-        || workbench.id !== targetId || workbench.taskId !== item.taskId
+        || !safeAttachmentId.test(sourceAttachmentId)
+        || (attachmentIdMap.get(sourceAttachmentId) || sourceAttachmentId) !== targetId
+        || !sourceAsset || sourceAsset.taskId !== sourceTaskId || sourceAsset.archiveId !== sourceId
+        || sourceAsset.size !== workbench.size || sourceAsset.sha256 !== workbench.sha256
+        || workbench.id !== targetId || workbench.taskId !== targetTaskId
+        || workbench.archiveId !== targetTaskId + '_' + targetId + '.' + extension
         || !mimeType || mimeType !== item.type || workbench.size !== item.size || workbench.sha256 !== item.sha256) {
         throw Object.assign(new TypeError('工作台附件 ID、任务、类型或摘要与 ZIP 不匹配'), { code: 'BACKUP_IMPORT_INVALID_ATTACHMENT' });
       }
@@ -1209,6 +1487,16 @@ ipcMain.handle('backup:commit-import', async (_event, payload) => {
   fs.mkdirSync(transactionRoot, { recursive: true, mode: 0o700 });
   const journalPath = path.join(transactionRoot, `${transactionId}.json`);
   const existingWorkbench = new Map(workbenchStore.listBackupAttachments().map(item => [item.id, item]));
+  for (const entry of manifestJournalEntries) {
+    try {
+      if (workbenchStore.readTaskManifest(entry.taskId)) {
+        throw Object.assign(new Error('目标任务已有工作台清单，导入不会覆盖'), { code: 'BACKUP_IMPORT_MANIFEST_CONFLICT' });
+      }
+    } catch (error) {
+      if (error.code === 'BACKUP_IMPORT_MANIFEST_CONFLICT') throw error;
+      throw Object.assign(new Error('目标工作台任务清单无法安全读取'), { code: 'BACKUP_IMPORT_MANIFEST_CONFLICT', cause: error });
+    }
+  }
   const newWorkbenchIds = [];
   for (const { workbench } of workbenchIds) {
     const existing = existingWorkbench.get(workbench.id);
@@ -1231,9 +1519,9 @@ ipcMain.handle('backup:commit-import', async (_event, payload) => {
     if (fs.existsSync(annotationsPath(taskId))) fs.copyFileSync(annotationsPath(taskId), snapshotPath, fs.constants.COPYFILE_EXCL);
   }
   const journal = {
-    version: 2, transactionId, stageId: payload.stageId, stageDirectory: stage.stageDirectory,
+    version: 3, transactionId, stageId: payload.stageId, stageDirectory: stage.stageDirectory,
     attachmentIds: researchIds.map(item => item.targetId), workbenchAttachmentIds: [...newWorkbenchIds],
-    annotationTaskIds, mode: workbenchAssets.mode
+    workbenchManifests: manifestJournalEntries, annotationTaskIds, mode: workbenchAssets.mode
   };
   writeBackupFileAtomically(journalPath, JSON.stringify(journal));
   backupImportTransactions.set(transactionId, { journalPath, journal });
@@ -1249,6 +1537,7 @@ ipcMain.handle('backup:commit-import', async (_event, payload) => {
       });
       if (result.imported && !journal.workbenchAttachmentIds.includes(targetId)) journal.workbenchAttachmentIds.push(targetId);
     }
+    for (const manifest of workbenchManifests) workbenchStore.installTaskManifest(manifest.taskId, manifest);
     for (const taskId of annotationTaskIds) {
       const incoming = annotations.filter(item => item.taskId === taskId);
       const current = workbenchAssets.mode === 'merge' ? readPptAnnotations(taskId) : [];
@@ -1261,6 +1550,7 @@ ipcMain.handle('backup:commit-import', async (_event, payload) => {
   } catch (error) {
     for (const { targetId } of researchIds) { if (researchStore.has(targetId)) researchStore.delete(targetId); }
     for (const id of journal.workbenchAttachmentIds) workbenchStore.removeImportedAttachment(id);
+    removeImportedWorkbenchManifests(workbenchStore, journal.workbenchManifests);
     for (const taskId of annotationTaskIds) {
       const snapshotPath = path.join(transactionRoot, `${transactionId}-${taskId}.annotations.json`);
       if (fs.existsSync(snapshotPath)) fs.copyFileSync(snapshotPath, annotationsPath(taskId));
@@ -1302,6 +1592,7 @@ ipcMain.handle('backup:rollback-import', async (_event, transactionId) => {
   for (const id of transaction.journal.attachmentIds) { if (store.has(id)) store.delete(id); }
   const workbenchStore = getPptFeedbackAttachmentStore();
   for (const id of transaction.journal.workbenchAttachmentIds || []) workbenchStore.removeImportedAttachment(id);
+  removeImportedWorkbenchManifests(workbenchStore, transaction.journal.workbenchManifests);
   for (const taskId of transaction.journal.annotationTaskIds || []) {
     const snapshotPath = path.join(path.dirname(transaction.journalPath), `${transactionId}-${taskId}.annotations.json`);
     if (fs.existsSync(snapshotPath)) fs.copyFileSync(snapshotPath, annotationsPath(taskId));
@@ -1318,17 +1609,21 @@ ipcMain.handle('backup:rollback-import', async (_event, transactionId) => {
 
 ipcMain.handle('backup:recover-imports', async (_event, attachmentIds) => {
   const recovery = Array.isArray(attachmentIds)
-    ? { attachmentIds, workbenchAttachmentIds: [] }
-    : attachmentIds;
+    ? { attachmentIds, workbenchAttachmentIds: [], workbenchTaskIds: [] }
+    : attachmentIds && typeof attachmentIds === 'object' && !Array.isArray(attachmentIds)
+      ? { ...attachmentIds, workbenchTaskIds: attachmentIds.workbenchTaskIds || [] }
+      : attachmentIds;
   if (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)
-    || Object.keys(recovery).some(key => !['attachmentIds', 'workbenchAttachmentIds'].includes(key))
+    || Object.keys(recovery).some(key => !['attachmentIds', 'workbenchAttachmentIds', 'workbenchTaskIds'].includes(key))
     || !Array.isArray(recovery.attachmentIds) || recovery.attachmentIds.some(id => typeof id !== 'string')
-    || !Array.isArray(recovery.workbenchAttachmentIds) || recovery.workbenchAttachmentIds.some(id => typeof id !== 'string')) {
+    || !Array.isArray(recovery.workbenchAttachmentIds) || recovery.workbenchAttachmentIds.some(id => typeof id !== 'string')
+    || !Array.isArray(recovery.workbenchTaskIds) || recovery.workbenchTaskIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id))) {
     throw Object.assign(new TypeError('附件引用列表无效'), { code: 'BACKUP_IMPORT_INVALID_REQUEST' });
   }
   const transactionRoot = path.join(app.getPath('userData'), 'workspace-backup-transactions');
   const references = new Set(recovery.attachmentIds);
   const workbenchReferences = new Set(recovery.workbenchAttachmentIds);
+  const workbenchTaskReferences = new Set(recovery.workbenchTaskIds);
   const store = getSocialAttachmentStore();
   const workbenchStore = getPptFeedbackAttachmentStore();
   let recovered = 0;
@@ -1337,18 +1632,23 @@ ipcMain.handle('backup:recover-imports', async (_event, attachmentIds) => {
       const journalPath = path.join(transactionRoot, filename);
       let journal;
       try { journal = JSON.parse(fs.readFileSync(journalPath, 'utf8')); } catch { fs.rmSync(journalPath, { force: true }); continue; }
-      if (![1, 2].includes(journal?.version) || !Array.isArray(journal.attachmentIds)
+      if (![1, 2, 3].includes(journal?.version) || !Array.isArray(journal.attachmentIds)
         || journal.attachmentIds.some(id => typeof id !== 'string')
-        || journal.version === 2 && (journal.transactionId !== filename.slice(0, -5)
+        || journal.version >= 2 && (journal.transactionId !== filename.slice(0, -5)
           || !Array.isArray(journal.workbenchAttachmentIds) || journal.workbenchAttachmentIds.some(id => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
-          || !Array.isArray(journal.annotationTaskIds) || journal.annotationTaskIds.some(id => !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id)))) {
+          || !Array.isArray(journal.annotationTaskIds) || journal.annotationTaskIds.some(id => !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id)))
+        || journal.version === 3 && (!Array.isArray(journal.workbenchManifests)
+          || journal.workbenchManifests.some(item => !item || typeof item.taskId !== 'string'
+            || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(item.taskId) || !/^[a-f0-9]{64}$/.test(item.sha256)))) {
         fs.rmSync(journalPath, { force: true }); continue;
       }
       const committed = journal.attachmentIds.every(id => references.has(id))
-        && (journal.workbenchAttachmentIds || []).every(id => workbenchReferences.has(id));
+        && (journal.workbenchAttachmentIds || []).every(id => workbenchReferences.has(id))
+        && (journal.workbenchManifests || []).every(item => workbenchTaskReferences.has(item.taskId));
       if (!committed) {
         for (const id of journal.attachmentIds) { if (store.has(id)) store.delete(id); }
         for (const id of journal.workbenchAttachmentIds || []) workbenchStore.removeImportedAttachment(id);
+        removeImportedWorkbenchManifests(workbenchStore, journal.workbenchManifests);
         for (const taskId of journal.annotationTaskIds || []) {
           const snapshotPath = path.join(transactionRoot, `${journal.transactionId}-${taskId}.annotations.json`);
           if (fs.existsSync(snapshotPath)) fs.copyFileSync(snapshotPath, annotationsPath(taskId));

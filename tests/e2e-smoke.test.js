@@ -21,19 +21,14 @@ const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'prototype', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'prototype', 'app.js'), 'utf8');
 
-test('七板块导航使用独立键，高亮不再与共享视图绑定', () => {
+test('主导航不再单列提示词 Agent 和写作工作台', () => {
   const nav = html.match(/<nav class="nav"[\s\S]*?<\/nav>/)?.[0] || "";
   const keys = [...nav.matchAll(/data-nav-key="([^"]+)"/g)].map(match => match[1]);
   assert.ok(keys.length >= 7);
   assert.equal(new Set(keys).size, keys.length, "导航键唯一");
-  assert.deepEqual([...nav.matchAll(/class="nav-group">([^<]+)</g)].map(match => match[1]), ["工作台", "资料库", "提示词收藏", "写作", "研究", "记忆与偏好", "设置"]);
-  for (const [key, view] of Object.entries({
-    "workspace-new": "home", "workspace-plans": "plans", "workspace-prompts": "prompt-agent",
-    library: "references", favorites: "library", writing: "article", "research-academic": "academic-workbench",
-    "research-social": "social-research", memory: "article", settings: "settings"
-  })) assert.match(nav, new RegExp(`data-view="${view}"[^>]*data-nav-key="${key}"`));
-  assert.match(app, /\.nav \[data-nav-key\]/);
-  assert.match(app, /\.mobile-nav \[data-nav-key\]/);
+  assert.match(nav, /data-view="home"[^>]*data-nav-key="workspace-new"/);
+  assert.match(nav, /data-view="plans"[^>]*data-nav-key="workspace-plans"/);
+  assert.doesNotMatch(nav, /prompt-agent|data-nav-key="writing"|data-nav-key="workspace-prompts"/);
   assert.match(app, /node\.dataset\.navKey === navKey/);
   assert.match(app, /node\.dataset\.navKey/);
   assert.match(app, /document\.querySelectorAll\("\[data-view\]"\)\.forEach\(node => node\.addEventListener\("click", \(\) => go\(node\.dataset\.view, node\.dataset\.navKey\)\)\)/);
@@ -41,13 +36,33 @@ test('七板块导航使用独立键，高亮不再与共享视图绑定', () =>
   assert.match(app, /articleDescription\.hidden = navKey === "memory"/);
   assert.doesNotMatch(fs.readFileSync(path.join(root, 'prototype', 'writing-workbench-ui.js'), 'utf8'), /<h1>记忆与偏好<\/h1>/);
   assert.match(app, /function renderPlans\(\)[\s\S]*?data-open-project/);
+  assert.match(app, /function getWorkbenchPromptRoute\(/);
+  assert.match(app, /unifiedWorkbenchPrompts\.buildTaskRulePrompt\(/);
+  assert.match(app, /data-workbench-import-legacy=/);
+  assert.match(html, /id="view-prompt-agent" hidden/);
+  assert.match(html, /id="view-prompt-optimize" hidden/);
+  assert.match(app, /view === "prompt-agent" \|\| view === "prompt-optimize" \|\| \(view === "article" && navKey === "writing"\)/);
+  assert.match(app, /handoffToWorkbench: context => handoffSocialResearchToWorkbench\(context\)/);
+  const socialUi = fs.readFileSync(path.join(root, 'prototype', 'social-research-ui.js'), 'utf8');
+  assert.match(socialUi, /data-report-to-workbench/);
+  assert.doesNotMatch(socialUi, /navigate\("prompt-agent"\)|applyIncomingContext/);
   assert.doesNotMatch(app, /querySelectorAll\("\[data-view\]"\)\.forEach\(node => node\.classList\.toggle\("active"/);
 });
 
-test('资料库旧详情容器被移除后不会中断 renderer 初始化', () => {
+test('资料库旧详情容器被移除后不再保留旧写作跳转', () => {
   assert.doesNotMatch(html, /id="knowledge-detail"/);
-  assert.match(app, /getElementById\("knowledge-detail"\)\?\.addEventListener/);
-  assert.match(app, /root\.querySelectorAll\("\[data-knowledge-writing\]"\)/);
+  assert.doesNotMatch(app, /data-knowledge-writing|prepareLibraryDraft/);
+  assert.match(app, /data-knowledge-bring="\$\{escapeHtml\(item\.id\)\}"/);
+});
+
+test('窄屏可从顶部打开最近任务列表并通过遮罩或 Escape 收起', () => {
+  assert.match(html, /id="mobile-task-list-toggle"[^>]*aria-label="展开任务列表"/);
+  assert.match(html, /id="mobile-task-list-backdrop"[^>]*aria-label="关闭任务列表"/);
+  assert.match(html, /\.shell\.mobile-tasks-open \.task-sidebar \{[^}]*position:fixed/);
+  assert.match(app, /mobile-task-list-toggle"\)\.addEventListener\("click"/);
+  assert.match(app, /mobile-task-list-backdrop"\)\.addEventListener\("click"/);
+  assert.match(app, /if \(document\.getElementById\("app-shell"\)\.classList\.contains\("mobile-tasks-open"\)\)/);
+  assert.match(app, /setTaskSidebarCollapsed\(true\); renderProject\(p\)/);
 });
 
 test('我的计划可搜索、查看状态、归档并恢复原记录而不截断历史', () => {
@@ -67,17 +82,16 @@ test('我的计划可搜索、查看状态、归档并恢复原记录而不截�
 test('首页只保留自然输入；需要选择时由 Agent 在任务对话中按需给出', () => {
   const home = html.match(/<section class="view active" id="view-home">([\s\S]*?)<\/section>/)?.[1] || "";
   assert.ok(home);
-  assert.match(home, /id="idea"/);
+  assert.match(home, /textarea id="idea"[^>]*placeholder="例如：/);
   assert.match(home, /data-start-with-material/);
-  assert.match(home, /添加资料后开始/);
+  assert.match(home, /data-start-with-material="true">添加资料/);
   assert.doesNotMatch(home, /id="audience"|id="time"|id="success"|id="materials"|id="constraints"|example-chip/);
   assert.doesNotMatch(html, /domain-choice-dialog|data-domain-choice/);
   assert.match(app, /const domain = candidates\.length === 1 \? candidates\[0\] : "通用计划";/);
   assert.match(app, /void requestWorkbenchAgent\(persistedProject\)/);
   assert.match(app, /ideaForm\.querySelector\("\[data-start-with-material\]"\)\.addEventListener\("click"/);
-  assert.match(app, /reportValidity\(\)[\s\S]*?startIdeaFromForm\(true\)/);
+  assert.match(app, /ideaForm\.querySelector\("\[data-start-with-material\]"\)\.addEventListener\("click", event => \{\s*event\.preventDefault\(\);\s*startIdeaFromForm\(true\);/);
   assert.doesNotMatch(app, /event\.submitter\?\.dataset\.startWithMaterial/);
-  assert.match(app, /await chooseWorkbenchMaterial\(persistedProject\)/);
   assert.match(app, /desktopApi\.pptFeedback\.chooseFile\(project\.id\)/);
   assert.match(app, /const feedback = window\.ForwardStepPptFeedback/);
   assert.match(html, /id="workbench-message-form"/);
@@ -85,16 +99,18 @@ test('首页只保留自然输入；需要选择时由 Agent 在任务对话中�
   assert.match(app, /workbench-recommendation/);
   assert.match(app, /结合你的想法，我建议/);
   assert.match(app, /你可以直接在对话中确认，也可以补充或修正这个方向/);
-  assert.match(html, /直接说你的想法即可；Agent 会结合上下文给出一个建议，只有关键信息不足时才追问/);
-  assert.match(app, /由你根据用户想法提出一个最推荐的具体做法/);
-  assert.match(app, /方案之间的比较与取舍由你先完成，不把候选方案或逐项填写的工作交给用户/);
+  assert.doesNotMatch(home, /直接说你的想法即可|只有关键信息不足时才追问/);
+  assert.match(app, /比较可行做法并给出简短推荐/);
+  assert.match(fs.readFileSync(path.join(root, 'prototype', 'prompt-agent-prompts.js'), 'utf8'), /只提出最能改变方案的一个问题/);
   assert.match(app, /workbenchDialogue\.confirmsRecommendation\(text\)/);
   assert.doesNotMatch(app, /data-workbench-recommendation/);
-  assert.doesNotMatch(app, /message\.options\.forEach/);
+  assert.match(app, /message\.id === pendingQuestion\?\.id && message\.options\?\.length/);
+  assert.match(app, /message\.options\.forEach/);
   assert.doesNotMatch(html, /选项只在对话里按需出现/);
   assert.match(app, /Agent 建议：\$\{message\.recommendation\.text\}/);
   assert.match(app, /data-workbench-locate-annotation/);
-  assert.match(app, /openPreview\(annotation\.attachmentId, annotation\.target, annotation\.contentHash\)/);
+  assert.match(app, /openWorkbenchAttachment\(project, attachment\.id\)/);
+  assert.match(app, /material\.pendingHtmlLocateTarget = \{ contentHash: annotation\.contentHash, target: annotation\.target \}/);
   assert.match(app, /pendingWorkbenchProjects/);
 });
 
@@ -108,9 +124,8 @@ test('提示词收藏按提示词、案例、方法卡分区，并支持变量�
   assert.match(app, /listPromptGroups\(state\.prompts\)/);
   assert.match(app, /togglePromptFavorite\(state, button\.dataset\.promptFavorite\)/);
   assert.match(app, /fillPromptTemplate\(prompt\.text, values\)/);
-  assert.match(app, /data-prompt-write="\$\{escapeHtml\(selected\.id\)\}"/);
-  assert.match(app, /preparePromptDraft\(\{ promptId: preview\.prompt\.id, title: preview\.prompt\.title,[\s\S]*version: preview\.prompt\.version \|\| 1, text \}\)/);
-  assert.match(app, /action === "write" \? "检查并带入写作"/);
+  assert.doesNotMatch(app, /data-prompt-write|preparePromptDraft/);
+  assert.match(app, /openPromptUseDialog\(prompt, button\.dataset\.promptCopy \? "copy" : "use"\)/);
   assert.match(app, /comparePromptTexts\(left\.text, right\.text\)/);
   assert.match(app, /buildPromptTransferDraft\(prompt, preview\.result\.text, preview\.context/);
   assert.match(app, /project\.conversationDraft = draft/);
@@ -176,11 +191,10 @@ test('工作台布局和资料查看状态按任务及附件隔离并持久化',
   const layoutStart = app.indexOf('document.querySelectorAll("[data-workbench-layout]").forEach(button => button.addEventListener("click"');
   const previewStart = app.indexOf('document.querySelectorAll("[data-workbench-preview]").forEach(button => button.addEventListener("click"', layoutStart);
   const layoutClick = layoutStart >= 0 && previewStart > layoutStart ? app.slice(layoutStart, previewStart) : '';
-  assert.ok(layoutClick.indexOf('saveWorkbenchViewState()') < layoutClick.indexOf('project.workbenchLayout ='));
-  assert.ok(layoutClick.indexOf('project.workbenchLayout =') < layoutClick.indexOf('persist()'));
-  assert.match(app, /const layout = \["split", "chat", "preview"\]\.includes\(project\.workbenchLayout\)/);
-  assert.match(app, /project\.workbenchPreviewMode = \["material", "prompt", "task"\]/);
-  assert.match(app, /viewer\.scrollByLayout = \{\}/);
+  assert.ok(layoutClick.indexOf('saveWorkbenchViewState()') < layoutClick.indexOf('layout.mode = mode'));
+  assert.ok(layoutClick.indexOf('layout.mode = mode') < layoutClick.indexOf('applyWorkbenchLayout(project)'));
+  assert.match(app, /function getWorkbenchSessionLayout\(project\)/);
+  assert.match(app, /viewer\.scrollByLayout \|\|= \{\}/);
 });
 
 test('工作台通过受控附件读取实际 PDF 页面并按页保存批注', () => {
@@ -347,13 +361,11 @@ test('批注工具默认收起，用户开始批注或选中 HTML 内容后按�
   assert.match(html, /\.workbench-annotation-editor \{ display:grid/);
 });
 
-test('工作台批注按钮把当前有效意见交给写作向导，而非另造批注格式', () => {
-  assert.match(html, /data-workbench-carry-writing/);
-  const handoff = app.match(/document\.getElementById\("workbench-prompt-actions"\)\.addEventListener\("click", async event => \{([\s\S]*?)\n  \}\);/)?.[1] || '';
-  assert.match(handoff, /getWorkbenchPromptSourceState\(material\)/);
-  assert.match(handoff, /if \(promptConflicts\.length\)/);
-  assert.match(handoff, /window\.WritingWorkbenchUIController\.prepareAnnotationDraft\(\{ goal, sources \}\)/);
-  assert.match(handoff, /annotationSnapshot/);
+test('工作台批注进入统一提示词快照，不再跳转独立写作向导', () => {
+  assert.doesNotMatch(html, /data-workbench-carry-writing/);
+  assert.doesNotMatch(app, /prepareAnnotationDraft|data-workbench-carry-writing/);
+  assert.match(app, /function getWorkbenchUnifiedPrompt\([\s\S]*?for \(const item of selection\.items/);
+  assert.match(app, /contentVersionId: item\.contentVersionId/);
 });
 
 test('旧反馈 UI 按反馈上下文函数约定传入批注数组', () => {
@@ -368,53 +380,29 @@ test('旧反馈 UI 按反馈上下文函数约定传入批注数组', () => {
   assert.doesNotMatch(feedbackUI, /typeof persistState/);
 });
 
-test('首页添加资料按钮先校验输入，再以资料模式创建任务', () => {
-  const start = app.indexOf('  const ideaForm = document.getElementById("idea-form");');
-  const end = app.indexOf('  function renderWorkbench(', start);
-  assert.ok(start >= 0 && end > start);
-
-  const listeners = new Map();
-  const calls = [];
-  let valid = false;
-  let prevented = false;
-  const ideaField = { value: '归纳这份资料', reportValidity: () => valid };
-  const button = { addEventListener: (name, handler) => listeners.set(`button:${name}`, handler) };
-  const ideaForm = {
-    addEventListener: (name, handler) => listeners.set(`form:${name}`, handler),
-    querySelector: selector => {
-      assert.equal(selector, '[data-start-with-material]');
-      return button;
-    }
-  };
-  const context = {
-    document: { getElementById: id => id === 'idea-form' ? ideaForm : ideaField },
-    createProjectFromIdea: (idea, options) => calls.push({ idea, options })
-  };
-  vm.runInNewContext(app.slice(start, end), context);
-
-  listeners.get('button:click')({ preventDefault: () => { prevented = true; } });
-  assert.equal(prevented, true);
-  assert.equal(calls.length, 0, '无效输入不创建任务');
-
-  valid = true;
-  prevented = false;
-  listeners.get('button:click')({ preventDefault: () => { prevented = true; } });
-  assert.equal(prevented, true);
-  assert.equal(calls[0].idea, '归纳这份资料');
-  assert.equal(calls[0].options.addMaterial, true);
-
-  listeners.get('form:submit')({ preventDefault() {} });
-  assert.equal(calls[1].options.addMaterial, false, '普通提交继续走对话流程');
+test('首页添加资料复用当前目标草稿并进入统一任务', () => {
+  const importFlow = app.slice(app.indexOf('async function beginHomeMaterialImport()'), app.indexOf('  const ideaForm = document.getElementById("idea-form");'));
+  assert.match(importFlow, /const initialDraft = document\.getElementById\("idea"\)\.value/);
+  assert.match(importFlow, /pendingHomeImport = \{ id, initialDraft, attachment: result\.attachment \}/);
+  assert.match(importFlow, /createProjectFromIdea\("", \{[\s\S]*?initialDraft/);
+  assert.match(app, /if \(addMaterial\) void beginHomeMaterialImport\(\);\s*else if \(idea\) void createProjectFromIdea\(idea, \{ id: homeWorkbenchGoalDraftId \|\| undefined \}\)/);
+  assert.match(app, /重试保存任务/);
 });
 
 test('新工作台任务在持久化后使用全局状态中的任务对象接收 Agent 回复', () => {
-  const createTask = app.match(/async function createProjectFromIdea\(idea, \{ addMaterial = false \} = \{\}\) \{([\s\S]*?)\n  \}/)?.[1] || '';
-  assert.match(createTask, /persist\(\);\s*const persistedProject = state\.projects\.find\(item => item\.id === project\.id\) \|\| project;\s*renderProject\(persistedProject\);\s*if \(addMaterial\) await chooseWorkbenchMaterial\(persistedProject\);\s*void requestWorkbenchAgent\(persistedProject\);/);
+  const createTask = app.match(/async function createProjectFromIdea\(idea, \{ id, attachment, requestAgent = true, inheritHomeLayout = false, initialDraft = "" \} = \{\}\) \{([\s\S]*?)\n  \}/)?.[1] || '';
+  assert.match(createTask, /const persistedProject = state\.projects\.find\(item => item\.id === project\.id\) \|\| project/);
+  assert.match(createTask, /if \(openInWorkbench\) renderProject\(persistedProject\)/);
+  assert.match(createTask, /if \(requestAgent && idea\) void requestWorkbenchAgent\(persistedProject\)/);
 });
 
 test('工作台预览页签保存在各自任务中，切换任务不串状态', () => {
   assert.match(app, /const previewMode = \["material", "prompt", "task"\]\.includes\(project\.workbenchPreviewMode\)/);
-  assert.match(app, /project\.workbenchPreviewMode = \["material", "prompt", "task"\]\.includes\(button\.dataset\.workbenchPreview\) \? button\.dataset\.workbenchPreview : "material";\s*persist\(\);\s*renderWorkbench\(project\);/);
+  assert.match(app, /setWorkbenchPreviewMode\(project, mode\)/);
+  assert.match(app, /project\.workbenchVisitedPreviewModes = \[\.\.\.\(project\.workbenchVisitedPreviewModes \|\| \[\]\)\.filter\(item => item !== mode\), mode\]/);
+  assert.match(app, /function getWorkbenchPreviewState\(project\)/);
+  assert.match(app, /project\.workbenchPreviewState = "closed"/);
+  assert.match(app, /project\.workbenchPreviewState = getWorkbenchPreviewState\(project\) === "pinned" \? "open" : "pinned"/);
   assert.doesNotMatch(app, /let workbenchPreviewMode =/);
 });
 
@@ -495,10 +483,8 @@ test('资料库包含搜索、类型筛选和新增资料入口', () => {
   assert.match(app, /knowledgeForm\.addEventListener\("submit", saveKnowledgeEntry\)/);
   assert.doesNotMatch(app, /getElementById\("open-knowledge-entry"\)|getElementById\("cancel-knowledge-entry"\)/);
   assert.equal([...app.matchAll(/knowledgeForm\.addEventListener\("submit", saveKnowledgeEntry\)/g)].length, 1, '资料表单只能绑定一次提交');
-  assert.ok(app.includes('data-knowledge-bring="${escapeHtml(item.id)}"'), '资料应能按 ID/版本快照带入当前任务');
-  assert.ok(app.includes('data-knowledge-writing="${escapeHtml(item.id)}"'), '资料详情和列表应提供带入写作入口');
-  assert.match(app, /prepareLibraryDraft\(\{ source: \{ id: entry\.id, title: entry\.title, version: entry\.version \|\| 1,[\s\S]*excerpt, verificationStatus: entry\.verificationStatus/);
-  assert.match(app, /entry\.contentExcerpt && `已保存摘录：[\s\S]*entry\.literature\?\.abstractExcerpt/);
+  assert.ok(app.includes('data-knowledge-bring="${escapeHtml(item.id)}"'), '资料继续按 ID/版本快照带入当前任务');
+  assert.doesNotMatch(app, /data-knowledge-writing|prepareLibraryDraft/);
 });
 
 test('资料库空态区分无资料与筛选无匹配', () => {
@@ -763,7 +749,7 @@ test('浏览器导入入口先确认安全备份，再打开文件选择并导�
   assert.match(app, /未确认已保存安全备份/);
   assert.ok(app.includes('browserImportGate = null;'), '令牌必须在 change 前后清理，防止重复导入');
   assert.ok(app.indexOf('consumeBrowserImportGate(importGate);') < app.indexOf('await importBackupContent(await file.text());'), '未通过令牌检查不能读取文件或调用导入');
-  assert.match(app, /await showBackupImportPreview\(backup, summary, mergePreview, archiveStage\)/, '写入前必须展示备份影响预览');
+  assert.match(app, /await showBackupImportPreview\(backup, summary, mergePreview, archiveStage, remappedWorkbench\)/, '写入前必须展示备份影响预览');
   assert.ok(app.includes('取消导入'), '导入预览应提供真实取消动作');
   assert.ok(app.includes('discardBackupImport?.(archiveStage.stageId)'), '取消 ZIP 预览时清理暂存数据');
   assert.doesNotMatch(app, /点击“确定”替换，取消则合并/, '取消不能被当成合并确认');
@@ -855,7 +841,7 @@ test('PPT 规划工作台从提示词 Agent 入口加载并保持文件输出边
 });
 
 
-test('写作、提示词Agent与学术论文分别挂载到独立页面', () => {
+test('统一工作台复用既有 Agent 和写作规则，保留学术研究独立入口', () => {
   assert.equal((html.match(/id="writing-workbench-root"/g) || []).length, 1);
   const promptView = html.indexOf('id="view-prompt-agent"');
   const writingView = html.indexOf('id="view-article"');
@@ -875,21 +861,21 @@ test('写作、提示词Agent与学术论文分别挂载到独立页面', () => 
   assert.ok(positions.every((pos, i) => pos >= 0 && (i === 0 || pos > positions[i - 1])));
   for (const scene of ['task', 'ppt']) assert.ok(html.includes('data-agent-scene="' + scene + '"'));
   assert.doesNotMatch(html, /data-agent-scene="writing"/);
-  assert.match(html, /#view-prompt-agent \[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(html, /\.view\[hidden\]\s*\{\s*display:\s*none/);
+  const nav = html.match(/<nav class="nav"[\s\S]*?<\/nav>/)?.[0] || "";
+  assert.doesNotMatch(nav, /prompt-agent|data-nav-key="writing"/);
+  assert.match(app, /writingPrompts: window\.WritingWorkbenchPrompts/);
+  assert.match(app, /agentPrompts: window\.ForwardStepPromptAgentPrompts/);
 });
 
-test('写作工作台独立于提示词Agent的任务与PPT场景', async () => {
-  const { createWritingApp } = require('./helpers/writing-app.js');
-  const f = createWritingApp();
-  await f.event('nav-article');
-  assert.notEqual(f.mount.hidden, true);
-  assert.match(f.element('breadcrumb').textContent, /写作工作台/);
-  await f.event('scene-ppt');
-  assert.equal(f.element('ppt-scene-root').hidden, false);
-  await f.event('scene-task');
-  assert.equal(f.element('prompt-agent-root').hidden, false);
-  assert.equal(f.element('ppt-scene-root').hidden, true);
-  assert.notEqual(f.mount.hidden, true, 'Agent 场景切换不隐藏独立写作页内容');
+test('Agent与写作作为任务规则参与统一路由，不形成独立主导航流程', () => {
+  const nav = html.match(/<nav class="nav"[\s\S]*?<\/nav>/)?.[0] || "";
+  assert.doesNotMatch(nav, /prompt-agent|data-nav-key="writing"/);
+  assert.match(app, /function getWorkbenchPromptRoute\(/);
+  assert.match(app, /function getWorkbenchWritingTaskType\(/);
+  assert.match(app, /unifiedWorkbenchPrompts\.buildTaskRulePrompt\(/);
+  assert.match(app, /WritingWorkbenchPrompts/);
+  assert.match(app, /data-workbench-import-legacy=/);
 });
 
 test('长手册改写闭环将原文与多份辅助材料分开并生成附原件的选章提示词', async () => {

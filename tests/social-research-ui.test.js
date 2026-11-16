@@ -123,6 +123,35 @@ test('社媒研究只收自然语言目标，并把可用来源作为 Agent 候�
   assert.match(getNode('social-research-status').textContent, /Agent 已根据目标推荐研究类型、平台和范围/);
 });
 
+test('社媒研究报告交给统一任务并保留来源任务 ID', async () => {
+  const { document, getNode } = makeUiDocument();
+  const task = {
+    id: 'research-report-1', topic: '分析订阅退款原因', status: 'searching',
+    report: { summary: '退款集中在首月。', coreFindings: ['取消入口难找'] },
+    results: [{ id: 'result-1', title: '用户讨论', summary: '首月退款较多' }],
+    selectedResultIds: ['result-1'], savedResultIds: []
+  };
+  let handedOff;
+  const instance = ui.createSocialResearchUI({
+    document,
+    desktopApi: { social: { listPlatforms: async () => [] } },
+    coordinator: {},
+    getState: () => ({ researchTasks: [task] }),
+    handoffToWorkbench: async context => { handedOff = context; }
+  });
+  await instance.refreshPlatforms();
+  await getNode('social-research-report-content').listeners.click({
+    target: { closest: selector => selector === '[data-report-to-workbench]' ? {} : null }
+  });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(handedOff.topic, '分析订阅退款原因');
+  assert.equal(handedOff.sourceTaskId, 'research-report-1');
+  assert.match(handedOff.summary, /退款集中在首月/);
+  assert.match(handedOff.summary, /取消入口难找/);
+  assert.match(handedOff.summary, /参考资料：用户讨论。首月退款较多/);
+});
+
 test('计划生成失败显示在目标输入区并保留用户原文', async () => {
   const { document, getNode } = makeUiDocument();
   const instance = ui.createSocialResearchUI({

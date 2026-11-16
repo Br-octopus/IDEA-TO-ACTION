@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseAgentResponse, confirmsRecommendation, promptReplacementNeedsConfirmation, buildPromptTransferDraft, captureKnowledgeSource, appendKnowledgeSource, buildModificationPrompt, appendPromptVersion } = require("../prototype/workbench-dialogue.js");
+const { parseAgentResponse, confirmsRecommendation, promptReplacementNeedsConfirmation, groupConversationTurns, buildComposerDocumentTransfer, buildPromptTransferDraft, captureKnowledgeSource, appendKnowledgeSource, buildModificationPrompt, appendPromptVersion } = require("../prototype/workbench-dialogue.js");
 
 test("解析当前问题的情境选项和推荐索引，同时保留自由追问", () => {
   const result = parseAgentResponse(JSON.stringify({
@@ -57,6 +57,28 @@ test("替换已手改提示词时仅在草稿不同于生成稿和目标历史�
   assert.equal(promptReplacementNeedsConfirmation("手改稿", "生成稿"), true);
   assert.equal(promptReplacementNeedsConfirmation("生成稿", "生成稿"), false);
   assert.equal(promptReplacementNeedsConfirmation("目标历史稿", "生成稿", "目标历史稿"), false);
+});
+
+test("对话按用户轮次分组并标记最后一轮保持展开", () => {
+  const turns = groupConversationTurns([
+    { role: "user", text: "初始目标" }, { role: "assistant", text: "第一轮回应" },
+    { role: "user", text: "补充要求" }, { role: "assistant", text: "当前回应" }
+  ]);
+  assert.deepEqual(turns.map(turn => turn.messages.map(message => message.text)), [["初始目标", "第一轮回应"], ["补充要求", "当前回应"]]);
+  assert.deepEqual(turns.map(turn => turn.current), [false, true]);
+});
+
+test("长正文转文档支持选区并保留未选意见", () => {
+  const source = "请先看这段意见：\n" + "正文内容。".repeat(100);
+  const start = source.indexOf("正文内容");
+  const end = start + "正文内容。".length * 3;
+  const selected = buildComposerDocumentTransfer(source, start, end);
+  assert.equal(selected.text, source.slice(start, end));
+  assert.equal(selected.remaining, `${source.slice(0, start)}${source.slice(end)}`);
+  assert.equal(buildComposerDocumentTransfer("短意见", 0, 0), null);
+  const whole = buildComposerDocumentTransfer("长正文".repeat(500));
+  assert.equal(whole.remaining, "");
+  assert.equal(whole.text, "长正文".repeat(500));
 });
 
 test("收藏提示词交接保留已填写正文、版本来源和本次补充", () => {

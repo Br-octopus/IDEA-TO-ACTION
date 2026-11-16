@@ -2,13 +2,77 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createBackup,
+  createTaskBackup,
   validateBackup,
   getBackupSummary,
   replaceState,
-  mergeState
+  mergeState,
+  remapWorkbenchTaskIds
 } = require('../prototype/workspace-backup.js');
 
 const exportedAt = '2026-10-19T08:00:00.000Z';
+
+test('单任务备份只包含目标任务及显式关联的历史 Agent 和写作记录', () => {
+  const backup = createTaskBackup({
+    projects: [
+      { id: 'task-a', workbenchLegacyRefs: [
+        { collection: 'promptAgentTasks', sourceId: 'agent-a', contentId: 'content-a' },
+        { collection: 'writingArticles', sourceId: 'writing-a', contentId: 'content-b' }
+      ] },
+      { id: 'task-b' }
+    ],
+    promptAgentTasks: [{ id: 'agent-a' }, { id: 'agent-b' }],
+    promptAgentSources: [{ id: 'source-a', taskId: 'agent-a' }, { id: 'source-b', taskId: 'agent-b' }],
+    writingArticles: [{ id: 'writing-a', article: { id: 'writing-a', title: '旧稿' } }, { id: 'writing-b', article: { id: 'writing-b', title: '其他稿' } }],
+    workbenchAttachments: [{ id: 'file-a', taskId: 'task-a' }, { id: 'file-b', taskId: 'task-b' }],
+    workbenchAnnotations: [{ id: 'note-a', taskId: 'task-a' }, { id: 'note-b', taskId: 'task-b' }]
+  }, 'task-a', { now: exportedAt });
+  validateBackup(backup);
+  assert.deepEqual(backup.data.projects.map(item => item.id), ['task-a']);
+  assert.deepEqual(backup.data.promptAgentTasks.map(item => item.id), ['agent-a']);
+  assert.deepEqual(backup.data.promptAgentSources, []);
+  assert.deepEqual(backup.data.writingArticles.map(item => item.id), ['writing-a']);
+  assert.deepEqual(backup.data.workbenchAttachments.map(item => item.id), ['file-a']);
+  assert.deepEqual(backup.data.workbenchAnnotations.map(item => item.id), ['note-a']);
+  assert.equal(backup.data.projects[0].workbenchLegacyRefs[0].contentId, 'content-a');
+  assert.deepEqual(backup.data.prompts, []);
+  assert.throws(() => createTaskBackup({ projects: [] }, 'missing'), /找不到要导出的任务/);
+});
+
+test('工作台任务冲突时重映射任务、附件、批注和任务清单引用', () => {
+  const sourceAttachmentId = '550e8400-e29b-41d4-a716-446655440000';
+  const targetAttachmentId = '550e8400-e29b-41d4-a716-446655440001';
+  const project = {
+    id: 'task-source', workbenchPersistenceEnabled: true,
+    workbenchAttachmentId: sourceAttachmentId, workbenchAttachmentIds: [sourceAttachmentId],
+    workbenchContents: [{ versions: [{ id: 'version-1', attachmentId: sourceAttachmentId }] }],
+    workbenchPromptRounds: [{ deliveries: [{ contentVersionIds: ['version-1'], attachmentId: sourceAttachmentId }] }]
+  };
+  const attachment = {
+    id: sourceAttachmentId, taskId: project.id, archiveId: `${project.id}_${sourceAttachmentId}.txt`
+  };
+  const manifest = { schemaVersion: 1, taskId: project.id, revision: 3, project };
+  const result = remapWorkbenchTaskIds({
+    projects: [project], workbenchAttachments: [attachment],
+    workbenchAnnotations: [{ id: 'note-1', taskId: project.id, attachmentId: sourceAttachmentId }]
+  }, [manifest], ['task-source'], [], () => 'task-copy', () => targetAttachmentId);
+
+  assert.equal(result.data.projects[0].id, 'task-copy');
+  assert.equal(result.data.projects[0].workbenchContents[0].versions[0].attachmentId, targetAttachmentId);
+  assert.equal(result.data.projects[0].workbenchPromptRounds[0].deliveries[0].contentVersionIds[0], 'version-1');
+  assert.equal(result.data.workbenchAttachments[0].taskId, 'task-copy');
+  assert.equal(result.data.workbenchAttachments[0].archiveId, `task-copy_${targetAttachmentId}.txt`);
+  assert.deepEqual(result.data.workbenchAnnotations[0], {
+    id: 'note-1', taskId: 'task-copy', attachmentId: targetAttachmentId
+  });
+  assert.equal(result.workbenchManifests[0].sourceTaskId, 'task-source');
+  assert.equal(result.workbenchManifests[0].taskId, 'task-copy');
+  assert.equal(result.workbenchManifests[0].project.id, 'task-copy');
+  assert.deepEqual(result.archiveIdMap, [{
+    from: `task-source_${sourceAttachmentId}.txt`, to: `task-copy_${targetAttachmentId}.txt`
+  }]);
+  assert.equal(project.id, 'task-source');
+});
 
 function createState() {
   return {
@@ -473,6 +537,60 @@ test('工作区备份往返保留工作台对话、提示词历史快照与按�
     comment: '保留图例', category: 'style', intent: 'keep'
   });
   assertNoKeys(backup, ['apiKey', 'unknownField', 'localPath']);
+});
+
+test('工作区备份保留统一工作台正文、画布、选材和不可变交付快照', () => {
+  const sourceProject = {
+    id: 'unified-task',
+    goalSummary: '重做产品首页',
+    workbenchSchemaVersion: 1,
+    workbenchRevision: 4,
+    workbenchContents: [{
+      id: 'content-1', title: '首页文案', kind: 'document', purpose: 'reference', purposeReason: '原始需求',
+      draft: { text: '未留版草稿', baseVersionId: 'version-1', updatedAt: exportedAt },
+      versions: [{
+        id: 'version-1', text: '保留导航和搜索', hash: 'sha256:1', parseStatus: 'read',
+        sourceRef: { kind: 'paste', url: 'https://example.test/source', localPath: '不应导出' },
+        annotations: [{ id: 'note-1', comment: '保留顶部导航', target: { kind: 'text', exact: '导航' } }]
+      }]
+    }],
+    workbenchCanvases: [{
+      id: 'canvas-1', title: '首页对照', purpose: 'reference', viewport: { x: 4, y: 8, zoom: 1.25 },
+      groups: [{ id: 'group-1', title: '首屏' }],
+      nodes: [{
+        id: 'node-1', contentVersionId: 'version-1', position: { x: 10, y: 20 },
+        size: { width: 300, height: 220 }, zIndex: 2, groupId: 'group-1',
+        annotations: [{ id: 'local-note-1', comment: '按钮靠右' }]
+      }]
+    }],
+    workbenchPromptRounds: [{
+      id: 'round-1', draftText: '提示词准备稿', contentVersionIds: ['version-1'],
+      deliveries: [{
+        id: 'delivery-1', text: '固定交付提示词', createdAt: exportedAt,
+        materials: [{ contentVersionId: 'version-1', title: '首页文案', hash: 'sha256:1', canvasId: 'canvas-1', nodeId: 'node-1' }],
+        annotations: [{ id: 'note-1', comment: '保留顶部导航' }],
+        layoutIntent: { enabled: true, canvasId: 'canvas-1', nodeIds: ['node-1'], bounds: { x: 10, y: 20, width: 300, height: 220 } }
+      }]
+    }],
+    workbenchDraft: { goal: '重做产品首页', opinion: '按钮改绿', promptText: '用户手改提示词', annotations: [] },
+    workbenchSelection: { items: [{ contentVersionId: 'version-1', canvasId: 'canvas-1', nodeId: 'node-1', annotationIds: ['note-1'] }], layoutIntent: { enabled: false } },
+    workbenchLegacyRefs: [{ collection: 'writingArticles', sourceId: 'article-1' }],
+    workbenchDraftStatus: 'dirty',
+    workbenchSaveError: '临时保存错误',
+    apiKey: '不应导出'
+  };
+  const backup = createBackup({ projects: [sourceProject] }, { scope: 'workspace', now: exportedAt });
+  const restored = replaceState({}, backup).projects[0];
+  assert.equal(restored.workbenchRevision, 4);
+  assert.equal(restored.workbenchContents[0].draft.text, '未留版草稿');
+  assert.equal(restored.workbenchContents[0].versions[0].annotations[0].comment, '保留顶部导航');
+  assert.deepEqual(restored.workbenchCanvases[0].nodes[0].position, { x: 10, y: 20 });
+  assert.equal(restored.workbenchCanvases[0].nodes[0].contentVersionId, 'version-1');
+  assert.equal(restored.workbenchPromptRounds[0].deliveries[0].text, '固定交付提示词');
+  assert.equal(restored.workbenchPromptRounds[0].deliveries[0].materials[0].hash, 'sha256:1');
+  assert.deepEqual(restored.workbenchSelection.items[0].annotationIds, ['note-1']);
+  assert.deepEqual(restored.workbenchLegacyRefs, [{ collection: 'writingArticles', sourceId: 'article-1' }]);
+  assertNoKeys(backup, ['apiKey', 'localPath']);
 });
 
 test('工作区备份保留工作台附件索引与可识别批注类型，不保留未知嵌套字段', () => {
